@@ -3,8 +3,9 @@
 <h1 align="center">apkscope</h1>
 
 <p align="center">
-  <b>Ask an APK anything. Get real Java back in milliseconds.</b><br>
-  Android reverse engineering for humans and AI agents. One executable. No JVM. No waiting.
+  <b>Open any Android app and see what it really does.</b><br>
+  Where it sends data, which certificates it trusts, what secrets it ships. In seconds, as readable code.<br>
+  For you, in a viewer or the terminal, or for your AI agent. One executable. No Java needed.
 </p>
 
 <p align="center">
@@ -26,29 +27,100 @@
 
 Every number comes from a script in [`bench/`](bench). [See all results →](BENCHMARKS.md)
 
-**Who it's for:** reverse engineers, mobile pentesters, and people who hand APKs to AI agents.
+**Who it's for:** security researchers, mobile pentesters, developers checking what a library really
+does, and anyone who hands APKs to an AI agent.
 
-## See it in action
+## A real finding, start to finish
 
-Real output on AntennaPod from F-Droid: find the custom TLS trust manager, then every place that
-checks server certificates, with the Java line.
+Everything below is unedited output (only long lines shortened with `...`) from
+[AntennaPod](https://f-droid.org/packages/de.danoeh.antennapod/), a popular open-source podcast app,
+the official F-Droid build. No made-up app, no staged example.
+
+**1. Scan the app. 0.7 seconds.**
 
 ```text
-$ apkscope refs antennapod.apk impl javax.net.ssl.X509TrustManager
-classes.dex | Lde/danoeh/antennapod/net/ssl/CompositeX509TrustManager; | matched=Ljavax/net/ssl/X509TrustManager;
-1 refs in 36 ms
-
-$ apkscope refs antennapod.apk method checkServerTrusted --java --limit 3
-classes3.dex | Lokhttp3/internal/platform/android/AndroidCertificateChainCleaner;->clean(...) | matched=...checkServerTrusted(...)
-       63: list2 = this.x509TrustManagerExtensions.checkServerTrusted(x509CertificateArr, "RSA", str);
-classes3.dex | Lorg/conscrypt/ConscryptEngine;->verifyCertificateChain([[BLjava/lang/String;)V | matched=...checkServerTrusted(...)
-     1718: Platform.checkServerTrusted(x509TrustManager, x509CertificateArr, str, this);
-classes3.dex | Lorg/conscrypt/ConscryptEngineSocket$2$$ExternalSyntheticApiModelOutline1;->m(...) | matched=...checkServerTrusted(...)
-       10: x509ExtendedTrustManager.checkServerTrusted(x509CertificateArr, str, socket);
-3 refs in 54 ms
+$ apkscope scan antennapod.apk
+// apkscope security quick-scan. Findings are leads, not verdicts: check each one in the code.
+...
+allowBackup                  true    <- review
+usesCleartextTraffic         true    <- review
+networkSecurityConfig        @xml/network_security_config
+...
+// TLS trust overrides (2)
+pkg_de.danoeh.antennapod.net.ssl.CompositeX509TrustManager    custom X509TrustManager (check checkServerTrusted is not empty)
+okhttp3.internal.tls.OkHostnameVerifier    custom HostnameVerifier (check verify() does not return true)
 ```
 
-Long descriptors shortened with `...`; everything else is as printed.
+**2. Open the network rules it flagged.**
+
+```text
+$ apkscope resource antennapod.apk res/xml/network_security_config.xml
+<network-security-config>
+    <base-config
+        cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates
+                src="user" />
+            <certificates
+                src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+```
+
+**What that means, in plain words:** the app accepts unencrypted `http://` connections everywhere,
+and it trusts any certificate the phone's user installed, not just the built-in ones. Since Android 7
+apps don't trust user-installed certificates by default; this one opts back in. So anyone who can get a
+certificate onto the phone (a work-managed device, a "VPN" app that asks you to install one) can read
+and change the app's HTTPS traffic. For a pentester the same line means you can intercept the app with
+a proxy like Burp without patching it.
+
+**3. Check the custom certificate code isn't worse.**
+
+```text
+$ apkscope decompile antennapod.apk de.danoeh.antennapod.net.ssl.CompositeX509TrustManager --method checkServerTrusted
+    public void checkServerTrusted(X509Certificate[] x509CertificateArr, String str) throws CertificateException {
+        ...
+        X509TrustManager x509TrustManager = (X509TrustManager) iterator.next();
+        try {
+            x509TrustManager.checkServerTrusted(x509CertificateArr, str);
+        } catch (CertificateException throwable) {
+            goto L7;
+        }
+    }
+```
+
+It tries each real trust manager and throws if none accepts, so it is not the classic "trust
+everything" bug. **Verdict:** a deliberate configuration choice that widens who can intercept traffic,
+not broken code. A podcast app plausibly needs plain `http://` for old feeds; whether trusting user
+certificates is acceptable is for you to judge. That's the point: three commands, about a second,
+and you know exactly what you're dealing with.
+
+### The same finding in the viewer
+
+Open the APK and the security overview comes first, with the same flags marked `<- review`:
+
+<p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview: allowBackup and usesCleartextTraffic marked for review" width="760"></p>
+
+### The same finding through an AI agent
+
+What an agent gets back over MCP, from the same app (real calls, times measured by the client):
+
+```text
+find_refs {"kind": "impl", "query": "javax.net.ssl.X509TrustManager", "app_only": true}   (115 ms)
+classes.dex | Lde/danoeh/antennapod/net/ssl/CompositeX509TrustManager; | matched=Ljavax/net/ssl/X509TrustManager;
+
+get_resource {"path": "res/xml/network_security_config.xml"}   (234 ms)
+<network-security-config>
+    <base-config
+        cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="user" />
+...
+```
+
+Ask your agent *"Can this app's HTTPS traffic be intercepted?"* and it can find the answer itself,
+in under a second of tool time.
 
 ---
 
