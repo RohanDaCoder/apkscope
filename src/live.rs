@@ -201,6 +201,139 @@ pub fn value(e: &Value) -> String {
     }
 }
 
+/// Runs in the app: hooks every native `evalString` (Cocos and other script engines take the
+/// already-decrypted source there), and after `WAIT` ms scans readable memory for DEX headers,
+/// so packers and encrypted scripts are both caught after the app undid them. Data goes out as
+/// hex chunks: `dex` / `js` events, `{id, name, total, off, hex}`.
+const DUMP_JS: &str = r#"const __CH = 262144;
+const __HX = Array.from({ length: 256 }, (_, i) => (i < 16 ? "0" : "") + i.toString(16));
+function __hex(u) { const a = new Array(u.length); for (let i = 0; i < u.length; i++) a[i] = __HX[u[i]]; return a.join(""); }
+function __out(kind, id, name, buf) { const u = new Uint8Array(buf); for (let off = 0; off < u.length || off === 0; off += __CH) { __ev(kind, name, { id, total: u.length, off, hex: __hex(u.subarray(off, off + __CH)) }); if (u.length === 0) break; } }
+const __hooked = new Set(), __seenJs = new Set();
+let __js = 0;
+function __hookScripts() {
+  for (const m of Process.enumerateModules()) {
+    // only the app's own libraries, each once: listing every system library's symbols is slow
+    if (m.path.indexOf("/data/") !== 0 || __hooked.has(m.path)) continue;
+    __hooked.add(m.path);
+    let syms = [];
+    try { syms = m.enumerateExports().concat(m.enumerateSymbols()); } catch (e) {}
+    for (const s of syms) {
+      // se::ScriptEngine::evalString(const char* src, ssize_t len, Value* ret, const char* file)
+      if (!/evalString/.test(s.name) || !s.address || s.address.isNull() || __hooked.has(s.address.toString())) continue;
+      __hooked.add(s.address.toString());
+      const member = s.name.startsWith("_ZN");
+      try {
+        Interceptor.attach(s.address, { onEnter(a) {
+          try {
+            const src = member ? a[1] : a[0], n = (member ? a[2] : a[1]).toInt32(), f = member ? a[4] : a[3];
+            if (src.isNull()) return;
+            const name = f.isNull() ? "" : f.readUtf8String() || "";
+            const len = n > 0 ? n : src.readUtf8String().length;
+            const key = name + ":" + len;
+            if (__seenJs.has(key)) return;
+            __seenJs.add(key);
+            __out("js", __js++, name, src.readByteArray(len));
+          } catch (e) { __ev("error", "evalString", String(e)); }
+        } });
+        __ev("log", "", "hooked " + s.name + " in " + m.name);
+      } catch (e) {}
+    }
+  }
+}
+function __dumpDex() {
+  const seen = new Set();
+  let n = 0;
+  for (const r of Process.enumerateRanges("r--")) {
+    // file-backed DEX is already on disk (the system's, the APK's own); what a packer decrypted
+    // sits in anonymous memory or in a file it wrote under the app's data dir
+    if (r.file && !/^\/data\/(data|user)\//.test(r.file.path)) continue;
+    let hits = [];
+    try { hits = Memory.scanSync(r.base, r.size, "64 65 78 0a 30 33 ?? 00"); } catch (e) { continue; }
+    for (const h of hits) {
+      try {
+        const size = h.address.add(0x20).readU32(), hsz = h.address.add(0x24).readU32();
+        if (hsz !== 0x70 || size < 0x400 || h.address.add(size).compare(r.base.add(r.size)) > 0) continue;
+        const sig = __hex(new Uint8Array(h.address.add(12).readByteArray(20)));
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        __out("dex", n++, "", h.address.readByteArray(size));
+      } catch (e) {}
+    }
+  }
+  __ev("dexdone", "", n);
+}
+__hookScripts();
+const __t = setInterval(__hookScripts, 2000);
+setTimeout(() => { clearInterval(__t); __hookScripts(); __dumpDex(); }, WAIT);
+"#;
+
+/// Spawn `target` under frida, collect what `DUMP_JS` sends, and write `out/dex/classesN.dex`
+/// and `out/scripts/*`. Scripts keep coming while the app runs, so this waits `secs` for the
+/// app to unpack, dumps, then `extra` seconds more for scripts. Returns the files written.
+pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::Path, secs: u64, extra: u64) -> Result<Vec<String>, String> {
+    let mut l = Live::start(target, attach, device)?;
+    l.hook("dump", &DUMP_JS.replace("WAIT", &(secs * 1000).to_string()), true)?;
+    let mut since = 0;
+    let mut parts: BTreeMap<(String, u64), (String, Vec<u8>)> = BTreeMap::new();
+    let mut done_at: Option<Instant> = None;
+    let t = Instant::now();
+    let limit = Duration::from_secs(secs + extra + 120);
+    while done_at.is_none_or(|d| d.elapsed() < Duration::from_secs(extra)) {
+        if t.elapsed() > limit {
+            return Err("timed out waiting for the memory scan".into());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let evs: Vec<Value> = {
+            let ev = l.events.lock().unwrap();
+            let v = ev.list.iter().filter(|e| e["seq"].as_u64() >= Some(since)).cloned().collect();
+            since = ev.next;
+            v
+        };
+        for e in evs {
+            match e["k"].as_str() {
+                Some(k @ ("dex" | "js")) => {
+                    let v = &e["v"];
+                    let p = parts.entry((k.into(), v["id"].as_u64().unwrap_or(0))).or_insert_with(|| (e["m"].as_str().unwrap_or("").into(), Vec::new()));
+                    p.1.extend(unhex(v["hex"].as_str().unwrap_or("")));
+                }
+                Some("dexdone") => done_at = Some(Instant::now()),
+                Some("error" | "stderr") => eprintln!("{}", line(&e)),
+                Some("log") if e["v"].as_str().is_some_and(|s| s.starts_with("hooked ")) => eprintln!("{}", value(&e)),
+                _ => {}
+            }
+        }
+        if done_at.is_none() && !l.alive() {
+            let log = l.text(0, "", 200).0;
+            let log: Vec<&str> = log.lines().filter(|s| !s.contains("\"hex\"")).collect();
+            return Err(format!("frida exited before the dump:\n{}", log.join("\n")));
+        }
+    }
+    let mut files = Vec::new();
+    for ((kind, id), (name, bytes)) in parts {
+        let rel = if kind == "dex" { format!("dex/classes{}.dex", id + 1) } else { format!("scripts/{id:04}_{}", script_name(&name)) };
+        let path = out.join(&rel);
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        files.push(format!("{rel}  {} bytes", bytes.len()));
+    }
+    Ok(files)
+}
+
+fn unhex(s: &str) -> impl Iterator<Item = u8> + '_ {
+    s.as_bytes().chunks_exact(2).filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+}
+
+/// A script's file name, safe on any file system; `.js` when it had none.
+fn script_name(name: &str) -> String {
+    let base: String = name.rsplit(['/', '\\']).next().unwrap_or("").chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(80).collect();
+    match base.as_str() {
+        "" => "script.js".into(),
+        b if b.contains('.') => base,
+        _ => base + ".js",
+    }
+}
+
 /// Spells out frida's errors that mean "frida-server is not running on the device".
 fn explain(log: String) -> String {
     if log.contains("need Gadget") || log.contains("unable to connect to remote frida-server") {
@@ -222,5 +355,13 @@ mod tests {
         assert_eq!(line(&ev.list[0]), "#0 t7 call   a.B.c (1, x)");
         assert_eq!(ev.list[1]["k"], "stderr");
         assert!(matches(&ev.list[0], "B.c") && !matches(&ev.list[0], "zzz"));
+    }
+
+    #[test]
+    fn dump_helpers() {
+        assert_eq!(unhex("6465780aff").collect::<Vec<_>>(), b"dex\n\xff");
+        assert_eq!(script_name("assets/main/index.f5b59.js"), "index.f5b59.js");
+        assert_eq!(script_name("a/b c?"), "b_c_.js");
+        assert_eq!(script_name(""), "script.js");
     }
 }

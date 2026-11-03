@@ -4,15 +4,182 @@
 
 <p align="center">
   <b>Open any Android app and see what it really does.</b><br>
-  Where it sends data, which certificates it trusts, what secrets it ships. In seconds, as readable code.<br>
-  For you, in a viewer or the terminal, or for your AI agent. One executable. No Java needed.
+  What it collects, how it makes money from you, what it exposes. In seconds, as readable Java.<br>
+  Viewer, CLI and MCP server for AI agents. One executable. No Java needed.
 </p>
 
 <p align="center">
-  <a href="#get-started-in-30-seconds"><img src="https://img.shields.io/badge/Get_started-30_seconds-f0883e?style=for-the-badge" alt="Get started"></a>
+  <a href="#get-started"><img src="https://img.shields.io/badge/Get_started-30_seconds-f0883e?style=for-the-badge" alt="Get started"></a>
+  <a href="#what-it-found"><img src="https://img.shields.io/badge/Real_findings-5_apps-db2777?style=for-the-badge" alt="Real findings in 5 apps"></a>
   <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-14_apps-2ea44f?style=for-the-badge" alt="Benchmarks: 14 apps"></a>
-  <a href="BENCHMARKS.md#features-apkscope-vs-rust_asc-vs-jadx"><img src="https://img.shields.io/badge/vs_JADX_%26_rust__ASC-features-1f6feb?style=for-the-badge" alt="Feature comparison with JADX and rust_ASC"></a>
 </p>
+
+## What it found
+
+<p align="center"><img src="docs/findings.svg" alt="Findings ranked: 1 Block Blast prices you for advertisers; 2 Block Blast's server can switch on an audit mode; 3 Nextcloud lets any app read your file index; 4 AntennaPod trusts user certificates; 5 Thunderbird ships a debug activity, safe on release; 6 KeePassDX's ECB flag is correct" width="760"></p>
+
+Each one needed the manifest, the resources and the decompiled code read together. A grep for
+`http://` finds none of it. Click a finding for the proof: real output, trimmed to the lines that matter.
+
+<details>
+<summary><b>1. Block Blast prices you for advertisers</b> · 13 ad networks, and its own model of what you're worth</summary>
+
+<br>
+
+Block Blast! 10.9.3 (Play build), 75,938 classes, scanned in 3.1 s.
+
+**Who gets your data:** AppLovin MAX, AdMob, Meta, Unity, ironSource, Pangle, Liftoff/Vungle, InMobi,
+Moloco, Amazon APS, Digital Turbine/Fyber, PubMatic, Bigo. Trackers: AppsFlyer, Firebase, Facebook and
+TikTok events, ThinkingData, the studio's own `cn.hsdata`. Permissions: advertising ID and all four
+Privacy Sandbox ad APIs.
+
+**Two endpoints aren't from any SDK.** `infer` is a model call: what are this player's ads worth?
+
+```text
+$ apkscope search blockblast.xapk urls
+q.mb("https://low-ecpm.afafb.com/infer/v1/low_ecpm_cut", appActivity, jSONObject, new c() {
+return "https://ecpm.afafb.com/infer/v1/ecpm";
+
+$ apkscope decompile blockblast.xapk me.f          # the code calls it AlgorithmInterCutManager
+    m2.mg(jSONObject, "ActUserInfo", ClassE.ma());
+    m2.me(jSONObject, "AdHistInfo", jSONArray);
+    m2.mg(jSONObject, "UserContext", ClassE.mc(str2, appActivity, z, UUID.randomUUID().toString(), "INTER"));
+    m2.mg(jSONObject, "UserInfo", ClassE.md());
+```
+
+Those fill in `deviceModel`, `ram`, `disk`, `cpu`, `carrier`, `country`, `ip_country`, `timeZone`,
+`install_time`, `cold_start_num` and your past ads with their `revenue`. The answer sets your floor
+price, the lowest bid an advertiser must beat to show you an ad:
+
+```text
+$ apkscope decompile blockblast.xapk v2.d --method Y        # AlgorithmBy1004, AppLovin MAX
+    double d3 = d * d2;     // floor = predicted eCPM x "floor_factor" (remote, default 2.0)
+    this.g_c.mi(d3);
+        String.format(Locale.locale_US, "算法接口成功更新底价 - FloorPrice: %.2f, ...   // "algorithm API updated the floor price"
+```
+
+**Verdict:** legal, and how ad-funded games work. Now you can see it.
+</details>
+
+<details>
+<summary><b>2. Block Blast's server can switch the game into "audit mode"</b> · found in code the packer hid</summary>
+
+<br>
+
+Block Blast hides its game classes behind a NetEase packer: `org.cocos2dx.javascript.AppActivity` isn't
+in the APK. `apkscope dump` let the game unpack itself and pulled 15 DEX out of memory in 25 s, about
+3,100 hidden classes. The scripts call Java through `JsCallJava`; its methods show what they ask for:
+
+```text
+$ apkscope dump com.block.juggle out/ --attach
+$ apkscope decompile out/dex/classes9.dex org.cocos2dx.javascript.pay.o --method w   # SPayManager.serverControl
+    if (jSONObject.has("isStatus")) {
+        boolean z = k0.ma("1", jSONObject.getString("isStatus"));
+        SPStore.mk().y(z);
+        JsCallJava.setGameAuditMode(z, "auditMode");      // → window.IPAUtils.respHearingState(1)
+```
+
+- **A server switch.** The payment manager's server reply turns `auditMode` on in the game's scripts,
+  and the game remembers it. Games use this to act differently while a store reviews them; what
+  Block Blast changes is in its encrypted scripts, so we don't claim more.
+- **Your phone, on request:** `callNativeGetLeftBattery` (battery %), `callNativeIsInstallOtherApp`
+  (is app X installed?), `getDeviceInfoByAdb` (CPU speeds, RAM, storage, screen, model).
+- **Revenue per round:** `trackGameEndRevenue` stores revenue data at the end of each game.
+- **Bluetooth is benign:** `BleBumpKit` pairs two phones nearby, after asking permission.
+
+Not shown: how it decides your next blocks. That's in the encrypted scripts (see [limits](#honest-limits)).
+</details>
+
+<details>
+<summary><b>3. Nextcloud lets any app on the phone read and edit your file index</b></summary>
+
+<br>
+
+The file-database provider is exported, and its `<path-permission>` tags name a permission literally
+called `"false"`. The only real guard is in code, and it skips `file/`, `dir/` and the root:
+
+```text
+$ apkscope decompile nextcloud.apk com.owncloud.android.providers.FileContentProvider
+    private boolean isCallerNotAllowed(Uri uri) {
+        switch (i) {
+            case 4: case 5: case 6: case 7: case 8:     // shares, capabilities, uploads, ...
+                str = this.mContext.getPackageManager().getNameForUid(Binder.getCallingUid());
+        }
+        return false;                                   // file (1), dir (2), root (3): anyone
+    }
+    public Cursor query(Uri uri, ...) {
+        if (i != 1 && i != 2 && i != 3 && isCallerNotAllowed(uri)) {
+```
+
+(Case labels folded, comments added.) `insert`, `update` and `delete` use the same check. The table
+holds `path`, `path_decrypted`, `file_owner`, `sharees`, `share_by_link`, `metadata_gps`...
+
+**Verdict:** any installed app can read your file names, folders and shares, decrypted names of
+end-to-end-encrypted files included, and change or delete rows. [GitHub Security Lab noted it in 2021](https://securitylab.github.com/advisories/GHSL-2021-1007-Nextcloud_Android_app/);
+the SQL injection from that report was fixed, the open access is still there in 35.0.1. Read from
+code, not run on a device.
+</details>
+
+<details>
+<summary><b>4. AntennaPod trusts certificates the user installed</b></summary>
+
+<br>
+
+```text
+$ apkscope resource antennapod.apk res/xml/network_security_config.xml
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="user" />
+            <certificates src="system" />
+
+$ apkscope decompile antennapod.apk de.danoeh.antennapod.net.ssl.CompositeX509TrustManager --method checkServerTrusted
+        X509TrustManager x509TrustManager = (X509TrustManager) iterator.next();
+        try {
+            x509TrustManager.checkServerTrusted(x509CertificateArr, str);
+```
+
+**Verdict:** since Android 7 apps ignore user certificates; this one opts back in, so a managed
+device or a "VPN" app that installs one can read its HTTPS. The custom TrustManager tries each real
+one and throws if none accepts: a deliberate choice, not the trust-everything bug.
+</details>
+
+<details>
+<summary><b>5. Thunderbird ships a debug activity any app can launch</b> · checked: safe on release</summary>
+
+<br>
+
+`scan` lists Jetpack Compose's `PreviewActivity` as exported. It runs any class named in the intent.
+
+```text
+$ apkscope decompile thunderbird.apk androidx.compose.ui.tooling.PreviewActivity --method onCreate
+        int i = getApplicationInfo().flags & 2;
+        if (i == 0) {
+            Log.md(str, "Application is not debuggable. Compose Preview not allowed.");
+            finish();
+```
+
+**Verdict:** `flags & 2` is `FLAG_DEBUGGABLE`, and release builds aren't. Every scanner flags this;
+only the code says it's safe, until someone ships a debuggable build.
+</details>
+
+<details>
+<summary><b>6. KeePassDX "uses AES in ECB mode"</b> · checked: correct</summary>
+
+<br>
+
+```text
+$ apkscope decompile keepassdx.apk com.kunzisoft.encrypt.aes.AESTransformer
+            cipher = Cipher.getInstance("AES/ECB/NoPadding");
+            key = (Key) new SecretKeySpec(bArr, "AES");
+            cipher.init(1, key);
+                while (UnsignedKt.ulongCompare(j2, j) < 0) {
+```
+
+**Verdict:** the KeePass AES-KDF encrypts one block with itself `rounds` times to slow down password
+guessing. ECB on one block is the spec. Knowing which flags to drop is half the job.
+</details>
+
+## Faster than JADX
 
 <p align="center">
   <img src="docs/bench-open.svg" alt="Open TikTok until fully loaded: apkscope 12.4 s, JADX-GUI 2 min 18 s" width="760">
@@ -20,126 +187,19 @@
 
 | | |
 |---|---|
-| **11x faster** than JADX to open TikTok, with **9x less RAM** | 12.4 s / 997 MB vs 2 min 18 s / 9.4 GB |
+| **11x faster** than JADX to open TikTok, **9x less RAM** | 12.4 s / 997 MB vs 2 min 18 s / 9.4 GB |
 | **2.7x faster** than rust_ASC per agent call | 70 ms vs 191 ms median, over MCP |
 | **Typed Java**, not pseudocode | a reviewer, or an agent, can trust it |
-| **One tool**: decompiler, xrefs, API recon, diff, re-signing, GUI, MCP | instead of five |
+| **One tool**: decompiler, xrefs, recon, diff, Frida, unpacking, re-signing, GUI, MCP | instead of five |
 
-Every number comes from a script in [`bench/`](bench). [See all results →](BENCHMARKS.md)
+Every number comes from a script in [`bench/`](bench). [All results →](BENCHMARKS.md)
 
-**Who it's for:** security researchers, mobile pentesters, developers checking what a library really
-does, and anyone who hands APKs to an AI agent.
+**For** security researchers, mobile pentesters, privacy researchers, developers checking what a
+library really does, and anyone who hands APKs to an AI agent.
 
-## A real finding, start to finish
+## Get started
 
-Everything below is unedited output (only long lines shortened with `...`) from
-[AntennaPod](https://f-droid.org/packages/de.danoeh.antennapod/), a popular open-source podcast app,
-the official F-Droid build. No made-up app, no staged example.
-
-**1. Scan the app. 0.7 seconds.**
-
-```text
-$ apkscope scan antennapod.apk
-// apkscope security quick-scan. Findings are leads, not verdicts: check each one in the code.
-...
-allowBackup                  true    <- review
-usesCleartextTraffic         true    <- review
-networkSecurityConfig        @xml/network_security_config
-...
-// TLS trust overrides (2)
-pkg_de.danoeh.antennapod.net.ssl.CompositeX509TrustManager    custom X509TrustManager (check checkServerTrusted is not empty)
-okhttp3.internal.tls.OkHostnameVerifier    custom HostnameVerifier (check verify() does not return true)
-```
-
-**2. Open the network rules it flagged.**
-
-```text
-$ apkscope resource antennapod.apk res/xml/network_security_config.xml
-<network-security-config>
-    <base-config
-        cleartextTrafficPermitted="true">
-        <trust-anchors>
-            <certificates
-                src="user" />
-            <certificates
-                src="system" />
-        </trust-anchors>
-    </base-config>
-</network-security-config>
-```
-
-**What that means, in plain words:** the app accepts unencrypted `http://` connections everywhere,
-and it trusts any certificate the phone's user installed, not just the built-in ones. Since Android 7
-apps don't trust user-installed certificates by default; this one opts back in. So anyone who can get a
-certificate onto the phone (a work-managed device, a "VPN" app that asks you to install one) can read
-and change the app's HTTPS traffic. For a pentester the same line means you can intercept the app with
-a proxy like Burp without patching it.
-
-**3. Check the custom certificate code isn't worse.**
-
-```text
-$ apkscope decompile antennapod.apk de.danoeh.antennapod.net.ssl.CompositeX509TrustManager --method checkServerTrusted
-    public void checkServerTrusted(X509Certificate[] x509CertificateArr, String str) throws CertificateException {
-        ...
-        X509TrustManager x509TrustManager = (X509TrustManager) iterator.next();
-        try {
-            x509TrustManager.checkServerTrusted(x509CertificateArr, str);
-        } catch (CertificateException throwable) {
-            goto L7;
-        }
-    }
-```
-
-It tries each real trust manager and throws if none accepts, so it is not the classic "trust
-everything" bug. **Verdict:** a deliberate configuration choice that widens who can intercept traffic,
-not broken code. A podcast app plausibly needs plain `http://` for old feeds; whether trusting user
-certificates is acceptable is for you to judge. That's the point: three commands, about a second,
-and you know exactly what you're dealing with.
-
-### The same finding in the viewer
-
-Open the APK and the security overview comes first, with the same flags marked `<- review`:
-
-<p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview: allowBackup and usesCleartextTraffic marked for review" width="760"></p>
-
-### The same finding through an AI agent
-
-What an agent gets back over MCP, from the same app (real calls, times measured by the client):
-
-```text
-find_refs {"kind": "impl", "query": "javax.net.ssl.X509TrustManager", "app_only": true}   (115 ms)
-classes.dex | Lde/danoeh/antennapod/net/ssl/CompositeX509TrustManager; | matched=Ljavax/net/ssl/X509TrustManager;
-
-get_resource {"path": "res/xml/network_security_config.xml"}   (234 ms)
-<network-security-config>
-    <base-config
-        cleartextTrafficPermitted="true">
-        <trust-anchors>
-            <certificates src="user" />
-...
-```
-
-Ask your agent *"Can this app's HTTPS traffic be intercepted?"* and it can find the answer itself,
-in under a second of tool time.
-
----
-
-## One question, one call
-
-*"Where does this app send its API key?"*
-
-```text
-$ apkscope refs app.apk string X-Goog-Api-Key --java
-classes.dex | Lcom/google/android/datatransport/cct/a;->a(Ljava/lang/Object;)Ljava/lang/Object; | matched=X-Goog-Api-Key
-       65: httpURLConnection.setRequestProperty("X-Goog-Api-Key", str2);
-1 refs in 53 ms
-```
-
-The string, the exact method and the Java line. 53 ms from a cold start, no index to build.
-
-## Get started in 30 seconds
-
-**1. Get it:** download `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases), or build it:
+**1. Get it:** `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases), or build:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
@@ -152,14 +212,50 @@ cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, s
 claude mcp add apkscope -- /path/to/apkscope mcp
 ```
 
-Works with any MCP client (Claude Desktop, Cursor, Windsurf, Codex):
-`{ "mcpServers": { "apkscope": { "command": "/path/to/apkscope", "args": ["mcp"] } } }`
+Any MCP client works: `{ "mcpServers": { "apkscope": { "command": "/path/to/apkscope", "args": ["mcp"] } } }`
 
-**3. Or just use it:** `apkscope gui app.apk`, or any command below.
+**3. Or use it directly:** `apkscope gui app.apk`, or any command below.
+
+## Commands
+
+```bash
+# recon
+apkscope scan      app.apk                                  # flags, exported components, weak crypto, TLS, keys, URLs
+apkscope info      app.apk                                  # permissions, components, deep links, signature
+apkscope search    app.apk urls                             # every endpoint (also: secrets, http, code, res)
+apkscope diff      old.apk new.apk --strings                # what changed in this update
+
+# follow the code
+apkscope refs      app.apk string X-Goog-Api-Key --java     # who uses it, with the Java line (53 ms cold)
+apkscope decompile app.apk com.example.Api --method login   # one method, as Java
+apkscope callers   app.apk com.example.Api login            # every caller (callgraph: the tree)
+apkscope access    app.apk com.example.Session token        # who reads / writes a field
+apkscope decrypt   app.apk                                  # run string decryptors on their constant args
+
+# go further
+apkscope dump      app.apk out/ --attach                    # packed app: save the DEX it unpacked in memory
+apkscope frida     app.apk com.example.Api login            # ready-to-run hook (args, return, throws)
+apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
+apkscope export    app.apk out/                             # Gradle project for Android Studio
+apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
+```
+
+`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.apks`, `.xapk`, `.dex`.
+`apkscope --help` lists everything.
+
+<details>
+<summary><b>How decrypt and dump work</b></summary>
+
+<br>
+
+- **`decrypt`** runs the app's own decryptor in a sandboxed Dalvik interpreter (no I/O, no reflection,
+  step-limited) and shows the result inline: `a.b("x#9!") /* = "https://api.example.com" */`.
+- **`dump`** lets the app unpack itself under Frida, then pulls every DEX out of its memory, skipping
+  the ones already on disk. It also hooks native `evalString` to save scripts after the engine
+  decrypted them. Needs a rooted device with frida-server.
+</details>
 
 ## Java you can actually read
-
-The same Google networking code, decompiled by rust_ASC and by apkscope:
 
 <table><tr><th>rust_ASC</th><th>apkscope</th></tr><tr><td>
 
@@ -186,121 +282,56 @@ Object[] objArr2 = new Object[1];
 
 </td></tr></table>
 
-Left: a connection typed `Throwable`, booleans as `1`/`0`, an array typed `InputStreamReader`.
-Right: code you can reason about. And it's faster too: apkscope decompiles one class quicker than
-rust_ASC on 9 of 14 apps tested.
-
-Loops, `switch`, `try`/`catch`/`finally`, lambdas, enums, typed and named variables, and
-deobfuscation (`a.b` becomes `pkg_a.RunnableB`) are all handled. Nothing fails silently: uncertain
-methods get a `/* WARNING */` header, and the rare failure falls back to Smali.
-
-## What you can do
-
-```bash
-apkscope refs app.apk string "https://" --java              # who uses it, with the Java lines
-apkscope refs app.apk impl javax.net.ssl.X509TrustManager   # custom TLS trust = pinning bypass spots
-apkscope decompile app.apk com.example.Api --method login   # one method, as Java
-apkscope diff old.apk new.apk --strings                     # what changed in this update
-apkscope search app.apk secrets --app-only                  # keys, tokens, JWTs, also in .so files
-apkscope search app.apk urls                                # every endpoint
-apkscope info app.apk                                       # exported components, risky flags, permissions
-apkscope export app.apk out/                                # Gradle project for Android Studio
-apkscope build app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
-```
-
-Add `--json`, `--limit N` or `--offset N` to any of them. Takes `.apk`, `.apks`, `.xapk` and `.dex`.
-`apkscope --help` lists every command. rust_ASC's command names (`findrefs`, `getclass`...)
-work too.
-
-**New in 0.5: reverse-engineering tools.**
-
-```bash
-apkscope callers   app.apk com.example.Api login            # every method that calls it
-apkscope callgraph app.apk com.example.Api login --depth 3  # callers + the tree of what it calls
-apkscope access    app.apk com.example.Session token        # who reads / writes a field
-apkscope frida     app.apk com.example.Api login            # ready-to-run Frida hook (args, return, throws)
-apkscope scan      app.apk                                  # security quick-scan: flags, components, risky APIs,
-                                                            #   weak crypto, TLS overrides, keys, URLs
-apkscope decrypt   app.apk                                  # run string decryptors on their constant args
-apkscope rename    app.apk "com.a.b#c()" login              # your names and comments, kept in
-apkscope comment   app.apk com.a.b "talks to the payment API" #   app.apk.apkscope.json across runs
-apkscope map app.apk export names.mapping                   # to Enigma (.mapping) or JADX (.jobf); `import` too
-```
-
-String decryption runs the app's own decryptor in a small, sandboxed Dalvik interpreter (no I/O,
-no reflection, step-limited), and the plaintext also shows up inline next to the call:
-`a.b("x#9!") /* = "https://api.example.com" */`.
-
-**New in 0.4: `diff`.** Compare two versions of an app and see the classes, methods, permissions and
-strings that were added or removed. New endpoints and keys stand out right away.
+Loops, `switch`, `try`/`catch`/`finally`, lambdas, enums, typed names and deobfuscation
+(`a.b` → `pkg_a.RunnableB`). Faster than rust_ASC per class on 9 of 14 apps. Uncertain methods get a
+`/* WARNING */` header; failures fall back to Smali, never silently.
 
 ## Built for AI agents
 
 | MCP tool | What the agent gets |
 |---|---|
-| `find_refs` | who uses a string, type, method or field, or subclasses an interface; with Java lines |
+| `find_refs` | who uses a string, type, method or field, or implements an interface; with Java lines |
 | `decompile` | Java or Smali of several classes, or one method |
 | `search` | code, strings, usages, classes, resources, URLs, HTTP calls, secrets |
-| `apk_info` / `get_manifest` | permissions, exported components, deep links, risky flags |
-| `diff_apks` | what changed between two versions |
+| `apk_info` / `get_manifest` / `diff_apks` | permissions, components, deep links, risky flags, what changed |
 | `list_classes` / `list_methods` / `list_strings` | with prefix, filter and app-only |
 | `get_resource` / `export_project` / `verify_signature` | resources, Gradle export, signatures |
-| `frida_start` / `frida_hook` / `frida_events` | live Frida on a device: hook a method by name, read its calls, args, returns and throws |
-| `frida_script` / `frida_unhook` / `frida_stop` | load your own Frida JS, remove hooks without restarting the app |
+| `frida_start` / `frida_hook` / `frida_events` / `frida_script` | live Frida: hook by name, read calls, args, returns |
 
-Live Frida needs `pip install frida-tools` here and frida-server on the device. Hooks are added and
-removed while the app runs; `frida_events` pages with `since`, so an agent polls only what is new.
+Replies page with `limit` / `offset` and cap at 60k characters; `app_only` hides androidx, Play
+services and ad SDKs. 39 agent calls on TikTok: **3.94 s** vs rust_ASC's **6.54 s**.
 
-**It saves the agent's context.** Every reply pages with `limit` / `offset`, is capped at 60k
-characters by default, and `app_only` hides androidx, Play services and ad SDKs.
-
-**It gets faster as the agent works.** The first call reads only what it needs while the app loads
-in the background. On TikTok, 39 agent calls took **3.94 s** vs rust_ASC's **6.54 s**.
+Ask *"Can this app's HTTPS traffic be intercepted?"* and the agent finds finding 4 on its own, in
+under half a second of tool time.
 
 ## The viewer
 
-Double-click `apkscope.exe` and drop in an APK. You get a security overview first (permissions,
-exported components, risky flags, signature), your app's code apart from the libraries, search
-built for API work, native library reports with JNI methods decoded, and **Edit → Build & sign**
-with undo.
+<p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview" width="760"></p>
 
-Working in the code:
-
-- **Click a name** to mark it everywhere in the file (Esc clears it). **Ctrl+click** a class or a
-  call to go to its definition.
-- **Right-click anything.** On a class name (`new Login()` too) you get Open, *Where it's created*,
-  Callers and Usages. On a call: Go to definition, Callers, Call graph, Frida hook. On a field: Reads
-  & writes. On a declaration: Show Smali (also from a `WARNING` header), Rename and Comment.
-- **Callers, call graphs and field access** open as readable tabs: names as they appear in the code,
-  grouped by class, the graph drawn as a tree. Click a line to land **on the exact line of the call**,
-  not just the method.
-- **Back / Forward** with Alt+←/→, the mouse side buttons, or ◀ ▶ next to the tabs.
-- **Tabs**: right-click for Close others, Close tabs to the left/right, Close all. Middle-click closes one.
-- **Search results** are grouped by class and can be folded, filtered, and show the match highlighted.
-  Opening one marks the searched name in the code.
-- **Rename** and **Comment** are saved next to the APK and come back next time. **Security scan** and
-  **Decrypt strings** are in the top bar.
+Double-click `apkscope.exe` and drop in an APK. Security overview first, then your app's code apart
+from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
+callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
+**Edit → Build & sign** with undo.
 
 ## Honest limits
 
-- Some complex methods still use `goto` labels (they're marked with a `WARNING`).
-- On a cold one-shot query rust_ASC is still a few ms quicker on many apps, and 1.8x quicker at
-  listing TikTok's 436k classes. In agent sessions apkscope is faster.
-- Opening huge apps in the viewer takes about 1 GB (TikTok). The first full-code search takes a minute; later ones are cached.
-- The viewer is tested on Windows. The CLI and MCP server pass CI on Linux and macOS.
-- Secret and URL scans are heuristics: runtime-built or encrypted strings won't show up.
-- String decryption only runs decryptors that compute from constants (string/char/byte math,
-  `StringBuilder`, Base64, static arrays). Ones that read app state, files, or use reflection or
-  `javax.crypto` are left alone.
+- Some complex methods still use `goto` labels (marked `WARNING`).
+- Cold one-shot queries: rust_ASC is a few ms quicker on many apps, 1.8x quicker listing TikTok's
+  436k classes. In agent sessions apkscope is faster.
+- Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
+- The viewer is tested on Windows; CLI and MCP pass CI on Linux and macOS.
+- Scans are heuristics and findings are leads, not verdicts (see finding 6).
+- `decrypt` only runs decryptors that compute from constants.
+- `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
+  and use `--attach`. Script capture needs an engine that exports `evalString`, and isn't verified on
+  a real game yet (an x86 emulator can't hook ARM-only engines).
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
-- A rename applies to the class that declares the member. Call sites that reach it through a
-  subclass keep the old name.
 
 ## Written from scratch
 
-DEX parser, bytecode decoder, decompiler, deobfuscator, resource decoder, search index, APK signer,
-MCP server and viewer: all Rust, all from zero. Not a JADX fork, not a wrapper.
+DEX parser, decompiler, deobfuscator, resource decoder, search index, APK signer, MCP server and
+viewer: all Rust, from zero. Not a JADX fork, not a wrapper.
 
-Found wrong output? Open an issue with the class name and what JADX shows. Licensed under
-[Apache 2.0](LICENSE); "apkscope" and its logo are trademarks of Ahmad, see [NOTICE](NOTICE).
+Wrong output? Open an issue with the class name and what JADX shows. [Apache 2.0](LICENSE);
+"apkscope" and its logo are trademarks of Ahmad, see [NOTICE](NOTICE).
 `src/data/android_public.txt` comes from AOSP (Apache 2.0).

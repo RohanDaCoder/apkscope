@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="436" viewBox="0 0 760 436">
+<style>
+.t{font:700 19px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#111827}
+.s{font:12.5px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#6b7280}
+.n{font:700 22px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#d1d5db}
+.a{font:600 12px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#6b7280;letter-spacing:.4px}
+.h{font:600 15px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#111827}
+.d{font:12.5px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#4b5563}
+.g{font:600 11px -apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#fff}
+.c{fill:#f9fafb;stroke:#e5e7eb}
+@media (prefers-color-scheme:dark){.t,.h{fill:#f3f4f6}.s,.a{fill:#9ca3af}.d{fill:#d1d5db}.n{fill:#4b5563}.c{fill:#161b22;stroke:#30363d}}
+</style>
+<text class="t" x="0" y="24">What apkscope found in 5 real apps</text>
+<text class="s" x="0" y="44">Official builds. Every line below is backed by decompiled code in this README.</text>
+
+<rect class="c" x="0.5" y="60.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="97">1</text>
+<text class="a" x="50" y="80">BLOCK BLAST!  ·  PLAY STORE GAME</text>
+<text class="h" x="50" y="99">Prices you for advertisers, from your phone and your ad history</text>
+<text class="d" x="50" y="113">RAM, storage, carrier, country, past ad revenue → a model → your ad floor price</text>
+<rect x="668" y="78" width="76" height="22" rx="11" fill="#db2777"/><text class="g" x="706" y="93" text-anchor="middle">MONEY</text>
+
+<rect class="c" x="0.5" y="122.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="159">2</text>
+<text class="a" x="50" y="142">BLOCK BLAST!  ·  CODE HIDDEN BY A PACKER</text>
+<text class="h" x="50" y="161">The server can switch the game into "audit mode"</text>
+<text class="d" x="50" y="175">plus battery level and installed-app checks the game's scripts can ask for</text>
+<rect x="668" y="140" width="76" height="22" rx="11" fill="#7c3aed"/><text class="g" x="706" y="155" text-anchor="middle">HIDDEN</text>
+
+<rect class="c" x="0.5" y="184.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="221">3</text>
+<text class="a" x="50" y="204">NEXTCLOUD</text>
+<text class="h" x="50" y="223">Any app on the phone can read and edit your file index</text>
+<text class="d" x="50" y="237">file names, folders, sharees, decrypted names of end-to-end-encrypted files</text>
+<rect x="668" y="202" width="76" height="22" rx="11" fill="#dc2626"/><text class="g" x="706" y="217" text-anchor="middle">LEAK</text>
+
+<rect class="c" x="0.5" y="246.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="283">4</text>
+<text class="a" x="50" y="266">ANTENNAPOD</text>
+<text class="h" x="50" y="285">Trusts certificates the user installed, so HTTPS can be read</text>
+<text class="d" x="50" y="299">the custom TrustManager checked too: not the trust-everything bug</text>
+<rect x="668" y="264" width="76" height="22" rx="11" fill="#ea580c"/><text class="g" x="706" y="279" text-anchor="middle">TLS</text>
+
+<rect class="c" x="0.5" y="308.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="345">5</text>
+<text class="a" x="50" y="328">THUNDERBIRD</text>
+<text class="h" x="50" y="347">Ships a debug activity any app can launch</text>
+<text class="d" x="50" y="361">reading onCreate shows it refuses on release builds: safe, for now</text>
+<rect x="668" y="326" width="76" height="22" rx="11" fill="#2563eb"/><text class="g" x="706" y="341" text-anchor="middle">CHECKED</text>
+
+<rect class="c" x="0.5" y="370.5" width="759" height="58" rx="9"/>
+<text class="n" x="18" y="407">6</text>
+<text class="a" x="50" y="390">KEEPASSDX</text>
+<text class="h" x="50" y="409">"Uses AES in ECB mode", and why that is correct</text>
+<text class="d" x="50" y="423">it's the KeePass key-stretching step, not data encryption: a flag to drop</text>
+<rect x="668" y="388" width="76" height="22" rx="11" fill="#16a34a"/><text class="g" x="706" y="403" text-anchor="middle">NOT A BUG</text>
+</svg>

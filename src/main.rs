@@ -54,6 +54,8 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope callgraph <apk> <Class> [method] [--depth N]   callers + callee tree
   apkscope access    <apk> <Class> <field>       who reads / writes a field
   apkscope frida     <apk> <Class> [method]      Frida hook script (--live: event body for live sessions)
+  apkscope dump      <apk|package> <out-dir>     run the app under Frida, save the DEX it unpacked and the
+                                                 scripts it decrypted (--wait S, --scripts-for S, --attach, --device ID)
   apkscope scan      <apk>                       security quick-scan
   apkscope decrypt   <apk>                       run string decryptors on their constant arguments
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
@@ -673,6 +675,21 @@ fn main() -> ExitCode {
             let live = flag(&mut rest, "--live");
             load(apk, false).and_then(|st| emit(&re::frida(&st.dexes, class, rest.first().map(String::as_str), live)?))
         }
+        [cmd, rest @ ..] if cmd == "dump" => (|| {
+            let mut a = rest.to_vec();
+            let attach = flag(&mut a, "--attach");
+            let device = opt(&mut a, &["--device", "-D"])?;
+            let wait = num(opt(&mut a, &["--wait"])?, "--wait")?.unwrap_or(15) as u64;
+            let more = num(opt(&mut a, &["--scripts-for"])?, "--scripts-for")?.unwrap_or(15) as u64;
+            let [app, out] = a.as_slice() else { return Err("usage: apkscope dump <apk|package> <out-dir> [--wait S] [--scripts-for S] [--attach] [--device ID]".into()) };
+            let target = if std::path::Path::new(app).is_file() { Some(quick::package(app)).filter(|p| !p.is_empty()).ok_or("no package name in the APK's manifest")? } else { app.clone() };
+            eprintln!("dumping {target}: waiting {wait} s for it to unpack, then {more} s more for scripts. Use the app meanwhile.");
+            let files = live::dump(&target, attach, device.as_deref(), std::path::Path::new(out), wait, more)?;
+            if !files.iter().any(|f| f.starts_with("dex/")) {
+                eprintln!("no DEX found in memory");
+            }
+            emit_list(&files)
+        })(),
         [cmd, apk] if cmd == "scan" => run_big_stack(|| load(apk, deobf).and_then(|st| emit(&re::scan(&st)))),
         [cmd, apk] if cmd == "decrypt" => load(apk, false).and_then(|st| {
             emit_list(&re::decrypt_all(&st.dexes).into_iter().map(|(at, f, p)| format!("{at}  {f}  =>  {}", session::json_str(&p))).collect::<Vec<_>>())
