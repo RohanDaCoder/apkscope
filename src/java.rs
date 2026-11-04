@@ -8,7 +8,7 @@ use crate::bytecode::{self, Insn};
 use crate::cfg::{self, Cfg, Term};
 use crate::dex::{self, Dex};
 use crate::imports::type_ref;
-use crate::ir::{self, jtype, simple, Ctx, Expr};
+use crate::ir::{self, jtype, Ctx, Expr};
 use crate::opt::{self, Bir};
 
 type R<T> = Result<T, String>;
@@ -549,7 +549,7 @@ fn split_args(s: &str) -> Vec<String> {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
-            (Some(q), '\\') => {
+            (Some(_q), '\\') => {
                 cur.push(c);
                 if let Some(n) = chars.next() {
                     cur.push(n);

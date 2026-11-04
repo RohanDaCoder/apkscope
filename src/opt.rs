@@ -28,7 +28,7 @@ fn live_out(cfg: &Cfg, bir: &Bir, nregs: usize) -> Vec<Vec<u64>> {
     for b in 0..n {
         let (stmts, cond) = &bir[b];
         let (u, d) = (&mut uses[b], &mut defs[b]);
-        let mut read = |r: u16, d: &[u64], u: &mut [u64]| {
+        let read = |r: u16, d: &[u64], u: &mut [u64]| {
             if (r as usize) < nregs && !bit(d, r as usize) { set(u, r as usize) }
         };
         for s in stmts {
@@ -330,7 +330,7 @@ pub fn webs(cfg: &Cfg, bir: &mut Bir, params: &[u16]) -> Option<Vars> {
     for (b, (stmts, cond)) in bir.iter_mut().enumerate() {
         let mut local: HashMap<u16, usize> = HashMap::new();
         let inb = &inn[b];
-        let mut use_reg = |r: u16, local: &HashMap<u16, usize>, parent: &mut Vec<usize>| -> Option<Expr> {
+        let use_reg = |r: u16, local: &HashMap<u16, usize>, parent: &mut Vec<usize>| -> Option<Expr> {
             let cands: Vec<usize> = match local.get(&r) {
                 Some(&d) => vec![d],
                 None => by_reg.get(&r).map(|v| v.iter().copied().filter(|&d| bit(inb, d)).collect()).unwrap_or_default(),

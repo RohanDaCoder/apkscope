@@ -4,15 +4,29 @@
 
 <p align="center">
   <b>Open any Android app and see what it really does.</b><br>
-  What it collects, how it makes money from you, what it exposes. In seconds, as readable Java.<br>
-  Viewer, CLI and MCP server for AI agents. One executable. No Java needed.
+  What it collects, how it makes money from you, what it exposes. In seconds, as readable Java.
 </p>
 
 <p align="center">
   <a href="#get-started"><img src="https://img.shields.io/badge/Get_started-30_seconds-f0883e?style=for-the-badge" alt="Get started"></a>
   <a href="#what-it-found"><img src="https://img.shields.io/badge/Real_findings-5_apps-db2777?style=for-the-badge" alt="Real findings in 5 apps"></a>
   <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-14_apps-2ea44f?style=for-the-badge" alt="Benchmarks: 14 apps"></a>
+  <a href="https://github.com/suffixing/apkscope/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/suffixing/apkscope/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"></a>
 </p>
+
+<p align="center">
+  <a href="#what-it-found">Findings</a> ·
+  <a href="#faster-than-jadx">Speed</a> ·
+  <a href="#get-started">Install</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#built-for-ai-agents">MCP</a> ·
+  <a href="#the-viewer">Viewer</a> ·
+  <a href="#honest-limits">Limits</a>
+</p>
+
+> **In 10 seconds:** one executable, no Java. Drop in an APK and get a security overview, readable
+> Java, every endpoint and who calls it. Use it as a **viewer**, a **CLI**, or an **MCP server** your
+> AI agent drives. Opens TikTok **11x faster than JADX with 9x less RAM**.
 
 ## What it found
 
@@ -234,6 +248,7 @@ apkscope decrypt   app.apk                                  # run string decrypt
 
 # go further
 apkscope dump      app.apk out/ --attach                    # packed app: save the DEX it unpacked in memory
+apkscope il2cpp    game.xapk --uses "https://"              # Unity games: which C# method uses a string
 apkscope frida     app.apk com.example.Api login            # ready-to-run hook (args, return, throws)
 apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
 apkscope export    app.apk out/                             # Gradle project for Android Studio
@@ -325,6 +340,7 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
   and use `--attach`. Script capture needs an engine that exports `evalString`, and isn't verified on
   a real game yet (an x86 emulator can't hook ARM-only engines).
+- `il2cpp` reads arm64 builds and was checked on metadata v39 (Unity 6); older versions may misparse.
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
 
 ## Written from scratch

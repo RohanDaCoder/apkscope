@@ -27,7 +27,7 @@ pub(crate) fn string_pool(d: &[u8], at: usize) -> R<Vec<String>> {
         let mut o = data + u32_at(d, offsets + i * 4)? as usize;
         let s = if utf8 {
             // utf16 length then utf8 length, each 1 or 2 bytes
-            let mut len8 = |o: &mut usize| -> R<usize> {
+            let len8 = |o: &mut usize| -> R<usize> {
                 let b = u8_at(d, *o)? as usize;
                 *o += 1;
                 if b & 0x80 == 0 {

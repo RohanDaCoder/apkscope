@@ -8,6 +8,7 @@ mod deobf;
 mod dex;
 mod elf;
 mod export;
+mod il2cpp;
 #[cfg(feature = "gui")]
 mod gui;
 mod imports;
@@ -56,6 +57,8 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope frida     <apk> <Class> [method]      Frida hook script (--live: event body for live sessions)
   apkscope dump      <apk|package> <out-dir>     run the app under Frida, save the DEX it unpacked and the
                                                  scripts it decrypted (--wait S, --scripts-for S, --attach, --device ID)
+  apkscope il2cpp    <apk|xapk>... [--uses TEXT] [--method NAME]   Unity games: C# methods + addresses,
+                                                 which method uses a string, strings/calls in a method
   apkscope scan      <apk>                       security quick-scan
   apkscope decrypt   <apk>                       run string decryptors on their constant arguments
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
@@ -269,6 +272,44 @@ fn decompile_cmd(mut args: Vec<String>, deobf: bool) -> Result<(), String> {
     }
     emit(&text)?;
     if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
+}
+
+fn il2cpp_cmd(mut a: Vec<String>) -> Result<(), String> {
+    let uses = opt(&mut a, &["--uses"])?;
+    let method = opt(&mut a, &["--method"])?;
+    if a.is_empty() {
+        return Err("usage: apkscope il2cpp <apk|xapk>... [--uses TEXT] [--method NAME]".into());
+    }
+    let g = il2cpp::load(&a)?;
+    let name = |addr: u64| match g.method_at(addr) {
+        Some((m, 0)) => format!("0x{:x}  {}  {}", m.addr, m.image, m.name),
+        Some((m, n)) => format!("0x{:x}  {}  {}  (+{n} share this code)", m.addr, m.image, m.name),
+        None => format!("0x{addr:x}  ?"),
+    };
+    let mut out = Vec::new();
+    if let Some(text) = uses {
+        let mut hits: std::collections::BTreeMap<usize, std::collections::BTreeSet<u64>> = Default::default();
+        for (pc, k) in g.literal_uses() {
+            if g.literals[k].contains(&text) {
+                hits.entry(k).or_default().insert(g.method_at(pc).map_or(pc, |(m, _)| m.addr));
+            }
+        }
+        for (k, at) in hits {
+            out.push(session::json_str(&g.literals[k]));
+            out.extend(at.into_iter().map(|a| format!("  {}", name(a))));
+        }
+    } else if let Some(f) = method {
+        for m in g.methods.iter().filter(|m| m.name.contains(&f)) {
+            out.push(format!("{}  {}  0x{:x}", m.image, m.name, m.addr));
+            let (lits, calls) = g.scan(m.addr, g.end_of(m.addr));
+            out.extend(lits.iter().map(|&(pc, k)| format!("  0x{pc:x}  string  {}", session::json_str(&g.literals[k]))));
+            // direct calls to known method starts; shared bodies show one of the names
+            out.extend(calls.iter().filter(|&&(_, t)| g.method_at(t).is_some_and(|(c, _)| c.addr == t)).map(|&(pc, t)| format!("  0x{pc:x}  call    {}", name(t))));
+        }
+    } else {
+        out = g.methods.iter().map(|m| format!("0x{:x}  {}  {}", m.addr, m.image, m.name)).collect();
+    }
+    emit_list(&out)
 }
 
 fn manifest_cmd(apk: &str) -> Result<(), String> {
@@ -690,6 +731,7 @@ fn main() -> ExitCode {
             }
             emit_list(&files)
         })(),
+        [cmd, ..] if cmd == "il2cpp" => il2cpp_cmd(rest.clone()),
         [cmd, apk] if cmd == "scan" => run_big_stack(|| load(apk, deobf).and_then(|st| emit(&re::scan(&st)))),
         [cmd, apk] if cmd == "decrypt" => load(apk, false).and_then(|st| {
             emit_list(&re::decrypt_all(&st.dexes).into_iter().map(|(at, f, p)| format!("{at}  {f}  =>  {}", session::json_str(&p))).collect::<Vec<_>>())

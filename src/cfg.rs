@@ -80,7 +80,7 @@ pub fn build(insns: &[Insn], units: &[u8], tries: &[Try]) -> Result<Cfg, String>
     for (k, i) in insns.iter().enumerate() {
         at[i.off as usize] = k;
     }
-    let mut mark = |off: i64, leader: &mut Vec<bool>| -> Result<(), String> {
+    let mark = |off: i64, leader: &mut Vec<bool>| -> Result<(), String> {
         let o = usize::try_from(off).ok().filter(|&o| o < n_units && at[o] != usize::MAX);
         leader[o.ok_or(format!("jump to bad offset {off:#x}"))?] = true;
         Ok(())
