@@ -34,11 +34,15 @@ fn modifiers(access: u32, method: bool) -> String {
 
 /// A top-level class as a `.java` file, with its inner classes nested inside.
 pub fn class(dex: &Dex, c: usize) -> R<String> {
-    let own = crate::imports::source_path(&dex.class_descriptor(c)?);
+    let desc = dex.class_descriptor(c)?;
+    crate::imports::set_current(&desc);
+    let own = crate::imports::source_path(&desc);
     let (pkg, name) = own.split_once('/').unwrap_or(("", &own));
     // a top-level class's name may legally contain `$` (it has no outer class here)
     let name = name.rsplit('.').next().unwrap_or(name);
     INLINED.with(|i| i.borrow_mut().clear());
+    let fam = dex.descendants(c).into_iter().map(|k| (k, dex.parent_of(k))).collect();
+    FAMILY.with(|f| *f.borrow_mut() = (dex as *const Dex as usize, c, fam));
     let body = class_body(dex, c, name)?;
     let text = if pkg.is_empty() { body } else { format!("package {pkg};\n\n{body}") };
     Ok(crate::imports::resolve(&text, pkg, &own))
@@ -164,7 +168,7 @@ fn members(dex: &Dex, c: usize, name: &str, access: u32, def: &dex::ClassDef, da
     // nested classes and methods are rendered first: rendering decides which anonymous classes get
     // inlined, and an interface's static initializer may turn into field initializers
     let mut kids = Vec::new();
-    for &k in &dex.nesting().kids[c] {
+    for k in kids_of(dex, c) {
         let kdesc = dex.class_descriptor(k)?;
         let renamed = |d: &str| crate::deobf::class(d).unwrap_or(d).to_string();
         let inner = class_body(dex, k, &inner_name(&renamed(&kdesc), &renamed(&def.class))).unwrap_or_else(|e| format!("/* class {} failed: {e} */\n", jtype(&kdesc)));
@@ -283,6 +287,20 @@ thread_local! {
     static INLINED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// capture field -> expression, innermost inline anonymous class last
     static CAPTURES: RefCell<Vec<HashMap<u32, String>>> = const { RefCell::new(Vec::new()) };
+    /// (dex address, top-level class, its nested classes with their parents) of the current file
+    static FAMILY: RefCell<(usize, usize, Vec<(usize, Option<usize>)>)> = const { RefCell::new((0, usize::MAX, Vec::new())) };
+}
+
+/// Classes directly nested in `c`, in class order (what `nesting().kids[c]` holds), taken from
+/// the current file's family so the nesting of every class in the DEX never has to be built.
+fn kids_of(dex: &Dex, c: usize) -> Vec<usize> {
+    let key = dex as *const Dex as usize;
+    let from = |fam: &[(usize, Option<usize>)]| fam.iter().filter(|f| f.1 == Some(c)).map(|f| f.0).collect();
+    FAMILY.with(|f| {
+        let f = f.borrow();
+        (f.0 == key && (f.1 == c || f.2.iter().any(|x| x.0 == c))).then(|| from(&f.2))
+    })
+    .unwrap_or_else(|| from(&dex.descendants(c).into_iter().map(|k| (k, dex.parent_of(k))).collect::<Vec<_>>()))
 }
 
 /// Text standing in for a synthetic capture field (`this.val$x` -> `x`) inside an inline class.

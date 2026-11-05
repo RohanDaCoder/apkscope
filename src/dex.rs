@@ -232,16 +232,65 @@ impl<'a> Dex<'a> {
             let mut parent = vec![None; self.class_count];
             let mut kids = vec![vec![]; self.class_count];
             for (c, p) in parent.iter_mut().enumerate() {
-                let Ok(desc) = self.class_descriptor(c) else { continue };
-                let body = desc.trim_end_matches(';');
-                // nearest enclosing class that exists in this dex: La/B$C$D; -> La/B$C; -> La/B;
-                *p = body.char_indices().rev().filter(|&(i, ch)| ch == '$' && i > 0).find_map(|(i, _)| self.find_class(&format!("{};", &body[..i])).filter(|&o| o != c));
+                *p = self.find_parent(c);
                 if let Some(o) = *p {
                     kids[o].push(c);
                 }
             }
             Nesting { parent, kids }
         })
+    }
+
+    /// Nearest enclosing class of `c` that exists in this dex: La/B$C$D; -> La/B$C; -> La/B;
+    fn find_parent(&self, c: usize) -> Option<usize> {
+        let desc = self.class_descriptor(c).ok()?;
+        let body = desc.trim_end_matches(';');
+        body.char_indices().rev().filter(|&(i, ch)| ch == '$' && i > 0).find_map(|(i, _)| self.find_class(&format!("{};", &body[..i])).filter(|&o| o != c))
+    }
+
+    /// `nesting().parent[c]`, without building the table for every class when it isn't there.
+    pub fn parent_of(&self, c: usize) -> Option<usize> {
+        match self.nesting.get() {
+            Some(n) => n.parent[c],
+            None => self.find_parent(c),
+        }
+    }
+
+    /// Every class nested (at any depth) inside `c` by the `Outer$Inner` rule, in class order:
+    /// one pass over the class names instead of the whole nesting table.
+    pub fn descendants(&self, c: usize) -> Vec<usize> {
+        if let Some(n) = self.nesting.get() {
+            let mut out = Vec::new();
+            let mut stack = vec![c];
+            while let Some(x) = stack.pop() {
+                out.extend(n.kids[x].iter().copied());
+                stack.extend(n.kids[x].iter().copied());
+            }
+            out.sort_unstable();
+            return out;
+        }
+        let Ok(desc) = self.class_descriptor(c) else { return vec![] };
+        let prefix = format!("{}$", desc.trim_end_matches(';'));
+        // an ancestor chain leads back to `c` exactly when the name starts with `c$`
+        // (raw bytes equal UTF-8 except for NUL / characters above U+FFFF: decode those)
+        let starts = |d: &[u8]| d.starts_with(prefix.as_bytes()) || (std::str::from_utf8(d).is_err() && mutf8(d).starts_with(&prefix));
+        (0..self.class_count).filter(|&k| k != c && self.class_desc_bytes(k).is_ok_and(starts)).filter(|&k| self.chain_reaches(k, c)).collect()
+    }
+
+    fn chain_reaches(&self, mut k: usize, c: usize) -> bool {
+        while let Some(p) = self.parent_of(k) {
+            if p == c {
+                return true;
+            }
+            k = p;
+        }
+        false
+    }
+
+    /// Raw (MUTF-8) descriptor of class_def `i`, without decoding it.
+    pub fn class_desc_bytes(&self, i: usize) -> R<&'a [u8]> {
+        let t = u32_at(self.data, self.class_defs + i * 32)?;
+        self.string_bytes(u32_at(self.data, self.type_ids + t as usize * 4)?)
     }
 
     /// Superclass descriptor of class_def `i`; needs only the id tables and strings.

@@ -721,13 +721,14 @@ impl<'q> Finder<'q> {
 /// subclasses / implementors of a type. Stops after `limit` hits.
 pub fn refs(path: &str, q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
     let f = Finder::new(q)?;
-    let found = AtomicUsize::new(0);
+    let enough = Enough::default();
     // (DEX files checked, how many matched): when most match, a prefix pass is wasted work
     let (checked, matched) = (AtomicUsize::new(0), AtomicUsize::new(0));
-    // runtime order: with --limit, which files are skipped once enough is found stays as before
+    // runtime order, so the files that can be skipped tend to finish last
     let mut lists = Vec::new();
     scan_each(path, true, |_| true, |l| {
-        if found.load(Ordering::Relaxed) >= limit {
+        let no = dex_number(&l.name);
+        if enough.before(no, limit) {
             return Ok(vec![]);
         }
         let (c, m) = (checked.load(Ordering::Relaxed), matched.load(Ordering::Relaxed));
@@ -755,9 +756,9 @@ pub fn refs(path: &str, q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
             // only now the code: a DEX whose tables don't mention the query is never inflated past them
             l.all()?;
             let Some(dx) = l.dex() else { return Ok(vec![]) };
-            f.users(&dname, &dx, &want, |n| found.load(Ordering::Relaxed) + n >= limit)
+            f.users(&dname, &dx, &want, |n| n >= limit)
         };
-        found.fetch_add(out.len(), Ordering::Relaxed);
+        enough.record(no, out.len());
         Ok(out)
     }, |r| lists.push(r))?;
     let mut all = lists.into_iter().collect::<Result<Vec<_>, String>>()?.concat();
@@ -765,17 +766,40 @@ pub fn refs(path: &str, q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
     Ok(all)
 }
 
+/// classes.dex -> 1, classesN.dex -> N: runtime order of the DEX files
+fn dex_number(name: &str) -> u32 {
+    name.trim_start_matches("classes").trim_end_matches(".dex").parse().unwrap_or(1)
+}
+
+/// Hits per finished DEX file, for stopping early without changing the answer: the result is
+/// the first `limit` hits in runtime order, so a file can be skipped only once the files before
+/// it already hold `limit` (racing on a shared total made `--limit` answers vary run to run).
+#[derive(Default)]
+struct Enough(Mutex<std::collections::BTreeMap<u32, usize>>);
+
+impl Enough {
+    fn before(&self, no: u32, limit: usize) -> bool {
+        self.0.lock().unwrap().range(..no).map(|e| *e.1).sum::<usize>() >= limit
+    }
+    fn record(&self, no: u32, hits: usize) {
+        self.0.lock().unwrap().insert(no, hits);
+    }
+}
+
 /// `refs` over DEX files already in memory (the warm MCP worker).
 pub fn refs_loaded(dexes: &[(String, Dex)], q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
     let f = Finder::new(q)?;
-    let found = AtomicUsize::new(0);
+    let enough = Enough::default();
     let lists = par(dexes.len(), |k| {
         let (dname, dx) = (&dexes[k].0, &dexes[k].1);
+        if enough.before(k as u32, limit) {
+            return vec![];
+        }
         let out = match q.kind {
             Kind::Extends | Kind::Impl => f.supertypes(dname, dx),
-            _ => f.wanted(dx).map(|w| f.users(dname, dx, &w, |n| found.load(Ordering::Relaxed) + n >= limit)).unwrap_or_default(),
+            _ => f.wanted(dx).map(|w| f.users(dname, dx, &w, |n| n >= limit)).unwrap_or_default(),
         };
-        found.fetch_add(out.len(), Ordering::Relaxed);
+        enough.record(k as u32, out.len());
         out
     });
     let mut all = lists.concat();
@@ -833,8 +857,12 @@ pub fn decompile(path: &str, names: &[String], smali: bool, deobf: bool) -> Resu
         }
     }
     let found = found.into_iter().collect::<Result<Vec<_>, String>>()?;
-    let files: Vec<(Vec<(usize, usize)>, Vec<u8>)> = found.into_iter().flatten().collect();
-    let dexes: Vec<Dex> = files.iter().filter_map(|f| Dex::parse(&f.1).ok()).collect();
+    // kept to the end of the process (one-shot CLI): the on-demand import paths below borrow
+    // them for good; the OS takes the memory back at exit as it would on drop.
+    // shortcut: a second call in the same process keeps the first call's lazy paths; fine for
+    // the CLI (one call per run), a long-lived caller would need a reset.
+    let files: &'static [(Vec<(usize, usize)>, Vec<u8>)] = Box::leak(found.into_iter().flatten().collect::<Vec<_>>().into_boxed_slice());
+    let dexes: &'static [Dex<'static>] = Box::leak(files.iter().filter_map(|f| Dex::parse(&f.1).ok()).collect::<Vec<_>>().into_boxed_slice());
     // where each class lives: (dex, class index); the first DEX wins, as at runtime
     let mut spots: Vec<Option<(usize, usize)>> = vec![None; names.len()];
     for (x, (hits, _)) in files.iter().enumerate() {
@@ -846,9 +874,10 @@ pub fn decompile(path: &str, names: &[String], smali: bool, deobf: bool) -> Resu
         // names are resolved against the DEX files that hold the classes asked for; references
         // into other DEX files keep their original names
         if deobf {
-            crate::deobf::init(&dexes);
+            crate::deobf::init(dexes);
         }
-        crate::imports::init(&dexes);
+        // paths only for the classes the printed files mention, not every class in the DEX
+        crate::imports::init_lazy(dexes);
     }
     Ok(par(names.len(), |k| {
         let text = match spots[k] {

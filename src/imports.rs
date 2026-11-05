@@ -14,6 +14,78 @@ static PATHS: std::sync::OnceLock<HashMap<u64, Box<str>>> = std::sync::OnceLock:
 /// top-level source path -> simple names declared in its file (itself and every nested class)
 static DECLARED: std::sync::OnceLock<HashMap<u64, Box<[Box<str>]>>> = std::sync::OnceLock::new();
 
+/// The DEX files for on-demand paths (`init_lazy`): one-shot runs that print a few classes look
+/// up only the classes those files mention instead of every class in the DEX.
+static LAZY: std::sync::OnceLock<&'static [crate::dex::Dex<'static>]> = std::sync::OnceLock::new();
+static MEMO: std::sync::Mutex<Option<HashMap<u64, Box<str>>>> = std::sync::Mutex::new(None);
+thread_local! {
+    /// descriptor of the top-level class whose file is being printed (for `declared`)
+    static CURRENT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Paths and declared names come from `dexes` on demand, with the same results as `init`.
+pub fn init_lazy(dexes: &'static [crate::dex::Dex<'static>]) {
+    let _ = LAZY.set(dexes);
+}
+
+/// The top-level class about to be printed (its file's declared names are found from it).
+pub fn set_current(desc: &str) {
+    CURRENT.with(|c| *c.borrow_mut() = desc.to_string());
+}
+
+/// `init`'s path for `desc`: the first DEX defining it wins, as there (it fills its table in
+/// DEX order); a parent's path is looked up the same way, as `init` takes it from that table.
+fn lazy_path(desc: &str) -> Option<String> {
+    let dexes = LAZY.get()?;
+    let h = crate::dex::name_hash(desc);
+    if let Some(p) = MEMO.lock().unwrap().as_ref().and_then(|m| m.get(&h)) {
+        return Some(p.to_string());
+    }
+    let (dex, c) = dexes.iter().find_map(|d| d.find_class(desc).map(|c| (d, c)))?;
+    let renamed = |d: &str| crate::deobf::class(d).unwrap_or(d).to_string();
+    let p = match dex.parent_of(c) {
+        Some(o) => {
+            let odesc = dex.class_descriptor(o).unwrap_or_default();
+            format!("{}.{}", lazy_path(&odesc).unwrap_or_else(|| top_level(&odesc)), crate::java::inner_name(&renamed(desc), &renamed(&odesc)))
+        }
+        None => top_level(desc),
+    };
+    MEMO.lock().unwrap().get_or_insert_with(HashMap::new).insert(h, p.clone().into_boxed_str());
+    Some(p)
+}
+
+/// `pkg/Top` of a source path, the key of `DECLARED`
+fn top_of(p: &str) -> String {
+    let (pkg, cls) = p.split_once('/').unwrap_or(("", p));
+    format!("{pkg}/{}", cls.split('.').next().unwrap_or(cls))
+}
+
+/// `DECLARED[own]` for the current file, found from its top-level class: the classes whose path
+/// falls in `own` are that class and ones named `Top$...` (a name decides nesting).
+fn lazy_declared(own: &str) -> Option<Vec<Box<str>>> {
+    let dexes = LAZY.get()?;
+    let top = CURRENT.with(|c| c.borrow().clone());
+    let prefix = format!("{}$", top.trim_end_matches(';'));
+    let mut names = BTreeSet::new();
+    for dex in dexes.iter() {
+        for k in 0..dex.class_count {
+            let Ok(d) = dex.class_desc_bytes(k) else { continue };
+            let utf8 = std::str::from_utf8(d).is_ok();
+            if utf8 && !(d == top.as_bytes() || d.starts_with(prefix.as_bytes())) {
+                continue;
+            }
+            let Ok(desc) = dex.class_descriptor(k) else { continue };
+            if !(desc == top || desc.starts_with(&prefix)) {
+                continue;
+            }
+            if let Some(p) = lazy_path(&desc).filter(|p| top_of(p) == own) {
+                names.insert(parts(&p).0);
+            }
+        }
+    }
+    (!names.is_empty()).then(|| names.into_iter().map(String::into_boxed_str).collect())
+}
+
 /// Record how every class in the APK is written in source (after renaming).
 pub fn init(dexes: &[crate::dex::Dex]) {
     fn path(dex: &crate::dex::Dex, c: usize, memo: &mut HashMap<String, String>) -> String {
@@ -61,6 +133,11 @@ fn top_level(desc: &str) -> String {
 pub fn source_path(desc: &str) -> String {
     if let Some(p) = PATHS.get().and_then(|m| m.get(&crate::dex::name_hash(desc))) {
         return p.to_string();
+    }
+    if PATHS.get().is_none() {
+        if let Some(p) = lazy_path(desc) {
+            return p;
+        }
     }
     let t = top_level(desc);
     let (pkg, cls) = t.split_once('/').unwrap_or(("", &t));
@@ -113,7 +190,14 @@ pub fn resolve(text: &str, pkg: &str, own: &str) -> String {
         }
     };
     // a name declared in this file shadows any other type of that name, even when never referenced
-    let declared = DECLARED.get().and_then(|d| d.get(&crate::dex::name_hash(own)));
+    let lazy;
+    let declared: Option<&[Box<str>]> = match DECLARED.get() {
+        Some(d) => d.get(&crate::dex::name_hash(own)).map(|b| &**b),
+        None => {
+            lazy = lazy_declared(own);
+            lazy.as_deref()
+        }
+    };
     let mut winner: HashMap<String, String> = HashMap::new();
     let mut imports = BTreeSet::new();
     for (simple, fulls) in &by_simple {
