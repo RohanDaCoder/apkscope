@@ -1,9 +1,25 @@
-# usage: bench\asc.ps1 <rust_ASC.exe> <apkscope.exe> [runs]
+# usage: bench\asc.ps1 <rust_ASC.exe> <apkscope.exe> [runs] [-Legacy]
 # Same queries through rust_ASC and apkscope's stateless commands; median wall time and peak
 # memory of `runs` runs each, as a Markdown table. APKs and classes are listed below.
-param([string]$Asc, [string]$Ours, [int]$Runs = 5)
+param([string]$Asc, [string]$Ours, [int]$Runs = 5, [switch]$Legacy)
 
+# 10 popular apps, official builds (publisher-signed, MD5-checked), found through
+# https://apkscope.vercel.app/ and downloaded from Aptoide's pool into D:\apks\bench10
 $apks = @(
+    @{ name = "TikTok";   path = "D:\apks\bench10\com.zhiliaoapp.musically.apk";    class = "com.ss.android.ugc.aweme.app.host.AwemeHostApplication" },
+    @{ name = "Facebook"; path = "D:\apks\bench10\com.facebook.katana.apk";          class = "com.facebook.katana.app.FacebookApplication" },
+    @{ name = "YouTube";  path = "D:\apks\bench10\com.google.android.youtube.apk";   class = "com.google.android.apps.youtube.app.YouTubeTikTokRoot_Application" },
+    @{ name = "WhatsApp"; path = "D:\apks\bench10\com.whatsapp.apk";                 class = "com.whatsapp.AppShell" },
+    @{ name = "Telegram"; path = "D:\apks\bench10\org.telegram.messenger.web.apk";   class = "org.telegram.messenger.ApplicationLoaderImpl" },
+    @{ name = "Snapchat"; path = "D:\apks\bench10\com.snapchat.android.apk";         class = "com.snapchat.android.shell.AppShell" },
+    @{ name = "Netflix";  path = "D:\apks\bench10\com.netflix.mediaclient.apk";      class = "com.netflix.mediaclient.NetflixApplication" },
+    @{ name = "Firefox";  path = "D:\apks\bench10\org.mozilla.firefox.apk";          class = "org.mozilla.fenix.FenixApplication" },
+    @{ name = "Signal";   path = "D:\apks\bench10\org.thoughtcrime.securesms.apk";   class = "org.thoughtcrime.securesms.ApplicationContext" },
+    @{ name = "Duolingo"; path = "D:\apks\bench10\com.duolingo.apk";                 class = "com.duolingo.DuoApp" }
+)
+
+# the earlier set (2026-10-30 results): -Legacy
+if ($Legacy) { $apks = @(
     @{ name = "Zestle";  path = "D:\apks\Zestle_v0.6.8-prealpha.apk"; class = "com.google.gson.Gson" },
     @{ name = "Unciv";   path = "D:\apks\Unciv.apk";                  class = "com.unciv.UncivGame" },
     @{ name = "Capital"; path = "D:\apks\base.apk";                   class = "okhttp3.OkHttpClient" },
@@ -19,7 +35,7 @@ $apks = @(
     @{ name = "NewPipe";     path = "D:\apks\fdroid\org.schabi.newpipe_1015.apk";            class = "org.schabi.newpipe.ExitActivity" },
     @{ name = "VLC";         path = "D:\apks\fdroid\org.videolan.vlc_13070208.apk";          class = "org.videolan.vlc.IDebugLogService" },
     @{ name = "Wikipedia";   path = "D:\apks\fdroid\org.wikipedia_50614.apk";                class = "org.wikipedia.activity.BaseActivity" }
-)
+) }
 
 function Measure-Run($exe, [string[]]$argv) {
     $si = New-Object Diagnostics.ProcessStartInfo $exe

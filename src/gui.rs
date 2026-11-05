@@ -2547,6 +2547,14 @@ impl eframe::App for App {
 }
 
 pub fn run(path: Option<&str>, deobf: bool) -> Result<(), String> {
+    // opengl32 is delay-loaded (see build.rs) and the GL loader finds it with GetModuleHandle
+    #[cfg(windows)]
+    {
+        unsafe extern "system" {
+            fn LoadLibraryA(name: *const u8) -> *mut u8;
+        }
+        unsafe { LoadLibraryA(c"opengl32.dll".as_ptr().cast()) };
+    }
     let icon = egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 };
     let viewport = egui::ViewportBuilder::default().with_inner_size([1100.0, 700.0]).with_maximized(true).with_title("apkscope").with_icon(Arc::new(icon)).with_drag_and_drop(true);
     let opts = eframe::NativeOptions { viewport, ..Default::default() };

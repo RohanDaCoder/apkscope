@@ -82,6 +82,7 @@ pub fn parse_table(d: &[u8]) -> R<Table> {
     }
     let mut t = Table { package: String::new(), id: 0x7f, values: vec![], types: vec![], keys: vec![], configs: BTreeMap::new() };
     let mut at = u16_at(d, 2)? as usize;
+    let mut pkgs = vec![];
     while at + 8 <= d.len() {
         let (ty, size) = (u16_at(d, at)?, u32_at(d, at + 4)? as usize);
         if size < 8 {
@@ -89,11 +90,15 @@ pub fn parse_table(d: &[u8]) -> R<Table> {
         }
         match ty {
             0x0001 => t.values = string_pool(d, at)?,
-            // shortcut: only the first package is decoded (shared-library / split tables have more)
-            0x0200 if t.types.is_empty() => package(d, at, &mut t)?,
+            0x0200 => pkgs.push((u32_at(d, at + 8)?, at)),
             _ => {}
         }
         at += size;
+    }
+    // shortcut: one package is decoded, the app's own (0x7f) when there are several (some apps
+    // put a library package first), else the first
+    if let Some(&(_, at)) = pkgs.iter().find(|p| p.0 == 0x7f).or(pkgs.first()) {
+        package(d, at, &mut t)?;
     }
     Ok(t)
 }
@@ -270,7 +275,7 @@ impl Names {
                 break;
             }
             if ty == 0x0200 {
-                // the first package only, like `parse_table`
+                // every package: some apps put a library package (0x7b...) before their own 0x7f
                 let pkg = u32_at(d, at + 8)? as u8;
                 let types = string_pool(d, at + u32_at(d, at + 268)? as usize)?;
                 let keys = string_pool(d, at + u32_at(d, at + 276)? as usize)?;
@@ -331,7 +336,6 @@ impl Names {
                     }
                     c += csize;
                 }
-                break;
             }
             at += size;
         }
@@ -480,7 +484,13 @@ pub fn decode_xml(d: &[u8], names: Option<&Names>) -> R<String> {
                         // obfuscated attribute names: fall back to the resource id
                         an = res_ids.get(aname as usize).map_or(format!("attr{aname}"), |id| names.name(*id).map_or(format!("attr_{id:08x}"), str::to_string));
                     }
-                    let prefix = if ans == u32::MAX { None } else { ns.get(&s(&strings, ans)).cloned() };
+                    let mut prefix = if ans == u32::MAX { None } else { ns.get(&s(&strings, ans)).cloned() };
+                    // Android reads framework attributes by id alone; packers blank or fake their
+                    // name and namespace strings, so the id decides both
+                    if let Some(("attr", fw)) = res_ids.get(aname as usize).and_then(|&id| framework(id)) {
+                        an = fw.to_string();
+                        prefix = Some(ns.get("http://schemas.android.com/apk/res/android").cloned().unwrap_or_else(|| "android".into()));
+                    }
                     let full = prefix.map_or(an.clone(), |p| format!("{p}:{an}"));
                     let text = if raw != u32::MAX {
                         s(&strings, raw)

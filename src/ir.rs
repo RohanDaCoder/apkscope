@@ -736,6 +736,19 @@ impl<'a> Ctx<'a> {
 
     /// `(a, b) -> body` for a compiler-generated lambda class whose single method is one statement.
     fn lambda(&self, class: &str, captured: &[Expr]) -> Option<String> {
+        thread_local! { static OPEN: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) }; }
+        // a lambda whose body reaches its own singleton (directly or through another lambda)
+        // would expand forever: inside itself it stays a plain field / `new`
+        if OPEN.with(|o| o.borrow().iter().any(|c| c == class)) {
+            return None;
+        }
+        OPEN.with(|o| o.borrow_mut().push(class.to_string()));
+        let out = self.lambda_body(class, captured);
+        OPEN.with(|o| o.borrow_mut().pop());
+        out
+    }
+
+    fn lambda_body(&self, class: &str, captured: &[Expr]) -> Option<String> {
         let d = self.dex;
         let c = d.find_class(class)?;
         let def = d.class_def(c).ok()?;

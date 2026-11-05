@@ -261,8 +261,9 @@ fn take_u32(d: &mut &[u8]) -> Option<u32> {
     Some(v)
 }
 
-/// Check one v2/v3 scheme value against the file's content digest.
-fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<(), String> {
+/// Check one v2/v3 scheme value against the file's content digest. `Ok(Some(alg))`: signed
+/// with an algorithm this can't check (DSA, ECDSA, RSA-PSS, SHA-512).
+fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<Option<u32>, String> {
     let mut d = value;
     let signers = take_lp(&mut d).ok_or("bad block")?;
     let mut s = &signers[..];
@@ -280,7 +281,7 @@ fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<(), String> {
     let mut x = &sig[..];
     let alg = take_u32(&mut x).ok_or("bad signature")?;
     if alg != RSA_SHA256 {
-        return Err(format!("algorithm {alg:#06x} can't be checked here (only RSA with SHA-256)"));
+        return Ok(Some(alg));
     }
     let sig_bytes = take_lp(&mut x).ok_or("bad signature")?;
     let key = RsaPublicKey::from_public_key_der(&pubkey).map_err(|e| format!("public key: {e}"))?;
@@ -297,7 +298,7 @@ fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<(), String> {
     if want != digest {
         return Err("the APK's content doesn't match its signed digest (modified after signing)".into());
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Verify v2 and v3 signatures of an APK file: one line per scheme.
@@ -305,7 +306,10 @@ pub fn verify(path: &str) -> Result<Vec<String>, String> {
     let apk = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let eocd = eocd_at(&apk)?;
     let cd = u32::from_le_bytes(apk[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
-    let block = crate::sign::signing_block(path).ok_or("no APK Signing Block (v2/v3 unsigned)")?;
+    let Some(block) = crate::sign::signing_block(path) else {
+        let v1 = crate::quick::read_entry(path, "META-INF/MANIFEST.MF")?.is_some();
+        return Ok(vec![if v1 { "v1 (JAR) signature only: v2/v3 not present, v1 not checked here" } else { "unsigned: no v1, v2 or v3 signature" }.to_string()]);
+    };
     let size = u64::from_le_bytes(apk[cd - 24..cd - 16].try_into().unwrap()) as usize;
     let start = cd - size - 8;
     let mut e = apk[eocd..].to_vec();
@@ -315,7 +319,8 @@ pub fn verify(path: &str) -> Result<Vec<String>, String> {
     for (id, name) in [(V2_ID, "v2"), (V3_ID, "v3")] {
         match block.iter().find(|b| b.0 == id) {
             Some((_, v)) => out.push(match verify_scheme(v, id == V3_ID, &digest) {
-                Ok(()) => format!("{name}: verified"),
+                Ok(None) => format!("{name}: verified"),
+                Ok(Some(alg)) => format!("{name}: present, not checked (algorithm {alg:#06x}; only RSA with SHA-256 is checked)"),
                 Err(e) => format!("{name}: FAILED: {e}"),
             }),
             None => out.push(format!("{name}: not present")),

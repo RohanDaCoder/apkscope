@@ -1199,6 +1199,13 @@ pub fn load_notes(apk: &str) -> Result<Notes, String> {
 }
 
 pub fn save_notes(apk: &str, n: &Notes) -> Result<(), String> {
+    // nothing left: no empty file next to the APK
+    if n.classes.is_empty() && n.members.is_empty() && n.comments.is_empty() {
+        return match std::fs::remove_file(project_file(apk)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
     let v = serde_json::json!({ "classes": map_json(&n.classes), "members": map_json(&n.members), "comments": map_json(&n.comments) });
     std::fs::write(project_file(apk), serde_json::to_string_pretty(&v).unwrap_or_default()).map_err(|e| e.to_string())
 }

@@ -121,8 +121,13 @@ impl Lazy {
             return self.all();
         }
         self.upto(0x70)?;
-        let (so, to, cn, co) = (self.word(0x3C), self.word(0x44), self.word(0x60), self.word(0x64));
-        self.upto(co + cn * 32)?;
+        let (so, tn, to, cn, co) = (self.word(0x3C), self.word(0x40), self.word(0x44), self.word(0x60), self.word(0x64));
+        // string and type ids come first and are small; type ids are sorted by string, so the
+        // last type's string ends at or after every class descriptor. One inflate then covers
+        // the class defs and those strings, instead of a second run from byte 0.
+        self.upto(to + tn * 4)?;
+        let bound = self.word(so + self.word(to + tn.saturating_sub(1) * 4) * 4);
+        self.upto((co + cn * 32).max(bound + (1 << 16)))?;
         let last = (0..cn).map(|c| self.word(so + self.word(to + self.word(co + c * 32) * 4) * 4)).max().unwrap_or(0);
         self.grow_past(last)
     }
