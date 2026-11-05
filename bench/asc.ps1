@@ -54,13 +54,15 @@ function Measure-Run($exe, [string[]]$argv) {
     $si.UseShellExecute = $false
     $si.RedirectStandardOutput = $true
     $si.RedirectStandardError = $true
+    # garbage from the previous run's output (MBs of text) is collected now, not during this one
+    [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = [Diagnostics.Process]::Start($si)
     $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
     $p.WaitForExit()
     $ms = $sw.Elapsed.TotalMilliseconds
-    $lines = ($o.Result -split "`n").Count
-    $r = @{ ms = $ms; mb = [math]::Round([Mem]::Peak($p.Handle) / 1MB); cpu = $p.TotalProcessorTime.TotalMilliseconds; exit = $p.ExitCode; lines = $lines }
+    $null = $o.Result
+    $r = @{ ms = $ms; mb = [math]::Round([Mem]::Peak($p.Handle) / 1MB); exit = $p.ExitCode }
     $p.Dispose()
     $r
 }
