@@ -3,7 +3,7 @@
 Every number on this page was measured on one machine (i7-10850H, 6 cores / 12 threads, 32 GB,
 Windows 11). The scripts are in [`bench/`](bench), so you can re-run them. [Back to the README](README.md)
 
-**Jump to:** [Features](#features-apkscope-vs-rust_asc-vs-jadx) · [TikTok, all three tools](#tiktok-all-three-tools) · [Agent sessions](#agent-sessions-mcp) · [Cold queries, 14 apps](#cold-queries-14-apps) · [How it's measured](#how-its-measured)
+**Jump to:** [Features](#features-apkscope-vs-rust_asc-vs-jadx) · [TikTok, all three tools](#tiktok-all-three-tools) · [Agent sessions](#agent-sessions-mcp) · [Cold queries, 10 popular apps](#cold-queries-10-popular-apps) · [Earlier 14-app set](#cold-queries-14-apps-earlier-set-2026-10-30) · [How it's measured](#how-its-measured)
 
 ## Features: apkscope vs rust_ASC vs JADX
 
@@ -59,7 +59,102 @@ An agent doesn't run one query, it runs dozens against the same app. This is 8 s
 With the warm session (the default) the median call takes **70 ms against 191 ms**: 2.7x faster
 per call, 1.7x faster in total, with Java instead of pseudocode.
 
-## Cold queries, 14 apps
+## Cold queries, 10 popular apps
+
+The main set: TikTok, Facebook, YouTube, WhatsApp, Telegram, Snapchat, Netflix, Firefox, Signal
+and Duolingo, official publisher-signed builds (classes in [`bench/asc.ps1`](bench/asc.ps1)).
+One query per process, the two tools taking turns run by run, median of 7 runs; peak memory read
+from the OS after each process exits. Measured 2026-11-05.
+
+**Summary of the 70 rows**, a row counting as a win at 10% or more either way:
+
+| Query | apkscope faster | level | rust_ASC faster |
+|---|---:|---:|---:|
+| Decode manifest | **10** | 0 | 0 |
+| Decompile one class | **7** | 1 | 2 |
+| List strings `-f http` | 4 | 2 | 4 |
+| Method xref `openConnection` | 1 | 3 | 6 |
+| List classes | 0 | 5 | 5 |
+| String xref `https://` | 0 | 1 | 9 |
+| List methods | 0 | 2 | 8 |
+
+Most rust_ASC wins are 0.9x on ~50 ms queries (a few ms). The clear ones: listing methods on
+Snapchat (0.4x) and Signal (0.6x), and one-class decompiles on Firefox (0.7x) and TikTok (0.8x).
+
+| APK | Query | rust_ASC | apkscope | Speed-up |
+|---|---|---:|---:|---:|
+| TikTok | String xref `https://` | 315 ms / 288 MB | 377 ms / 257 MB | 0.8x |
+| TikTok | Method xref `openConnection` | 213 ms / 242 MB | 161 ms / 156 MB | 1.3x |
+| TikTok | Decompile one class | 156 ms / 108 MB | 189 ms / 104 MB | 0.8x |
+| TikTok | List classes | 126 ms / 89 MB | 135 ms / 93 MB | 0.9x |
+| TikTok | List methods | 1,784 ms / 403 MB | 1,766 ms / 391 MB | 1.0x |
+| TikTok | List strings `-f http` | 217 ms / 274 MB | 128 ms / 83 MB | 1.7x |
+| TikTok | Decode manifest | 412 ms / 493 MB | 169 ms / 141 MB | 2.4x |
+| Facebook | String xref `https://` | 156 ms / 231 MB | 197 ms / 185 MB | 0.8x |
+| Facebook | Method xref `openConnection` | 151 ms / 217 MB | 144 ms / 119 MB | 1.0x |
+| Facebook | Decompile one class | 68 ms / 60 MB | 45 ms / 20 MB | 1.5x |
+| Facebook | List classes | 84 ms / 124 MB | 106 ms / 110 MB | 0.8x |
+| Facebook | List methods | 367 ms / 288 MB | 465 ms / 240 MB | 0.8x |
+| Facebook | List strings `-f http` | 139 ms / 211 MB | 94 ms / 99 MB | 1.5x |
+| Facebook | Decode manifest | 147 ms / 159 MB | 44 ms / 23 MB | 3.3x |
+| YouTube | String xref `https://` | 69 ms / 84 MB | 80 ms / 75 MB | 0.9x |
+| YouTube | Method xref `openConnection` | 73 ms / 84 MB | 83 ms / 71 MB | 0.9x |
+| YouTube | Decompile one class | 143 ms / 135 MB | 96 ms / 74 MB | 1.5x |
+| YouTube | List classes | 106 ms / 68 MB | 114 ms / 69 MB | 0.9x |
+| YouTube | List methods | 244 ms / 97 MB | 345 ms / 96 MB | 0.7x |
+| YouTube | List strings `-f http` | 105 ms / 68 MB | 121 ms / 68 MB | 0.9x |
+| YouTube | Decode manifest | 315 ms / 163 MB | 117 ms / 33 MB | 2.7x |
+| WhatsApp | String xref `https://` | 134 ms / 50 MB | 170 ms / 48 MB | 0.8x |
+| WhatsApp | Method xref `openConnection` | 131 ms / 52 MB | 137 ms / 46 MB | 1.0x |
+| WhatsApp | Decompile one class | 89 ms / 29 MB | 90 ms / 15 MB | 1.0x |
+| WhatsApp | List classes | 56 ms / 19 MB | 65 ms / 24 MB | 0.9x |
+| WhatsApp | List methods | 116 ms / 59 MB | 138 ms / 60 MB | 0.8x |
+| WhatsApp | List strings `-f http` | 93 ms / 43 MB | 65 ms / 25 MB | 1.4x |
+| WhatsApp | Decode manifest | 116 ms / 87 MB | 47 ms / 19 MB | 2.5x |
+| Telegram | String xref `https://` | 101 ms / 55 MB | 113 ms / 50 MB | 0.9x |
+| Telegram | Method xref `openConnection` | 91 ms / 55 MB | 99 ms / 48 MB | 0.9x |
+| Telegram | Decompile one class | 198 ms / 76 MB | 135 ms / 53 MB | 1.5x |
+| Telegram | List classes | 44 ms / 47 MB | 43 ms / 47 MB | 1.0x |
+| Telegram | List methods | 89 ms / 69 MB | 96 ms / 71 MB | 0.9x |
+| Telegram | List strings `-f http` | 50 ms / 46 MB | 54 ms / 46 MB | 0.9x |
+| Telegram | Decode manifest | 52 ms / 74 MB | 15 ms / 10 MB | 3.4x |
+| Snapchat | String xref `https://` | 44 ms / 66 MB | 51 ms / 60 MB | 0.9x |
+| Snapchat | Method xref `openConnection` | 46 ms / 64 MB | 46 ms / 57 MB | 1.0x |
+| Snapchat | Decompile one class | 78 ms / 92 MB | 56 ms / 58 MB | 1.4x |
+| Snapchat | List classes | 50 ms / 55 MB | 50 ms / 53 MB | 1.0x |
+| Snapchat | List methods | 81 ms / 85 MB | 186 ms / 85 MB | 0.4x |
+| Snapchat | List strings `-f http` | 47 ms / 54 MB | 45 ms / 52 MB | 1.0x |
+| Snapchat | Decode manifest | 43 ms / 66 MB | 21 ms / 21 MB | 2.0x |
+| Netflix | String xref `https://` | 44 ms / 58 MB | 47 ms / 52 MB | 0.9x |
+| Netflix | Method xref `openConnection` | 43 ms / 55 MB | 46 ms / 48 MB | 0.9x |
+| Netflix | Decompile one class | 92 ms / 104 MB | 73 ms / 51 MB | 1.3x |
+| Netflix | List classes | 37 ms / 50 MB | 39 ms / 46 MB | 0.9x |
+| Netflix | List methods | 115 ms / 90 MB | 117 ms / 91 MB | 1.0x |
+| Netflix | List strings `-f http` | 69 ms / 47 MB | 76 ms / 45 MB | 0.9x |
+| Netflix | Decode manifest | 99 ms / 69 MB | 49 ms / 22 MB | 2.0x |
+| Firefox | String xref `https://` | 138 ms / 60 MB | 139 ms / 55 MB | 1.0x |
+| Firefox | Method xref `openConnection` | 52 ms / 59 MB | 55 ms / 50 MB | 0.9x |
+| Firefox | Decompile one class | 140 ms / 89 MB | 193 ms / 60 MB | 0.7x |
+| Firefox | List classes | 185 ms / 60 MB | 190 ms / 51 MB | 1.0x |
+| Firefox | List methods | 547 ms / 101 MB | 637 ms / 97 MB | 0.9x |
+| Firefox | List strings `-f http` | 146 ms / 49 MB | 127 ms / 47 MB | 1.2x |
+| Firefox | Decode manifest | 124 ms / 135 MB | 33 ms / 26 MB | 3.7x |
+| Signal | String xref `https://` | 63 ms / 84 MB | 68 ms / 77 MB | 0.9x |
+| Signal | Method xref `openConnection` | 60 ms / 80 MB | 64 ms / 71 MB | 0.9x |
+| Signal | Decompile one class | 160 ms / 132 MB | 121 ms / 74 MB | 1.3x |
+| Signal | List classes | 72 ms / 81 MB | 73 ms / 67 MB | 1.0x |
+| Signal | List methods | 290 ms / 160 MB | 454 ms / 152 MB | 0.6x |
+| Signal | List strings `-f http` | 53 ms / 70 MB | 56 ms / 65 MB | 0.9x |
+| Signal | Decode manifest | 45 ms / 70 MB | 31 ms / 37 MB | 1.5x |
+| Duolingo | String xref `https://` | 35 ms / 28 MB | 39 ms / 27 MB | 0.9x |
+| Duolingo | Method xref `openConnection` | 37 ms / 28 MB | 39 ms / 26 MB | 0.9x |
+| Duolingo | Decompile one class | 88 ms / 57 MB | 77 ms / 34 MB | 1.1x |
+| Duolingo | List classes | 34 ms / 26 MB | 34 ms / 25 MB | 1.0x |
+| Duolingo | List methods | 67 ms / 41 MB | 86 ms / 37 MB | 0.8x |
+| Duolingo | List strings `-f http` | 31 ms / 24 MB | 32 ms / 24 MB | 1.0x |
+| Duolingo | Decode manifest | 25 ms / 26 MB | 17 ms / 12 MB | 1.4x |
+
+## Cold queries, 14 apps (earlier set, 2026-10-30)
 
 One query per process: start, read the APK, answer, exit. Median of 7 runs, wall time and peak
 memory of the whole process ([`bench/asc.ps1`](bench/asc.ps1)). The F-Droid APKs are the official
@@ -265,8 +360,9 @@ while rust_ASC matches substrings; use `--regex` for substrings.
 | Decode manifest | 70 ms / 105 MB | 30 ms / 25 MB | 2.3x |
 ## How it's measured
 
-- `bench/asc.ps1 <rust_ASC.exe> <apkscope.exe> 7`: the same query through both tools, each run
-  in a fresh process; median wall time of 7 runs, peak working set across them.
+- `bench/asc.ps1 <rust_ASC.exe> <apkscope.exe> 7` (`-Legacy` for the earlier 14 apps): the same
+  query through both tools, taking turns, each run in a fresh process; median wall time of 7 runs,
+  peak working set across them.
 - `python bench/mcp.py <rust_ASC.exe> <apkscope.exe> <apk>`: one MCP session per server, the same
   13 calls three times.
 - rust_ASC was built from source with its own release profile (`lto = "fat"`, `codegen-units = 1`).

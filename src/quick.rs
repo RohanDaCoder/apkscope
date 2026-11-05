@@ -32,6 +32,44 @@ pub fn par<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
     out.into_inner().unwrap().into_iter().map(|v| v.expect("worker panicked")).collect()
 }
 
+/// Run `f(k)` on all cores, starting the `k`s in `order`; `sink(k, result)` runs on the calling
+/// thread in index order as soon as each result (and all before it) is in, so output can be
+/// written while later work still runs.
+fn par_sink<T: Send>(order: &[usize], f: impl Fn(usize) -> T + Sync, mut sink: impl FnMut(usize, T)) {
+    let n = order.len();
+    let next = AtomicUsize::new(0);
+    let slots: Mutex<Vec<Option<std::thread::Result<T>>>> = Mutex::new((0..n).map(|_| None).collect());
+    let ready = std::sync::Condvar::new();
+    std::thread::scope(|s| {
+        for _ in 0..session::threads().min(n).max(1) {
+            let _ = std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(s, || loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                // a panic is handed to the caller instead of leaving it waiting for this slot
+                let v = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(order[i])));
+                slots.lock().unwrap()[order[i]] = Some(v);
+                ready.notify_all();
+            });
+        }
+        for k in 0..n {
+            let mut g = slots.lock().unwrap();
+            let v = loop {
+                match g[k].take() {
+                    Some(v) => break v,
+                    None => g = ready.wait(g).unwrap(),
+                }
+            };
+            drop(g);
+            match v {
+                Ok(v) => sink(k, v),
+                Err(p) => std::panic::resume_unwind(p),
+            }
+        }
+    });
+}
+
 /// One DEX file, inflated only as far as a query needs: names and the string pool sit in the
 /// first third of a d8-built DEX, code and class data after them.
 pub struct Lazy {
@@ -67,9 +105,10 @@ impl Lazy {
             self.have = k;
             return Ok(());
         }
-        // n output bytes rarely take more than 9/8 n input bytes; when they do, the short
-        // input fails the run and it is retried with the whole entry
-        self.read_raw((n + SLACK) / 8 * 9 + (1 << 16))?;
+        // the entry's own ratio with half again as margin (DEX packs ~3:1, so a fixed 9/8 read
+        // and faulted in ~3x too much); a short read fails the run, which then retries with all
+        let ratio = self.raw.len() as f64 / self.buf.len().max(1) as f64;
+        self.read_raw(((n + SLACK) as f64 * ratio * 1.5) as usize + (1 << 16))?;
         loop {
             match d.deflate_decompress(&self.raw[..self.got], &mut self.buf[..n + SLACK]) {
                 Ok(k) => self.have = k,
@@ -100,9 +139,13 @@ impl Lazy {
 
     /// Header, id tables and every string: enough for class, member and string names.
     pub fn names(&mut self) -> Result<(), String> {
-        if !self.prefix_pays {
-            return self.all();
-        }
+        self.names_or_all(1.0)
+    }
+
+    /// `names`, or the whole file at once when the strings end past fraction `miss` of it: for
+    /// a caller that then needs everything with chance 1 - miss, a prefix p costs p + (1 - miss)
+    /// on average (libdeflate restarts from byte 0) against 1 for one full run.
+    pub fn names_or_all(&mut self, miss: f64) -> Result<(), String> {
         self.upto(0x70)?;
         // id tables (types, protos, fields, methods, classes) end before the strings' data
         let tables = [(0x40, 4), (0x48, 12), (0x50, 8), (0x58, 8), (0x60, 32), (0x38, 4)];
@@ -111,15 +154,38 @@ impl Lazy {
         // only the string ids for now: they say where the last string is
         self.upto(so + sn * 4)?;
         let last = (0..sn).map(|i| self.word(so + i * 4)).max().unwrap_or(0).max(end);
+        if last as f64 > miss * self.buf.len() as f64 {
+            return self.all();
+        }
         self.grow_past(last)
+    }
+
+    /// `class_names` for a caller that will want the whole file if a class is there. A prefix of
+    /// fraction p and then a fresh full run (libdeflate can't resume) cost 1 + p; d8 / R8 put
+    /// string data last, so p is often 0.7-0.9 and inflating everything at once is cheaper.
+    /// Redex-built files keep strings early (p ~ 0.25) and stay on the prefix.
+    pub fn class_names_or_all(&mut self) -> Result<(), String> {
+        if self.class_names_fraction()? > 0.5 {
+            return self.all();
+        }
+        self.class_names()
+    }
+
+    /// How far into the file the class descriptors reach (0..1), from the header and type ids
+    /// alone (a few percent of the file).
+    pub fn class_names_fraction(&mut self) -> Result<f64, String> {
+        self.upto(0x70)?;
+        let (so, tn, to) = (self.word(0x3C), self.word(0x40), self.word(0x44));
+        self.upto(to + tn * 4)?;
+        let bound = self.word(so + self.word(to + tn.saturating_sub(1) * 4) * 4);
+        Ok(bound as f64 / self.buf.len().max(1) as f64)
     }
 
     /// Like `names`, but only as far as the class descriptors go: sorted by content, they
     /// end long before the lowercase identifiers that fill the rest of the string pool.
     pub fn class_names(&mut self) -> Result<(), String> {
-        if !self.prefix_pays {
-            return self.all();
-        }
+        // unlike `names`, this pays even with few DEX files: class descriptors sit early in the
+        // string pool, so most of each file is never inflated (or touched in memory)
         self.upto(0x70)?;
         let (so, tn, to, cn, co) = (self.word(0x3C), self.word(0x40), self.word(0x44), self.word(0x60), self.word(0x64));
         // string and type ids come first and are small; type ids are sorted by string, so the
@@ -180,14 +246,30 @@ fn reuse(mut spare: Vec<u8>, n: usize) -> Vec<u8> {
 /// Root-level classes*.dex of an APK (or bundle / bare .dex) in runtime order (classes.dex,
 /// classes2.dex, ...), compressed bytes read in parallel; `f` decides how much of each to inflate.
 pub fn scan<T: Send>(path: &str, f: impl Fn(&mut Lazy) -> Result<T, String> + Sync) -> Result<Vec<T>, String> {
+    let mut all = Vec::new();
+    scan_each(path, false, |_| true, f, |r| all.push(r))?;
+    all.into_iter().collect()
+}
+
+/// `scan`, handing each file's result to `sink` in runtime order as soon as it is in.
+/// `stream`: start files in runtime order, so the first results come early (output written
+/// while the rest is still worked on); otherwise biggest first, so the whole scan ends sooner.
+/// Only the DEX files whose name passes `keep` are read.
+pub fn scan_each<T: Send>(path: &str, stream: bool, keep: impl Fn(&str) -> bool, f: impl Fn(&mut Lazy) -> Result<T, String> + Sync, sink: impl FnMut(Result<T, String>)) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
+    let mut sink = sink;
     let real = session::prepare(path)?;
     let mut file = std::fs::File::open(&real).map_err(|e| format!("{path}: {e}"))?;
     let mut entries = central_dir(&mut file).map_err(|e| format!("{path}: {e}"))?;
-    entries.retain(|e| e.0.starts_with("classes") && e.0.ends_with(".dex") && !e.0.contains('/'));
+    entries.retain(|e| e.0.starts_with("classes") && e.0.ends_with(".dex") && !e.0.contains('/') && keep(&e.0));
     entries.sort_by_key(|e| e.0.trim_start_matches("classes").trim_end_matches(".dex").parse::<u32>().unwrap_or(1));
     let prefix_pays = entries.len() > session::threads();
-    par(entries.len(), |k| -> Result<T, String> {
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    if !stream {
+        // biggest files start first, so no thread is left with a big one at the end
+        order.sort_by_key(|&k| std::cmp::Reverse(entries[k].3));
+    }
+    par_sink(&order, |k| -> Result<T, String> {
         let (name, local, csize, size, method) = &entries[k];
         let err = |e: std::io::Error| format!("{name}: {e}");
         let mut fh = std::fs::File::open(&real).map_err(err)?;
@@ -213,9 +295,8 @@ pub fn scan<T: Send>(path: &str, f: impl Fn(&mut Lazy) -> Result<T, String> + Sy
             m => return Err(format!("{name}: unsupported compression {m}")),
         };
         f(&mut lazy)
-    })
-    .into_iter()
-    .collect()
+    }, |_, r| sink(r));
+    Ok(())
 }
 
 /// One file out of an APK, without indexing the whole archive (big apps have 10k+ entries).
@@ -310,33 +391,51 @@ pub fn package(path: &str) -> String {
 /// Every class (`descriptor = false`: Java names), optionally under `prefix`, skipping known
 /// libraries with `app_only`.
 pub fn classes(path: &str, prefix: &str, app_only: bool, raw: bool) -> Result<Vec<String>, String> {
+    let mut lists = Vec::new();
+    classes_each(path, prefix, app_only, raw, |l| lists.push(l))?;
+    Ok(lists.into_iter().collect::<Result<Vec<_>, _>>()?.concat())
+}
+
+/// `classes`, each DEX file's list handed to `sink` in runtime order as soon as it is done.
+pub fn classes_each(path: &str, prefix: &str, app_only: bool, raw: bool, sink: impl FnMut(Result<Vec<String>, String>)) -> Result<(), String> {
     let pkg = if app_only { package(path) } else { String::new() };
-    let lists = scan(path, |l| {
+    scan_each(path, false, |_| true, |l| {
         l.class_names()?;
         let Some(dx) = l.dex() else { return Ok(vec![]) };
         Ok((0..dx.class_count)
             .filter_map(|c| dx.class_descriptor(c).ok())
             .filter_map(|d| {
+                // the plain listing (no filter, descriptors) needs no Java name at all
+                if raw && prefix.is_empty() && !app_only {
+                    return Some(d);
+                }
                 let j = dex::java_name(&d);
-                let dotted = d[1..d.len().saturating_sub(1).max(1)].replace('/', ".");
-                let keep = (j.starts_with(prefix) || dotted.starts_with(prefix)) && (!app_only || session::origin(&j, &pkg) != session::Origin::Library);
+                let keep = (j.starts_with(prefix) || d[1..d.len().saturating_sub(1).max(1)].replace('/', ".").starts_with(prefix))
+                    && (!app_only || session::origin(&j, &pkg) != session::Origin::Library);
                 keep.then(|| if raw { d } else { j })
             })
             .collect::<Vec<_>>())
-    })?;
-    Ok(lists.concat())
+    }, sink)
 }
 
 /// Defined methods as `Lcls;->name(params)Ret` lines, optionally of one class / with a name
 /// filter: one text per DEX file, each line ending in a newline (millions of lines, so no
 /// `String` each).
 pub fn methods(path: &str, class: Option<&str>, filter: &str) -> Result<Vec<String>, String> {
+    let mut all = Vec::new();
+    methods_each(path, class, filter, |t| all.push(t))?;
+    all.into_iter().collect()
+}
+
+/// `methods`, each DEX file's text handed to `sink` in runtime order as soon as it is done.
+pub fn methods_each(path: &str, class: Option<&str>, filter: &str, sink: impl FnMut(Result<String, String>)) -> Result<(), String> {
     let want = class.map(descriptor);
     let low = filter.to_lowercase();
-    scan(path, |l| {
+    // listing everything streams; one class is found faster biggest-file first
+    scan_each(path, want.is_none(), |_| true, |l| {
         if let Some(w) = &want {
             // a DEX that doesn't define the class needs nothing more
-            l.class_names()?;
+            l.class_names_or_all()?;
             if l.dex().is_none_or(|d| d.find_class(w).is_none()) {
                 return Ok(String::new());
             }
@@ -354,17 +453,30 @@ pub fn methods(path: &str, class: Option<&str>, filter: &str) -> Result<Vec<Stri
             let cls = dx.class_descriptor(c).unwrap_or_default();
             let _ = dx.each_method(c, |midx, _| {
                 let Ok((_, sid)) = dx.member_ids(true, midx) else { return };
-                let name = dex::mutf8(dx.string_bytes(sid).unwrap_or_default());
-                if !low.is_empty() && !name.to_lowercase().contains(&low) {
+                // millions of lines: borrow plain UTF-8 names, append pieces without formatting
+                let raw = dx.string_bytes(sid).unwrap_or_default();
+                let name: std::borrow::Cow<str> = std::str::from_utf8(raw).map_or_else(|_| dex::mutf8(raw).into(), Into::into);
+                if !low.is_empty() && !contains_ci(&name, &low) {
                     return;
                 }
                 let p = dx.method_proto(midx).unwrap_or(0);
                 let proto = protos.entry(p).or_insert_with(|| dx.proto(p).unwrap_or_default());
-                let _ = writeln!(out, "{cls}->{name}{proto}");
+                for part in [cls.as_str(), "->", &name, proto, "\n"] {
+                    out.push_str(part);
+                }
             });
         }
         Ok(out)
-    })
+    }, sink)
+}
+
+/// `hay.to_lowercase().contains(low)` (`low` already lowercase), without allocating for ASCII.
+fn contains_ci(hay: &str, low: &str) -> bool {
+    if !hay.is_ascii() {
+        return hay.to_lowercase().contains(low);
+    }
+    let (h, n) = (hay.as_bytes(), low.as_bytes());
+    n.is_empty() || h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
 /// What changed from `old` to `new`: classes, methods of classes both define, permissions and
@@ -604,15 +716,22 @@ pub fn refs(path: &str, q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
     let found = AtomicUsize::new(0);
     // (DEX files checked, how many matched): when most match, a prefix pass is wasted work
     let (checked, matched) = (AtomicUsize::new(0), AtomicUsize::new(0));
-    let lists = scan(path, |l| {
+    // runtime order: with --limit, which files are skipped once enough is found stays as before
+    let mut lists = Vec::new();
+    scan_each(path, true, |_| true, |l| {
         if found.load(Ordering::Relaxed) >= limit {
             return Ok(vec![]);
         }
         let (c, m) = (checked.load(Ordering::Relaxed), matched.load(Ordering::Relaxed));
-        if c >= 4 && m * 3 > c * 2 {
-            l.prefix_pays = false;
+        if matches!(q.kind, Kind::Extends) {
+            l.names()?; // superclasses are in the class defs: names are all it needs
+        } else if !l.prefix_pays {
+            // every file inflates at once anyway: one that matches would pay prefix + full
+            l.all()?;
+        } else {
+            // chance this file doesn't match, from the files seen so far (even odds at first)
+            l.names_or_all(if c == 0 { 0.5 } else { (c - m) as f64 / c as f64 })?;
         }
-        l.names()?;
         if q.kind == Kind::Impl {
             l.all()?; // interface lists live in the data section
         }
@@ -632,8 +751,8 @@ pub fn refs(path: &str, q: &Query, limit: usize) -> Result<Vec<Ref_>, String> {
         };
         found.fetch_add(out.len(), Ordering::Relaxed);
         Ok(out)
-    })?;
-    let mut all = lists.concat();
+    }, |r| lists.push(r))?;
+    let mut all = lists.into_iter().collect::<Result<Vec<_>, String>>()?.concat();
     all.truncate(limit);
     Ok(all)
 }
@@ -662,17 +781,18 @@ pub fn decompile(path: &str, names: &[String], smali: bool, deobf: bool) -> Resu
     crate::deobf::set_notes(crate::re::load_notes(path)?);
     let wanted: Vec<String> = names.iter().map(|n| descriptor(n)).collect();
     let seen: Vec<std::sync::atomic::AtomicBool> = wanted.iter().map(|_| Default::default()).collect();
-    // only DEX files that define a wanted class are inflated past their names, and once every
-    // class is found the rest aren't looked at.
-    // shortcut: a class defined twice comes from whichever DEX finds it first, not always the
-    // lowest-numbered one as at runtime; duplicates are rare.
-    let found = scan(path, |l| {
+    // only DEX files that define a wanted class are inflated past their names. classes.dex goes
+    // alone first: the runtime looks there first, and app / startup classes live there, so
+    // usually the bigger files are never opened. Classes still missing come from the others.
+    // shortcut: past classes.dex, a class defined twice comes from whichever DEX finds it first,
+    // not always the lowest-numbered one as at runtime; duplicates are rare.
+    let look = |l: &mut Lazy, skip: &[bool]| -> Result<Option<(Vec<(usize, usize)>, Vec<u8>)>, String> {
         if seen.iter().all(|s| s.load(Ordering::Relaxed)) {
             return Ok(None);
         }
-        l.class_names()?;
+        l.class_names_or_all()?;
         let hits: Vec<(usize, usize)> = match l.dex() {
-            Some(dx) => wanted.iter().enumerate().filter_map(|(k, w)| dx.find_class(w).map(|c| (k, c))).collect(),
+            Some(dx) => wanted.iter().enumerate().filter(|(k, _)| !skip[*k]).filter_map(|(k, w)| dx.find_class(w).map(|c| (k, c))).collect(),
             None => vec![],
         };
         if hits.is_empty() {
@@ -681,7 +801,30 @@ pub fn decompile(path: &str, names: &[String], smali: bool, deobf: bool) -> Resu
         hits.iter().for_each(|h| seen[h.0].store(true, Ordering::Relaxed));
         l.all()?;
         Ok(Some((hits, std::mem::take(&mut l.buf))))
-    })?;
+    };
+    let mut found = Vec::new();
+    let none = vec![false; wanted.len()];
+    // classes.dex alone first pays only when its names end early (Redex layout): then a miss
+    // costs a short prefix. When they run deep (d8 / R8, p ~ 0.7-0.9) it would need a near-full
+    // inflate before the others even start, so every file goes in one parallel pass instead:
+    // max(T) rather than T(classes.dex) + T(rest).
+    let spread = std::sync::atomic::AtomicBool::new(false);
+    scan_each(path, false, |n| n == "classes.dex", |l| {
+        if l.class_names_fraction()? > 0.5 {
+            spread.store(true, Ordering::Relaxed);
+            return Ok(None);
+        }
+        look(l, &none)
+    }, |r| found.push(r))?;
+    if spread.load(Ordering::Relaxed) {
+        scan_each(path, false, |_| true, |l| look(l, &none), |r| found.push(r))?;
+    } else {
+        let in_first: Vec<bool> = seen.iter().map(|s| s.load(Ordering::Relaxed)).collect();
+        if in_first.contains(&false) {
+            scan_each(path, false, |n| n != "classes.dex", |l| look(l, &in_first), |r| found.push(r))?;
+        }
+    }
+    let found = found.into_iter().collect::<Result<Vec<_>, String>>()?;
     let files: Vec<(Vec<(usize, usize)>, Vec<u8>)> = found.into_iter().flatten().collect();
     let dexes: Vec<Dex> = files.iter().filter_map(|f| Dex::parse(&f.1).ok()).collect();
     // where each class lives: (dex, class index); the first DEX wins, as at runtime
@@ -740,6 +883,13 @@ fn method_named(java: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn case_insensitive_contains() {
+        for (h, n) in [("openConnection", "connect"), ("OPEN", "open"), ("abc", "x"), ("Ã‰tÃ©", "Ã©tÃ©"), ("abc", "Ã©"), ("a", "")] {
+            assert_eq!(contains_ci(h, n), h.to_lowercase().contains(n), "{h} {n}");
+        }
+    }
 
     #[test]
     fn manifest_permissions() {

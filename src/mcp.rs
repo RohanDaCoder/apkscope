@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -18,6 +19,8 @@ const PROTOCOL: &str = "2025-06-18";
 const MAX_CHARS: usize = 60_000;
 /// warm sessions kept at once; a big APK's session holds about 1 GB
 const MAX_WORKERS: usize = 4;
+/// a warm session unused this long exits and frees its memory; the next request restarts it
+const IDLE_SECS: u64 = 600;
 
 fn tools() -> Value {
     let apk = json!({"type": "string", "description": "Absolute path to the .apk, .apks, .xapk or .dex file"});
@@ -130,6 +133,10 @@ fn run_cli(args: &[String]) -> Result<(String, bool), String> {
 /// command instead (requests without one wait for the load).
 fn ask_worker(workers: &mut HashMap<String, Worker>, apk: &str, deobf: bool, req: &[String], fallback: Option<Vec<String>>) -> Result<(String, bool), String> {
     let key = format!("{apk}\0{deobf}");
+    // a worker that exited on its own (idle timeout) is started again
+    if workers.get_mut(&key).is_some_and(|w| !matches!(w.child.try_wait(), Ok(None))) {
+        workers.remove(&key);
+    }
     if !workers.contains_key(&key) {
         if workers.len() >= MAX_WORKERS {
             let old = workers.iter().min_by_key(|w| w.1.used).map(|w| w.0.clone());
@@ -456,11 +463,22 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
     std::thread::Builder::new().stack_size(256 << 20).spawn(move || {
         let _ = bg.set(crate::load(&path, deobf));
     }).map_err(|e| e.to_string())?;
+    // an idle session holds the whole APK in memory: give it back after IDLE_SECS unused
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let start = Instant::now();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        if start.elapsed().as_secs().saturating_sub(LAST.load(Relaxed)) > IDLE_SECS {
+            std::process::exit(0);
+        }
+    });
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{}", json!({"ready": true}));
     let _ = out.flush();
     for line in std::io::stdin().lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        // never idle while a request runs, however long it takes
+        LAST.store(u64::MAX, Relaxed);
         let req: Vec<String> = serde_json::from_str(&line).unwrap_or_default();
         let kind = req.first().map(String::as_str).unwrap_or_default();
         let st = match kind {
@@ -469,6 +487,7 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
             _ => match state.get() {
                 Some(s) => Some(s),
                 None => {
+                    LAST.store(start.elapsed().as_secs(), Relaxed);
                     let _ = writeln!(out, "{}", json!({"ok": false, "busy": true}));
                     let _ = out.flush();
                     continue;
@@ -523,6 +542,7 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
             Ok(t) => (true, t),
             Err(e) => (false, e),
         };
+        LAST.store(start.elapsed().as_secs(), Relaxed);
         let _ = writeln!(out, "{}", json!({"ok": ok, "text": text}));
         let _ = out.flush();
     }

@@ -37,6 +37,17 @@ if ($Legacy) { $apks = @(
     @{ name = "Wikipedia";   path = "D:\apks\fdroid\org.wikipedia_50614.apk";                class = "org.wikipedia.activity.BaseActivity" }
 ) }
 
+# peak memory read from the OS once the process has exited (no polling: a sleep loop rounds
+# every time up to Windows' ~15 ms timer)
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class Mem {
+  [StructLayout(LayoutKind.Sequential)] public struct C { public uint cb, faults; public UIntPtr peakWs, ws, a, b, c, d, pagefile, peakPagefile; }
+  [DllImport("psapi.dll")] static extern bool GetProcessMemoryInfo(IntPtr h, out C c, uint cb);
+  public static ulong Peak(IntPtr h) { C c; GetProcessMemoryInfo(h, out c, (uint)Marshal.SizeOf(typeof(C))); return (ulong)c.peakWs; }
+}
+"@
+
 function Measure-Run($exe, [string[]]$argv) {
     $si = New-Object Diagnostics.ProcessStartInfo $exe
     $si.Arguments = ($argv | ForEach-Object { '"' + $_ + '"' }) -join ' '
@@ -46,20 +57,23 @@ function Measure-Run($exe, [string[]]$argv) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = [Diagnostics.Process]::Start($si)
     $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
-    $peak = 0
-    while (-not $p.HasExited) { $p.Refresh(); try { $peak = [math]::Max($peak, $p.PeakWorkingSet64) } catch {}; Start-Sleep -Milliseconds 1 }
     $p.WaitForExit()
-    $ms = $sw.ElapsedMilliseconds
+    $ms = $sw.Elapsed.TotalMilliseconds
     $lines = ($o.Result -split "`n").Count
-    @{ ms = $ms; mb = [math]::Round($peak / 1MB); exit = $p.ExitCode; lines = $lines }
+    $r = @{ ms = $ms; mb = [math]::Round([Mem]::Peak($p.Handle) / 1MB); cpu = $p.TotalProcessorTime.TotalMilliseconds; exit = $p.ExitCode; lines = $lines }
+    $p.Dispose()
+    $r
 }
 
-function Median($exe, [string[]]$argv) {
-    $r = 1..$Runs | ForEach-Object { Measure-Run $exe $argv }
-    $sorted = $r | Sort-Object { $_.ms }
-    $m = $sorted[[int][math]::Floor($Runs / 2)]
-    $m.mb = ($r | ForEach-Object { $_.mb } | Measure-Object -Maximum).Maximum
-    $m
+# both tools take turns, so a slow moment on the laptop hits each of them alike
+function Pair($argvA, $argvB) {
+    $ra = @(); $rb = @()
+    1..$Runs | ForEach-Object { $ra += Measure-Run $Asc $argvA; $rb += Measure-Run $Ours $argvB }
+    foreach ($r in @($ra, $rb)) {
+        $m = ($r | Sort-Object { $_.ms })[[int][math]::Floor($Runs / 2)]
+        $m.mb = ($r | ForEach-Object { $_.mb } | Measure-Object -Maximum).Maximum
+        $m
+    }
 }
 
 "| APK | Query | rust_ASC | apkscope | Speed-up |"
@@ -76,8 +90,7 @@ foreach ($a in $apks) {
         @("Decode manifest", @("getmanifest", $p), @("manifest", $p))
     )
     foreach ($t in $tests) {
-        $x = Median $Asc $t[1]
-        $y = Median $Ours $t[2]
+        $x, $y = Pair $t[1] $t[2]
         $ratio = if ($y.ms -gt 0) { "{0:N1}x" -f ($x.ms / $y.ms) } else { "-" }
         $xs = if ($x.exit -eq 0) { "{0:N0} ms / {1:N0} MB" -f $x.ms, $x.mb } else { "failed (exit {0})" -f $x.exit }
         $ys = if ($y.exit -eq 0) { "{0:N0} ms / {1:N0} MB" -f $y.ms, $y.mb } else { "failed (exit {0})" -f $y.exit }

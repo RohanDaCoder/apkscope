@@ -112,6 +112,23 @@ fn emit_with(f: impl FnOnce(&mut dyn Write) -> std::io::Result<()>) -> Result<()
     }
 }
 
+/// Write each piece as `run` produces it (in order), instead of collecting everything first:
+/// the reader gets the first lines while later DEX files are still being worked on.
+fn emit_stream<T>(run: impl FnOnce(&mut dyn FnMut(Result<T, String>)) -> Result<(), String>, put: impl Fn(&mut dyn Write, T) -> std::io::Result<()>) -> Result<(), String> {
+    let (mut io_err, mut piece_err, mut res) = (None, None, Ok(()));
+    emit_with(|w| {
+        res = run(&mut |t| match t {
+            Ok(t) if io_err.is_none() => io_err = put(&mut *w, t).err(),
+            Ok(_) => {}
+            Err(e) => {
+                piece_err.get_or_insert(e);
+            }
+        });
+        io_err.take().map_or(Ok(()), Err)
+    })?;
+    res.and(piece_err.map_or(Ok(()), Err))
+}
+
 /// One item per line, or a JSON array with `--json`; `--offset`/`--limit` page through it.
 fn emit_list(items: &[String]) -> Result<(), String> {
     let o = out_opts();
@@ -667,19 +684,26 @@ fn main() -> ExitCode {
             let prefix = opt(&mut a, &["--prefix"])?.unwrap_or_default();
             let (app, raw) = (flag(&mut a, "--app-only"), flag(&mut a, "--desc"));
             let [apk] = a.as_slice() else { return Err("usage: apkscope classes <apk> [--prefix P]".into()) };
-            emit_list(&quick::classes(apk, &prefix, app, raw)?)
+            let o = out_opts();
+            if o.json || o.offset > 0 || o.limit != usize::MAX {
+                return emit_list(&quick::classes(apk, &prefix, app, raw)?);
+            }
+            emit_stream(
+                |sink| quick::classes_each(apk, &prefix, app, raw, sink),
+                |w, names: Vec<String>| names.iter().try_for_each(|n| w.write_all(n.as_bytes()).and_then(|_| w.write_all(b"\n"))),
+            )
         })(),
         [cmd, ..] if cmd == "methods" || cmd == "listmethod" => (|| {
             let mut a = rest.clone();
             let class = opt(&mut a, &["--class"])?;
             let filter = opt(&mut a, &["--filter", "-f"])?.unwrap_or_default();
             let [apk] = a.as_slice() else { return Err("usage: apkscope methods <apk> [--class C] [--filter F]".into()) };
-            let texts = quick::methods(apk, class.as_deref(), &filter)?;
             let o = out_opts();
             if o.json || o.offset > 0 || o.limit != usize::MAX {
+                let texts = quick::methods(apk, class.as_deref(), &filter)?;
                 emit_list(&texts.iter().flat_map(|t| t.lines().map(str::to_string)).collect::<Vec<_>>())
             } else {
-                emit_with(|w| texts.iter().try_for_each(|t| w.write_all(t.as_bytes())))
+                emit_stream(|sink| quick::methods_each(apk, class.as_deref(), &filter, sink), |w, t: String| w.write_all(t.as_bytes()))
             }
         })(),
         [cmd, ..] if cmd == "strings" || cmd == "liststring" => (|| {

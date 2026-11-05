@@ -219,13 +219,16 @@ pub fn init(dexes: &[Dex]) {
         }
     }
     // outer classes before their inner ones
-    all.sort_by_key(|(d, _, _)| (d.matches('$').count(), d.len()));
+    // (stable, like sort_by_key, but counts each name's `$`s once instead of per comparison)
+    all.sort_by_cached_key(|(d, _, _)| (d.matches('$').count(), d.len()));
     let mut used: HashSet<String> = all.iter().map(|(d, _, _)| d.to_lowercase()).collect();
     let mut map: HashMap<String, String> = HashMap::new();
+    // thousands of classes share a package: rename each package once
+    let mut packages: HashMap<&str, String> = HashMap::new();
     for (desc, file, sup) in &all {
         let body = desc.trim_start_matches('L').trim_end_matches(';');
         let (pkg, cls) = body.rsplit_once('/').unwrap_or(("", body));
-        let new_pkg = package(pkg);
+        let new_pkg = packages.entry(pkg).or_insert_with(|| package(pkg)).clone();
         let (outer, last) = match cls.rsplit_once('$') {
             Some((o, l)) => {
                 let parent = format!("L{pkg}{}{o};", if pkg.is_empty() { "" } else { "/" });
