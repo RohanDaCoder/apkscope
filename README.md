@@ -10,13 +10,13 @@
 <p align="center">
   <a href="#get-started"><img src="https://img.shields.io/badge/Get_started-30_seconds-f0883e?style=for-the-badge" alt="Get started"></a>
   <a href="#what-it-found"><img src="https://img.shields.io/badge/Real_findings-5_apps-db2777?style=for-the-badge" alt="Real findings in 5 apps"></a>
-  <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-14_apps-2ea44f?style=for-the-badge" alt="Benchmarks: 14 apps"></a>
+  <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-10_popular_apps-2ea44f?style=for-the-badge" alt="Benchmarks: 10 popular apps"></a>
   <a href="https://github.com/suffixing/apkscope/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/suffixing/apkscope/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"></a>
 </p>
 
 <p align="center">
   <a href="#what-it-found">Findings</a> ·
-  <a href="#faster-than-jadx">Speed</a> ·
+  <a href="#speed">Speed</a> ·
   <a href="#get-started">Install</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#built-for-ai-agents">MCP</a> ·
@@ -26,7 +26,8 @@
 
 > **In 10 seconds:** one executable, no Java. Drop in an APK and get a security overview, readable
 > Java, every endpoint and who calls it. Use it as a **viewer**, a **CLI**, or an **MCP server** your
-> AI agent drives. Opens TikTok **11x faster than JADX with 9x less RAM**.
+> AI agent drives. Opens TikTok **11x faster than JADX with 9x less RAM**, and decompiles a class
+> **up to 1.8x faster than rust_ASC**, as typed Java instead of pseudocode.
 
 ## What it found
 
@@ -193,7 +194,7 @@ $ apkscope decompile keepassdx.apk com.kunzisoft.encrypt.aes.AESTransformer
 guessing. ECB on one block is the spec. Knowing which flags to drop is half the job.
 </details>
 
-## Faster than JADX
+## Speed
 
 <p align="center">
   <img src="docs/bench-open.svg" alt="Open TikTok until fully loaded: apkscope 12.4 s, JADX-GUI 2 min 18 s" width="760">
@@ -202,6 +203,9 @@ guessing. ECB on one block is the spec. Knowing which flags to drop is half the 
 | | |
 |---|---|
 | **11x faster** than JADX to open TikTok, **9x less RAM** | 12.4 s / 997 MB vs 2 min 18 s / 9.4 GB |
+| **Up to 1.8x faster** than rust_ASC decompiling one class | faster on 8 of 10 popular apps, level on 2, as Java |
+| **1.2-3x faster** decoding the manifest | all 10 apps, with 10-138 MB instead of 26-493 MB |
+| **Less memory** than rust_ASC | on 59 of 70 cold queries |
 | **2.7x faster** than rust_ASC per agent call | 70 ms vs 191 ms median, over MCP |
 | **Typed Java**, not pseudocode | a reviewer, or an agent, can trust it |
 | **One tool**: decompiler, xrefs, recon, diff, Frida, unpacking, re-signing, GUI, MCP | instead of five |
@@ -240,7 +244,7 @@ apkscope search    app.apk urls                             # every endpoint (al
 apkscope diff      old.apk new.apk --strings                # what changed in this update
 
 # follow the code
-apkscope refs      app.apk string X-Goog-Api-Key --java     # who uses it, with the Java line (53 ms cold)
+apkscope refs      app.apk string X-Goog-Api-Key --java     # who uses it, with the Java line
 apkscope decompile app.apk com.example.Api --method login   # one method, as Java
 apkscope callers   app.apk com.example.Api login            # every caller (callgraph: the tree)
 apkscope access    app.apk com.example.Session token        # who reads / writes a field
@@ -298,7 +302,8 @@ Object[] objArr2 = new Object[1];
 </td></tr></table>
 
 Loops, `switch`, `try`/`catch`/`finally`, lambdas, enums, typed names and deobfuscation
-(`a.b` → `pkg_a.RunnableB`). Faster than rust_ASC per class on 9 of 14 apps. Uncertain methods get a
+(`a.b` → `pkg_a.RunnableB`). Faster than rust_ASC per class on 8 of 10 popular apps, level on the
+other 2. Uncertain methods get a
 `/* WARNING */` header; failures fall back to Smali, never silently.
 
 ## Built for AI agents
@@ -331,8 +336,8 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 ## Honest limits
 
 - Some complex methods still use `goto` labels (marked `WARNING`).
-- Cold one-shot queries: rust_ASC is a few ms quicker on many apps, 1.8x quicker listing TikTok's
-  436k classes. In agent sessions apkscope is faster.
+- Cold one-shot queries: rust_ASC is still quicker at string xrefs (0.78-0.97x, 5-40 ms) and a
+  little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
 - The viewer is tested on Windows; CLI and MCP pass CI on Linux and macOS.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).

@@ -1,38 +1,57 @@
-# apkscope v0.5.3
+# apkscope v0.6.0
 
-**Opens TikTok (346 MB, 436k classes) in 12.4 s with 997 MB of RAM. JADX-GUI takes 2 min 18 s and 9.4 GB.**
-Measured on one machine with the scripts in [`bench/`](../bench); full results in [BENCHMARKS.md](../BENCHMARKS.md).
+**Decompiles a class up to 1.8x faster than rust_ASC, as typed Java, with less memory.**
+Measured on 10 popular apps (TikTok, Facebook, YouTube, WhatsApp, Telegram, Snapchat, Netflix,
+Firefox, Signal, Duolingo) with [`bench/asc.ps1`](../bench/asc.ps1); full results in
+[BENCHMARKS.md](../BENCHMARKS.md).
 
-## Key features
+## Faster
 
-1. **Typed Java, from a decompiler written from scratch in Rust.** No JVM, not a JADX fork. Uncertain methods get a `/* WARNING */` header; the rare failure falls back to Smali.
-2. **Xrefs with the Java line, in one call.** `apkscope refs app.apk string X-Goog-Api-Key --java` returns the method and the line in 53 ms from a cold start.
-3. **MCP server for AI agents with a warm session.** Median call 70 ms vs rust_ASC's 191 ms on TikTok; 39 calls in 3.94 s vs 6.54 s. Replies page and are size-capped.
-4. **Reverse-engineering tools:** `callers`, `callgraph`, field `access`, ready-to-run `frida` hooks, a security `scan`, sandboxed string `decrypt`, saved renames and comments, JADX/Enigma mapping import and export.
-5. **Native viewer:** security overview, grouped search, go to definition, exact call-site navigation, back/forward, Build & sign (v2 + v3) with undo. 0.5.2 fixed a stack overflow on control-flow-flattened classes and added keyboard and screen reader support.
+- **One-class decompile:** faster than rust_ASC on 8 of 10 apps, level on 2 (it lost on 2 before).
+  Import paths and nested classes are now worked out only for what the file prints, not for every
+  class in the DEX (25-35 ms saved on big apps).
+- **Smarter inflating:** each DEX's layout decides whether to inflate a prefix or the whole file at
+  once. d8 / R8 builds keep strings at the end, where a prefix and then a full pass cost up to 1.9x
+  one pass. YouTube one-class decompile went from 0.8x to 1.8x rust_ASC's speed.
+- **Streaming output:** `methods` and `classes` write each DEX file's lines as soon as it is done.
+- **Quicker start:** the viewer's libraries load only when the viewer opens (`--help` 75 ms -> 12 ms).
+- Big APKs (40k+ zip entries): only the entries a query needs are read from the directory.
+- Deobfuscation setup and method listing allocate less.
+
+## Fixed
+
+- Decompiling some Netflix classes crashed with a stack overflow (a lambda that refers to itself).
+- `refs --limit N` could return a different N hits from run to run; it now always returns the first
+  N in runtime order, also over MCP.
+- Manifests with blanked attribute names (Netflix) lost their `android:` names.
+- Apps with two resource packages (Netflix, TikTok) showed raw `@0x7f...` ids instead of names.
+- `verify` reported DSA-signed APKs as failed and errored on v1-only APKs; it now says what was and
+  wasn't checked.
+- Removing the last rename or comment left an empty `<apk>.apkscope.json` behind.
+
+## Agents (MCP)
+
+- A warm session unused for 10 minutes exits and frees its memory; the next call restarts it.
+
+## Benchmarks
+
+- New main set of 10 popular apps; the earlier 14 still run with `-Legacy`.
+- The script now alternates the two tools run by run and reads peak memory from the OS, and no
+  longer leaves garbage from one run's output to slow the next.
 
 ## Install
 
-Windows: download `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases).
-
-From source:
+Windows: download `apkscope.exe` below. From source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
 cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, servers)
 ```
 
-Add it to an agent:
-
-```bash
-claude mcp add apkscope -- /path/to/apkscope mcp
-```
-
 ## Known limits
 
+- rust_ASC is still quicker at string xrefs (0.78-0.97x) and a little quicker on most ~50 ms
+  listings; those are bound by inflating many DEX files on all cores at once.
+- Smali editing (change code, rebuild) is not in this release; `build` edits resources, files and
+  the manifest, and signs.
 - The viewer is tested on Windows. The CLI and MCP server pass CI on Linux and macOS.
-- On a cold one-shot query rust_ASC is still a few ms quicker on many apps, and 1.8x quicker at listing TikTok's 436k classes.
-- Some complex methods still use `goto` labels (marked with a `WARNING`).
-- Opening huge apps takes about 1 GB (TikTok); the first full-code search takes a minute.
-- Secret and URL scans are heuristics. String decryption only runs decryptors that compute from constants.
-- Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
