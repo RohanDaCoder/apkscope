@@ -66,93 +66,94 @@ and Duolingo, official publisher-signed builds (classes in [`bench/asc.ps1`](ben
 One query per process, the two tools taking turns run by run, median of 7 runs; peak memory read
 from the OS after each process exits. Measured 2026-11-05.
 
-**Summary of the 70 rows**, a row counting as a win at 10% or more either way:
+**Summary of the 70 rows**, from the raw times, a row counting as a win at 10% or more either way:
 
 | Query | apkscope faster | level | rust_ASC faster |
 |---|---:|---:|---:|
 | Decode manifest | **10** | 0 | 0 |
 | Decompile one class | **7** | 1 | 2 |
-| List strings `-f http` | 4 | 2 | 4 |
-| Method xref `openConnection` | 1 | 3 | 6 |
-| List classes | 0 | 5 | 5 |
+| List strings `-f http` | 3 | 4 | 3 |
+| Method xref `openConnection` | 1 | 7 | 2 |
+| List classes | 0 | 7 | 3 |
+| List methods | 0 | 5 | 5 |
 | String xref `https://` | 0 | 1 | 9 |
-| List methods | 0 | 2 | 8 |
 
-Most rust_ASC wins are 0.9x on ~50 ms queries (a few ms). The clear ones: listing methods on
-Snapchat (0.4x) and Signal (0.6x), and one-class decompiles on Firefox (0.7x) and TikTok (0.8x).
+apkscope uses less memory on most rows. rust_ASC's leads are small: string xrefs about 10%
+(5-30 ms), method listing 5-15%. The largest: one-class decompiles on TikTok (0.8x) and Firefox
+(0.9x), where apkscope's deobfuscation pass (rust_ASC has none) costs 20-30 ms.
 
 | APK | Query | rust_ASC | apkscope | Speed-up |
 |---|---|---:|---:|---:|
-| TikTok | String xref `https://` | 315 ms / 288 MB | 377 ms / 257 MB | 0.8x |
-| TikTok | Method xref `openConnection` | 213 ms / 242 MB | 161 ms / 156 MB | 1.3x |
-| TikTok | Decompile one class | 156 ms / 108 MB | 189 ms / 104 MB | 0.8x |
-| TikTok | List classes | 126 ms / 89 MB | 135 ms / 93 MB | 0.9x |
-| TikTok | List methods | 1,784 ms / 403 MB | 1,766 ms / 391 MB | 1.0x |
-| TikTok | List strings `-f http` | 217 ms / 274 MB | 128 ms / 83 MB | 1.7x |
-| TikTok | Decode manifest | 412 ms / 493 MB | 169 ms / 141 MB | 2.4x |
-| Facebook | String xref `https://` | 156 ms / 231 MB | 197 ms / 185 MB | 0.8x |
-| Facebook | Method xref `openConnection` | 151 ms / 217 MB | 144 ms / 119 MB | 1.0x |
-| Facebook | Decompile one class | 68 ms / 60 MB | 45 ms / 20 MB | 1.5x |
-| Facebook | List classes | 84 ms / 124 MB | 106 ms / 110 MB | 0.8x |
-| Facebook | List methods | 367 ms / 288 MB | 465 ms / 240 MB | 0.8x |
-| Facebook | List strings `-f http` | 139 ms / 211 MB | 94 ms / 99 MB | 1.5x |
-| Facebook | Decode manifest | 147 ms / 159 MB | 44 ms / 23 MB | 3.3x |
-| YouTube | String xref `https://` | 69 ms / 84 MB | 80 ms / 75 MB | 0.9x |
-| YouTube | Method xref `openConnection` | 73 ms / 84 MB | 83 ms / 71 MB | 0.9x |
-| YouTube | Decompile one class | 143 ms / 135 MB | 96 ms / 74 MB | 1.5x |
-| YouTube | List classes | 106 ms / 68 MB | 114 ms / 69 MB | 0.9x |
-| YouTube | List methods | 244 ms / 97 MB | 345 ms / 96 MB | 0.7x |
-| YouTube | List strings `-f http` | 105 ms / 68 MB | 121 ms / 68 MB | 0.9x |
-| YouTube | Decode manifest | 315 ms / 163 MB | 117 ms / 33 MB | 2.7x |
-| WhatsApp | String xref `https://` | 134 ms / 50 MB | 170 ms / 48 MB | 0.8x |
-| WhatsApp | Method xref `openConnection` | 131 ms / 52 MB | 137 ms / 46 MB | 1.0x |
-| WhatsApp | Decompile one class | 89 ms / 29 MB | 90 ms / 15 MB | 1.0x |
-| WhatsApp | List classes | 56 ms / 19 MB | 65 ms / 24 MB | 0.9x |
-| WhatsApp | List methods | 116 ms / 59 MB | 138 ms / 60 MB | 0.8x |
-| WhatsApp | List strings `-f http` | 93 ms / 43 MB | 65 ms / 25 MB | 1.4x |
-| WhatsApp | Decode manifest | 116 ms / 87 MB | 47 ms / 19 MB | 2.5x |
-| Telegram | String xref `https://` | 101 ms / 55 MB | 113 ms / 50 MB | 0.9x |
-| Telegram | Method xref `openConnection` | 91 ms / 55 MB | 99 ms / 48 MB | 0.9x |
-| Telegram | Decompile one class | 198 ms / 76 MB | 135 ms / 53 MB | 1.5x |
-| Telegram | List classes | 44 ms / 47 MB | 43 ms / 47 MB | 1.0x |
-| Telegram | List methods | 89 ms / 69 MB | 96 ms / 71 MB | 0.9x |
-| Telegram | List strings `-f http` | 50 ms / 46 MB | 54 ms / 46 MB | 0.9x |
-| Telegram | Decode manifest | 52 ms / 74 MB | 15 ms / 10 MB | 3.4x |
-| Snapchat | String xref `https://` | 44 ms / 66 MB | 51 ms / 60 MB | 0.9x |
-| Snapchat | Method xref `openConnection` | 46 ms / 64 MB | 46 ms / 57 MB | 1.0x |
-| Snapchat | Decompile one class | 78 ms / 92 MB | 56 ms / 58 MB | 1.4x |
-| Snapchat | List classes | 50 ms / 55 MB | 50 ms / 53 MB | 1.0x |
-| Snapchat | List methods | 81 ms / 85 MB | 186 ms / 85 MB | 0.4x |
-| Snapchat | List strings `-f http` | 47 ms / 54 MB | 45 ms / 52 MB | 1.0x |
-| Snapchat | Decode manifest | 43 ms / 66 MB | 21 ms / 21 MB | 2.0x |
-| Netflix | String xref `https://` | 44 ms / 58 MB | 47 ms / 52 MB | 0.9x |
-| Netflix | Method xref `openConnection` | 43 ms / 55 MB | 46 ms / 48 MB | 0.9x |
-| Netflix | Decompile one class | 92 ms / 104 MB | 73 ms / 51 MB | 1.3x |
-| Netflix | List classes | 37 ms / 50 MB | 39 ms / 46 MB | 0.9x |
-| Netflix | List methods | 115 ms / 90 MB | 117 ms / 91 MB | 1.0x |
-| Netflix | List strings `-f http` | 69 ms / 47 MB | 76 ms / 45 MB | 0.9x |
-| Netflix | Decode manifest | 99 ms / 69 MB | 49 ms / 22 MB | 2.0x |
-| Firefox | String xref `https://` | 138 ms / 60 MB | 139 ms / 55 MB | 1.0x |
+| TikTok | String xref `https://` | 187 ms / 293 MB | 216 ms / 264 MB | 0.9x |
+| TikTok | Method xref `openConnection` | 138 ms / 247 MB | 105 ms / 168 MB | 1.3x |
+| TikTok | Decompile one class | 112 ms / 121 MB | 133 ms / 102 MB | 0.8x |
+| TikTok | List classes | 77 ms / 86 MB | 90 ms / 95 MB | 0.8x |
+| TikTok | List methods | 796 ms / 438 MB | 861 ms / 394 MB | 0.9x |
+| TikTok | List strings `-f http` | 159 ms / 258 MB | 91 ms / 82 MB | 1.7x |
+| TikTok | Decode manifest | 288 ms / 493 MB | 116 ms / 141 MB | 2.5x |
+| Facebook | String xref `https://` | 101 ms / 233 MB | 115 ms / 191 MB | 0.9x |
+| Facebook | Method xref `openConnection` | 95 ms / 215 MB | 91 ms / 117 MB | 1.0x |
+| Facebook | Decompile one class | 47 ms / 64 MB | 31 ms / 20 MB | 1.5x |
+| Facebook | List classes | 56 ms / 123 MB | 61 ms / 105 MB | 0.9x |
+| Facebook | List methods | 229 ms / 293 MB | 243 ms / 240 MB | 0.9x |
+| Facebook | List strings `-f http` | 105 ms / 202 MB | 70 ms / 99 MB | 1.5x |
+| Facebook | Decode manifest | 99 ms / 159 MB | 34 ms / 23 MB | 2.9x |
+| YouTube | String xref `https://` | 55 ms / 83 MB | 63 ms / 75 MB | 0.9x |
+| YouTube | Method xref `openConnection` | 54 ms / 83 MB | 56 ms / 70 MB | 1.0x |
+| YouTube | Decompile one class | 101 ms / 126 MB | 59 ms / 74 MB | 1.7x |
+| YouTube | List classes | 45 ms / 68 MB | 57 ms / 69 MB | 0.8x |
+| YouTube | List methods | 83 ms / 96 MB | 97 ms / 97 MB | 0.9x |
+| YouTube | List strings `-f http` | 43 ms / 68 MB | 50 ms / 68 MB | 0.9x |
+| YouTube | Decode manifest | 101 ms / 163 MB | 32 ms / 33 MB | 3.1x |
+| WhatsApp | String xref `https://` | 53 ms / 50 MB | 63 ms / 48 MB | 0.8x |
+| WhatsApp | Method xref `openConnection` | 54 ms / 49 MB | 57 ms / 46 MB | 0.9x |
+| WhatsApp | Decompile one class | 30 ms / 26 MB | 31 ms / 15 MB | 1.0x |
+| WhatsApp | List classes | 24 ms / 19 MB | 29 ms / 24 MB | 0.8x |
+| WhatsApp | List methods | 72 ms / 54 MB | 83 ms / 59 MB | 0.9x |
+| WhatsApp | List strings `-f http` | 49 ms / 43 MB | 30 ms / 25 MB | 1.6x |
+| WhatsApp | Decode manifest | 64 ms / 87 MB | 27 ms / 19 MB | 2.4x |
+| Telegram | String xref `https://` | 60 ms / 55 MB | 71 ms / 50 MB | 0.9x |
+| Telegram | Method xref `openConnection` | 59 ms / 55 MB | 67 ms / 48 MB | 0.9x |
+| Telegram | Decompile one class | 127 ms / 85 MB | 84 ms / 52 MB | 1.5x |
+| Telegram | List classes | 48 ms / 47 MB | 49 ms / 47 MB | 1.0x |
+| Telegram | List methods | 79 ms / 68 MB | 90 ms / 71 MB | 0.9x |
+| Telegram | List strings `-f http` | 48 ms / 46 MB | 51 ms / 46 MB | 0.9x |
+| Telegram | Decode manifest | 53 ms / 74 MB | 16 ms / 10 MB | 3.2x |
+| Snapchat | String xref `https://` | 44 ms / 66 MB | 50 ms / 60 MB | 0.9x |
+| Snapchat | Method xref `openConnection` | 44 ms / 64 MB | 49 ms / 57 MB | 0.9x |
+| Snapchat | Decompile one class | 71 ms / 93 MB | 46 ms / 59 MB | 1.5x |
+| Snapchat | List classes | 41 ms / 55 MB | 41 ms / 53 MB | 1.0x |
+| Snapchat | List methods | 85 ms / 87 MB | 95 ms / 85 MB | 0.9x |
+| Snapchat | List strings `-f http` | 44 ms / 54 MB | 46 ms / 52 MB | 1.0x |
+| Snapchat | Decode manifest | 48 ms / 66 MB | 26 ms / 21 MB | 1.8x |
+| Netflix | String xref `https://` | 44 ms / 58 MB | 46 ms / 52 MB | 1.0x |
+| Netflix | Method xref `openConnection` | 43 ms / 55 MB | 43 ms / 48 MB | 1.0x |
+| Netflix | Decompile one class | 108 ms / 104 MB | 74 ms / 51 MB | 1.5x |
+| Netflix | List classes | 45 ms / 49 MB | 45 ms / 46 MB | 1.0x |
+| Netflix | List methods | 99 ms / 90 MB | 106 ms / 93 MB | 0.9x |
+| Netflix | List strings `-f http` | 37 ms / 47 MB | 41 ms / 45 MB | 0.9x |
+| Netflix | Decode manifest | 49 ms / 69 MB | 24 ms / 22 MB | 2.1x |
+| Firefox | String xref `https://` | 48 ms / 60 MB | 55 ms / 55 MB | 0.9x |
 | Firefox | Method xref `openConnection` | 52 ms / 59 MB | 55 ms / 50 MB | 0.9x |
-| Firefox | Decompile one class | 140 ms / 89 MB | 193 ms / 60 MB | 0.7x |
-| Firefox | List classes | 185 ms / 60 MB | 190 ms / 51 MB | 1.0x |
-| Firefox | List methods | 547 ms / 101 MB | 637 ms / 97 MB | 0.9x |
-| Firefox | List strings `-f http` | 146 ms / 49 MB | 127 ms / 47 MB | 1.2x |
-| Firefox | Decode manifest | 124 ms / 135 MB | 33 ms / 26 MB | 3.7x |
-| Signal | String xref `https://` | 63 ms / 84 MB | 68 ms / 77 MB | 0.9x |
-| Signal | Method xref `openConnection` | 60 ms / 80 MB | 64 ms / 71 MB | 0.9x |
-| Signal | Decompile one class | 160 ms / 132 MB | 121 ms / 74 MB | 1.3x |
-| Signal | List classes | 72 ms / 81 MB | 73 ms / 67 MB | 1.0x |
-| Signal | List methods | 290 ms / 160 MB | 454 ms / 152 MB | 0.6x |
-| Signal | List strings `-f http` | 53 ms / 70 MB | 56 ms / 65 MB | 0.9x |
-| Signal | Decode manifest | 45 ms / 70 MB | 31 ms / 37 MB | 1.5x |
-| Duolingo | String xref `https://` | 35 ms / 28 MB | 39 ms / 27 MB | 0.9x |
-| Duolingo | Method xref `openConnection` | 37 ms / 28 MB | 39 ms / 26 MB | 0.9x |
-| Duolingo | Decompile one class | 88 ms / 57 MB | 77 ms / 34 MB | 1.1x |
-| Duolingo | List classes | 34 ms / 26 MB | 34 ms / 25 MB | 1.0x |
-| Duolingo | List methods | 67 ms / 41 MB | 86 ms / 37 MB | 0.8x |
-| Duolingo | List strings `-f http` | 31 ms / 24 MB | 32 ms / 24 MB | 1.0x |
-| Duolingo | Decode manifest | 25 ms / 26 MB | 17 ms / 12 MB | 1.4x |
+| Firefox | Decompile one class | 110 ms / 85 MB | 126 ms / 60 MB | 0.9x |
+| Firefox | List classes | 62 ms / 58 MB | 60 ms / 51 MB | 1.0x |
+| Firefox | List methods | 117 ms / 92 MB | 126 ms / 92 MB | 0.9x |
+| Firefox | List strings `-f http` | 47 ms / 49 MB | 55 ms / 47 MB | 0.9x |
+| Firefox | Decode manifest | 88 ms / 135 MB | 27 ms / 26 MB | 3.2x |
+| Signal | String xref `https://` | 53 ms / 84 MB | 59 ms / 77 MB | 0.9x |
+| Signal | Method xref `openConnection` | 52 ms / 80 MB | 55 ms / 71 MB | 0.9x |
+| Signal | Decompile one class | 132 ms / 128 MB | 103 ms / 74 MB | 1.3x |
+| Signal | List classes | 63 ms / 79 MB | 60 ms / 68 MB | 1.1x |
+| Signal | List methods | 179 ms / 158 MB | 201 ms / 152 MB | 0.9x |
+| Signal | List strings `-f http` | 48 ms / 69 MB | 51 ms / 65 MB | 0.9x |
+| Signal | Decode manifest | 43 ms / 70 MB | 29 ms / 37 MB | 1.5x |
+| Duolingo | String xref `https://` | 31 ms / 28 MB | 35 ms / 27 MB | 0.9x |
+| Duolingo | Method xref `openConnection` | 33 ms / 28 MB | 35 ms / 26 MB | 0.9x |
+| Duolingo | Decompile one class | 81 ms / 57 MB | 70 ms / 34 MB | 1.2x |
+| Duolingo | List classes | 30 ms / 26 MB | 29 ms / 25 MB | 1.0x |
+| Duolingo | List methods | 54 ms / 40 MB | 58 ms / 39 MB | 0.9x |
+| Duolingo | List strings `-f http` | 30 ms / 24 MB | 32 ms / 24 MB | 1.0x |
+| Duolingo | Decode manifest | 21 ms / 26 MB | 15 ms / 12 MB | 1.4x |
 
 ## Cold queries, 14 apps (earlier set, 2026-10-30)
 
