@@ -260,8 +260,10 @@ pub fn scan_each<T: Send>(path: &str, stream: bool, keep: impl Fn(&str) -> bool,
     let mut sink = sink;
     let real = session::prepare(path)?;
     let mut file = std::fs::File::open(&real).map_err(|e| format!("{path}: {e}"))?;
-    let mut entries = central_dir(&mut file).map_err(|e| format!("{path}: {e}"))?;
-    entries.retain(|e| e.0.starts_with("classes") && e.0.ends_with(".dex") && !e.0.contains('/') && keep(&e.0));
+    // root-level classes*.dex only
+    let dex = |n: &[u8]| n.starts_with(b"classes") && n.ends_with(b".dex") && !n.contains(&b'/');
+    let mut entries = central_dir(&mut file, &dex).map_err(|e| format!("{path}: {e}"))?;
+    entries.retain(|e| keep(&e.0));
     entries.sort_by_key(|e| e.0.trim_start_matches("classes").trim_end_matches(".dex").parse::<u32>().unwrap_or(1));
     let prefix_pays = entries.len() > session::threads();
     let mut order: Vec<usize> = (0..entries.len()).collect();
@@ -303,7 +305,7 @@ pub fn scan_each<T: Send>(path: &str, stream: bool, keep: impl Fn(&str) -> bool,
 pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
     use std::io::{Seek, SeekFrom};
     let mut f = std::fs::File::open(session::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
-    let Some((_, local, csize, size, method)) = central_dir(&mut f)?.into_iter().find(|e| e.0 == want) else { return Ok(None) };
+    let Some((_, local, csize, size, method)) = central_dir(&mut f, &|n| n == want.as_bytes())?.into_iter().next() else { return Ok(None) };
     let err = |e: std::io::Error| format!("{want}: {e}");
     let mut h = [0u8; 30];
     f.seek(SeekFrom::Start(local)).map_err(err)?;
@@ -326,9 +328,10 @@ pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-/// (name, local header offset, compressed size, size, method) of every zip entry, from the
-/// central directory. Zip64 archives go through the zip crate instead.
-fn central_dir(f: &mut std::fs::File) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
+/// (name, local header offset, compressed size, size, method) of the zip entries whose raw name
+/// passes `keep`, from the central directory. Zip64 archives go through the zip crate instead.
+/// Big apps have 40k+ entries and a query wants a handful: names are only copied for those.
+fn central_dir(f: &mut std::fs::File, keep: &dyn Fn(&[u8]) -> bool) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
     use std::io::{Seek, SeekFrom};
     let len = f.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     let tail_len = len.min(65_557);
@@ -340,7 +343,7 @@ fn central_dir(f: &mut std::fs::File) -> Result<Vec<(String, u64, usize, usize, 
     let u32_at = |d: &[u8], o: usize| u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
     let (count, size, off) = (u16_at(&tail, eocd + 10), u32_at(&tail, eocd + 12), u32_at(&tail, eocd + 16));
     if count == u16::MAX || size == u32::MAX || off == u32::MAX {
-        return zip_crate_dir(f);
+        return zip_crate_dir(f, keep);
     }
     let mut cd = vec![0; size as usize];
     f.seek(SeekFrom::Start(off as u64)).map_err(|e| e.to_string())?;
@@ -349,22 +352,27 @@ fn central_dir(f: &mut std::fs::File) -> Result<Vec<(String, u64, usize, usize, 
     let mut p = 0;
     while p + 46 <= cd.len() && cd[p..p + 4] == [0x50, 0x4b, 1, 2] {
         let (n, x, c) = (u16_at(&cd, p + 28) as usize, u16_at(&cd, p + 30) as usize, u16_at(&cd, p + 32) as usize);
-        let name = String::from_utf8_lossy(cd.get(p + 46..p + 46 + n).ok_or("truncated central directory")?).into_owned();
+        let raw = cd.get(p + 46..p + 46 + n).ok_or("truncated central directory")?;
         let (cs, us, lo) = (u32_at(&cd, p + 20), u32_at(&cd, p + 24), u32_at(&cd, p + 42));
         if cs == u32::MAX || us == u32::MAX || lo == u32::MAX {
-            return zip_crate_dir(f);
+            return zip_crate_dir(f, keep);
         }
-        out.push((name, lo as u64, cs as usize, us as usize, u16_at(&cd, p + 10)));
+        if keep(raw) {
+            out.push((String::from_utf8_lossy(raw).into_owned(), lo as u64, cs as usize, us as usize, u16_at(&cd, p + 10)));
+        }
         p += 46 + n + x + c;
     }
     Ok(out)
 }
 
-fn zip_crate_dir(f: &mut std::fs::File) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
+fn zip_crate_dir(f: &mut std::fs::File, keep: &dyn Fn(&[u8]) -> bool) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
     let mut zip = zip::ZipArchive::new(f.try_clone().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for i in 0..zip.len() {
         let e = zip.by_index_raw(i).map_err(|e| e.to_string())?;
+        if !keep(e.name_raw()) {
+            continue;
+        }
         let method = match e.compression() {
             zip::CompressionMethod::Stored => 0,
             zip::CompressionMethod::Deflated => 8,
