@@ -328,6 +328,119 @@ pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+/// Native `lib/<abi>/*.so` entries of an APK: (name, uncompressed size), sorted by name.
+fn so_entries(path: &str) -> Result<Vec<(String, usize)>, String> {
+    let mut f = std::fs::File::open(session::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
+    let mut v: Vec<(String, usize)> = central_dir(&mut f, &|n| n.starts_with(b"lib/") && n.ends_with(b".so"))?
+        .into_iter().map(|(n, _, _, us, _)| (n, us)).collect();
+    v.sort();
+    Ok(v)
+}
+
+/// A route-like token: `/seg/seg...`, 2-6 word segments, no base64 / binary noise. The AOT
+/// snapshot embeds whole xlsx/pdf blobs (base64, one long token) and PDF dictionaries, so the
+/// per-segment limits (short, <=1 digit, no 3-uppercase run) keep real API paths and drop those.
+fn is_route(tok: &str) -> bool {
+    let Some(rest) = tok.strip_prefix('/') else { return false };
+    if tok.len() > 48 { return false }
+    let segs: Vec<&str> = rest.split('/').collect();
+    if !(2..=6).contains(&segs.len()) || !segs.iter().any(|s| s.len() >= 4) { return false }
+    // reject date/time format tokens like /MM/yyyy, /dd/aaaa (every segment one repeated char)
+    if segs.iter().all(|s| s.bytes().all(|c| c == s.as_bytes()[0])) { return false }
+    segs.iter().all(|s| {
+        let b = s.as_bytes();
+        // a dot means an asset/file (.svg, .png, .dart), a cert, or a host fragment (.sy) - not a route
+        !s.is_empty() && s.len() <= 20 && !s.contains('.')
+            && (b[0].is_ascii_alphabetic() || b[0] == b'{')
+            && s.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-{}:".contains(&c))
+            && s.bytes().filter(u8::is_ascii_digit).count() <= 1
+            && !s.as_bytes().windows(3).any(|w| w.iter().all(|c| c.is_ascii_uppercase()))
+    })
+}
+
+/// Flutter inspector: Dart snapshot version/features, native libs, and the recovered Dart
+/// library tree (package:/dart: URIs) from libapp.so. `dump` emits every printable string;
+/// `api` extracts the API surface (hosts, route paths, model field names). Dart AOT is native
+/// code, so this is recon, not a source decompiler, and HTTP methods/bodies are not recoverable.
+pub fn flutter(path: &str, abi: Option<&str>, dump: bool, api: bool) -> Result<Vec<String>, String> {
+    let libs = so_entries(path)?;
+    let app = libs.iter().map(|(n, _)| n.as_str()).filter(|n| n.ends_with("/libapp.so"))
+        .find(|n| abi.is_some_and(|a| n.contains(a)))
+        .or_else(|| libs.iter().map(|(n, _)| n.as_str()).find(|n| n.contains("/arm64-v8a/") && n.ends_with("/libapp.so")))
+        .or_else(|| libs.iter().map(|(n, _)| n.as_str()).find(|n| n.ends_with("/libapp.so")))
+        .map(str::to_string);
+    let is_flutter = app.is_some() || libs.iter().any(|(n, _)| n.ends_with("/libflutter.so"));
+
+    let mut out = vec![format!("Flutter app: {}", if is_flutter { "yes" } else { "no (no libflutter.so / libapp.so)" })];
+    let list_libs = |out: &mut Vec<String>| {
+        out.push(String::new());
+        out.push("native libraries:".into());
+        out.extend(libs.iter().map(|(n, s)| format!("  {n}  ({} KB)", s / 1024)));
+    };
+    let Some(app) = app else { list_libs(&mut out); return Ok(out); };
+
+    let bytes = read_entry(path, &app)?.ok_or_else(|| format!("{app}: entry vanished"))?;
+    // Dart snapshot header: magic f5 f5 dc dc, then (past the length/kind fields) a 32-hex
+    // version hash immediately followed by the printable features string (arch, mode).
+    if let Some(m) = bytes.windows(4).position(|w| w == [0xf5, 0xf5, 0xdc, 0xdc]) {
+        if let Some(h) = (m + 4..(m + 64).min(bytes.len().saturating_sub(32)))
+            .find(|&i| bytes[i..i + 32].iter().all(u8::is_ascii_hexdigit)) {
+            out.push(format!("dart snapshot: {}", String::from_utf8_lossy(&bytes[h..h + 32])));
+            let tail = &bytes[h + 32..(h + 32 + 256).min(bytes.len())];
+            if let Some(feat) = crate::elf::strings(tail, 8).into_iter().next() {
+                out.push(format!("  features: {feat}"));
+            }
+        }
+    }
+    out.push(format!("app snapshot: {app}  ({} MB)", bytes.len() / (1 << 20)));
+    list_libs(&mut out);
+
+    let strs = crate::elf::strings(&bytes, 6);
+    if dump {
+        out.push(String::new());
+        out.extend(strs);
+        return Ok(out);
+    }
+    if api {
+        let host_re = regex::Regex::new(r#"https?://[^\s"'<>\\]+"#).unwrap();
+        let field_re = regex::Regex::new(r#"[,{(\s"]([A-Za-z][A-Za-z0-9_]{1,30}): "#).unwrap();
+        let route_re = regex::Regex::new(r"(?:/[A-Za-z0-9_{}:.-]+){2,6}").unwrap();
+        let noise = ["schemas.", "flutter.dev", "github.com", "pub.dev", "w3.org", "mozilla.org",
+                     "placehold.co", "dartlang.org", "gstatic.com", "googleapis.com", "sentry.io"];
+        let mut hosts = std::collections::BTreeSet::new();
+        let mut routes = std::collections::BTreeSet::new();
+        let mut fields = std::collections::BTreeSet::new();
+        for s in &strs {
+            for m in host_re.find_iter(s) {
+                let u = m.as_str().trim_end_matches(['.', ',', ')', ']', '"']);
+                if !noise.iter().any(|n| u.contains(n)) { hosts.insert(u.to_string()); }
+            }
+            for c in field_re.captures_iter(s) { fields.insert(c[1].to_string()); }
+            for m in route_re.find_iter(s) {
+                if is_route(m.as_str()) { routes.insert(m.as_str().to_string()); }
+            }
+        }
+        let section = |out: &mut Vec<String>, title: &str, set: &std::collections::BTreeSet<String>| {
+            out.push(String::new());
+            out.push(format!("{title} ({}):", set.len()));
+            out.extend(set.iter().map(|x| format!("  {x}")));
+        };
+        section(&mut out, "hosts", &hosts);
+        section(&mut out, "routes", &routes);
+        section(&mut out, "model fields", &fields);
+        return Ok(out);
+    }
+    let mut uris: Vec<&str> = strs.iter().filter_map(|s| s.split_whitespace().next())
+        .filter(|t| (t.starts_with("package:") && t.ends_with(".dart")) || (t.starts_with("dart:") && !t.contains('/')))
+        .collect();
+    uris.sort_unstable();
+    uris.dedup();
+    out.push(String::new());
+    out.push(format!("dart libraries ({}):", uris.len()));
+    out.extend(uris.iter().map(|u| format!("  {u}")));
+    Ok(out)
+}
+
 /// (name, local header offset, compressed size, size, method) of the zip entries whose raw name
 /// passes `keep`, from the central directory. Zip64 archives go through the zip crate instead.
 /// Big apps have 40k+ entries and a query wants a handful: names are only copied for those.
@@ -920,6 +1033,24 @@ fn method_named(java: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flutter_routes() {
+        for ok in ["/GreenEnergy/Pay", "/contactauth/verify-otp", "/contact/conversation/active/get", "/update/v2"] {
+            assert!(is_route(ok), "should accept {ok}");
+        }
+        for bad in [
+            "/svgs/logo.svg", "/ca/ca.crt",                 // assets / files (dot)
+            "/api.shamcash.sy/v4/api",                       // host fragment (dot)
+            "/MM/yyyy", "/dd/aaaa",                           // date formats (repeated chars)
+            "/H/pF",                                          // too-short segments
+            "/EutsZ9kdvN/iZ8N4Zze77ayD16CEpux",              // base64 blob (digits in segment)
+            "/Adobe-Identity-UCS/ProcSet",                    // PDF dict (3-uppercase run)
+            "no-leading-slash", "/single",                    // not 2+ segments
+        ] {
+            assert!(!is_route(bad), "should reject {bad}");
+        }
+    }
 
     #[test]
     fn case_insensitive_contains() {

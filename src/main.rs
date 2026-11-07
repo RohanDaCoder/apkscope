@@ -59,6 +59,9 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
                                                  scripts it decrypted (--wait S, --scripts-for S, --attach, --device ID)
   apkscope il2cpp    <apk|xapk>... [--uses TEXT] [--method NAME]   Unity games: C# methods + addresses,
                                                  which method uses a string, strings/calls in a method
+  apkscope flutter   <apk> [--abi NAME] [--api] [--strings]   Flutter apps: Dart snapshot version, native libs,
+                                                 recovered Dart library tree; --api lists hosts/routes/model
+                                                 fields; --strings dumps libapp.so strings
   apkscope scan      <apk>                       security quick-scan
   apkscope decrypt   <apk>                       run string decryptors on their constant arguments
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
@@ -756,6 +759,14 @@ fn main() -> ExitCode {
             emit_list(&files)
         })(),
         [cmd, ..] if cmd == "il2cpp" => il2cpp_cmd(rest.clone()),
+        [cmd, ..] if cmd == "flutter" => (|| {
+            let mut a = rest.clone();
+            let abi = opt(&mut a, &["--abi"])?;
+            let dump = flag(&mut a, "--strings");
+            let api = flag(&mut a, "--api");
+            let [apk] = a.as_slice() else { return Err("usage: apkscope flutter <apk> [--abi NAME] [--api] [--strings]".into()) };
+            emit_list(&quick::flutter(apk, abi.as_deref(), dump, api)?)
+        })(),
         [cmd, apk] if cmd == "scan" => run_big_stack(|| load(apk, deobf).and_then(|st| emit(&re::scan(&st)))),
         [cmd, apk] if cmd == "decrypt" => load(apk, false).and_then(|st| {
             emit_list(&re::decrypt_all(&st.dexes).into_iter().map(|(at, f, p)| format!("{at}  {f}  =>  {}", session::json_str(&p))).collect::<Vec<_>>())
