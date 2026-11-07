@@ -41,7 +41,6 @@ impl Events {
 pub struct Live {
     child: Child,
     path: PathBuf,
-    pub target: String,
     /// key -> (Java hook body, or raw script when `raw`)
     hooks: BTreeMap<String, (String, bool)>,
     pub events: Arc<Mutex<Events>>,
@@ -77,7 +76,7 @@ impl Live {
         });
         cmd.arg(target).args(["-q", "-t", "inf", "-l"]).arg(&path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let child = cmd.spawn().map_err(|e| format!("cannot run frida ({e}); install it with: pip install frida-tools"))?;
-        let mut live = Live { child, path, target: target.into(), hooks: BTreeMap::new(), events: Default::default() };
+        let mut live = Live { child, path, hooks: BTreeMap::new(), events: Default::default() };
         for (pipe, is_err) in [(live.child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), false), (live.child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), true)] {
             let Some(pipe) = pipe else { continue };
             let ev = live.events.clone();

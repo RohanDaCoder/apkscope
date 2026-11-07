@@ -317,6 +317,8 @@ other 2. Uncertain methods get a
 | `list_classes` / `list_methods` / `list_strings` | with prefix, filter and app-only |
 | `get_resource` / `export_project` / `verify_signature` | resources, Gradle export, signatures |
 | `frida_start` / `frida_hook` / `frida_events` / `frida_script` | live Frida: hook by name, read calls, args, returns |
+| `callers` / `call_graph` / `field_access` | who calls a method, the callee tree, where a field is read / written |
+| `decrypt_strings` / `scan` | recovered string-decryptor plaintext; one-shot URL + secret + HTTP scan |
 
 Replies page with `limit` / `offset` and cap at 60k characters; `app_only` hides androidx, Play
 services and ad SDKs. 39 agent calls on TikTok: **3.94 s** vs rust_ASC's **6.54 s**.

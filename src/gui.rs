@@ -1815,6 +1815,7 @@ impl App {
             ui.add_space(6.0);
             ui.label(RichText::new("apkscope").size(30.0).strong().color(p.text));
             ui.label(RichText::new("Android decompiler and API recon").size(15.0).color(p.dim));
+            ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).size(12.0).color(p.dim.gamma_multiply(0.8)));
             ui.add_space(24.0);
             let stroke = if dragging { Stroke::new(2.5_f32, p.accent) } else { Stroke::new(1.5_f32, p.dim.gamma_multiply(0.6)) };
             let fill = if dragging { p.accent.gamma_multiply(0.12) } else { p.panel };

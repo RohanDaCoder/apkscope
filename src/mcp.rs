@@ -83,6 +83,16 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
         {"name": "diff_apks", "description": "What changed between two versions of an app: added / removed classes, methods of classes both have, permissions, and optionally strings (new URLs, keys). Lines start with + or -.",
          "inputSchema": {"type": "object", "required": ["apk_path", "new_apk_path"], "properties": {"apk_path": apk, "new_apk_path": {"type": "string", "description": "the newer APK"}, "strings": {"type": "boolean", "description": "also diff string-pool values"}, "limit": {"type": "integer"}, "offset": {"type": "integer"}}}},
+        {"name": "callers", "description": "Methods that call a given method (or any method of a class): who invokes it, one level up.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string", "description": "Java class name or descriptor"}, "method": {"type": "string", "description": "Method name; omit for all methods of the class"}}}},
+        {"name": "call_graph", "description": "Callers of a method plus the tree of methods it calls, down to a given depth.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string"}, "method": {"type": "string"}, "depth": {"type": "integer", "description": "Callee-tree depth (default 3)"}}}},
+        {"name": "field_access", "description": "Where a field is read or written: each site marked read / write, with the accessing method.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "class", "field"], "properties": {"apk_path": apk, "class": {"type": "string"}, "field": {"type": "string", "description": "Field name"}}}},
+        {"name": "decrypt_strings", "description": "Run string-decryptor methods on their constant arguments and report the recovered plaintext (the same values shown inline as /* = \"...\" */ in decompiled code).",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
+        {"name": "scan", "description": "One-shot security scan as a single report: endpoints / URLs, embedded secrets (API keys, tokens) and HTTP-client calls across code, resources and native libraries.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
         {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Takes effect at once, no restart.",
@@ -327,6 +337,23 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             paging(&mut args);
             run_cli(&args)
         }
+        "callers" => {
+            args.extend(["callers".into(), apk, s(a, "class").ok_or("class is required")?]);
+            if let Some(m) = s(a, "method") { args.push(m) }
+            run_cli(&args)
+        }
+        "call_graph" => {
+            args.extend(["callgraph".into(), apk, s(a, "class").ok_or("class is required")?]);
+            if let Some(m) = s(a, "method") { args.push(m) }
+            push_opt(&mut args, "--depth", n(a, "depth").map(|d| d.to_string()));
+            run_cli(&args)
+        }
+        "field_access" => {
+            args.extend(["access".into(), apk, s(a, "class").ok_or("class is required")?, s(a, "field").ok_or("field is required")?]);
+            run_cli(&args)
+        }
+        "decrypt_strings" => run_cli(&["decrypt".into(), apk]),
+        "scan" => run_cli(&["scan".into(), apk]),
         _ => Err(format!("unknown tool {name}")),
     }
 }
