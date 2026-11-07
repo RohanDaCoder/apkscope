@@ -141,7 +141,7 @@ fn size(f: Fmt) -> usize {
 }
 
 /// Code units of an instruction in format `f`.
-fn width(f: Fmt) -> usize {
+pub fn width(f: Fmt) -> usize {
     match f {
         F10x | F12x | F11n | F11x | F10t => 1,
         F20t | F22x | F21t | F21s | F21h | F21c | F23x | F22b | F22t | F22s | F22c => 2,

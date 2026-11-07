@@ -100,7 +100,7 @@ fn type_list(d: &[u8], off: usize) -> R<Vec<u32>> {
     (0..u32_at(d, off)? as usize).map(|i| u16_at(d, off + 4 + i * 2).map(u32::from)).collect()
 }
 
-fn parse_tries(d: &[u8], code_off: usize, units: usize) -> R<Vec<Try>> {
+pub fn parse_tries(d: &[u8], code_off: usize, units: usize) -> R<Vec<Try>> {
     let n = u16_at(d, code_off + 6)? as usize;
     // try_items are 4-byte aligned after insns
     let tries = code_off + 16 + units * 2 + (units % 2) * 2;

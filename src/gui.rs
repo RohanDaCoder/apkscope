@@ -7,7 +7,7 @@ use std::sync::{Arc, mpsc};
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, RichText, Stroke, TextFormat, text::LayoutJob};
 
-use crate::{apksign, arsc, cache, rebuild};
+use crate::{apksign, arsc, cache, rebuild, smali};
 
 mod live_ui;
 use crate::re::{Line, Link};
@@ -673,6 +673,8 @@ pub struct App {
     files: Option<Vec<(String, u64, u64)>>,
     /// pending changes to the APK: name -> new content, or None to delete
     edits: rebuild::Edits,
+    /// edited Smali class sources, assembled into DEX at build time
+    smali_edits: Vec<String>,
     /// "Add file" dialog: (path inside the APK, content)
     adding: Option<(String, Vec<u8>)>,
     build: Option<BuildDlg>,
@@ -758,6 +760,7 @@ impl App {
             natives: None,
             files: None,
             edits: rebuild::Edits::new(),
+            smali_edits: vec![],
             adding: None,
             build: None,
             strings_dlg: None,
@@ -1699,7 +1702,9 @@ impl App {
         let Some(st) = self.st else { return };
         let (mut open, mut go) = (true, false);
         egui::Window::new("Build & sign").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label(format!("{} change(s). The new APK is zipaligned and signed with APK Signature Scheme v2 + v3.", self.edits.len()));
+            let smali_n = self.smali_edits.len();
+            let smali_note = if smali_n > 0 { format!(" (incl. {smali_n} edited smali class(es), assembled on build)") } else { String::new() };
+            ui.label(format!("{} change(s){smali_note}. The new APK is zipaligned and signed with APK Signature Scheme v2 + v3.", self.edits.len() + smali_n));
             ui.add_space(6.0);
             ui.radio_value(&mut dlg.own_key, false, "apkscope's key (created on first use)");
             ui.radio_value(&mut dlg.own_key, true, "My own key");
@@ -1732,13 +1737,17 @@ impl App {
             let stem = std::path::Path::new(&st.path).file_stem().map_or("app".into(), |s| s.to_string_lossy().into_owned());
             if let Some(out) = rfd::FileDialog::new().set_file_name(format!("{stem}-apkscope.apk")).add_filter("APK", &["apk"]).save_file() {
                 let own = dlg.own_key.then(|| (dlg.key.clone(), dlg.cert.clone()));
-                let (tx, edits, file) = (self.tx.clone(), self.edits.clone(), st.file.clone());
+                let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file.clone());
+                let smali_srcs = self.smali_edits.clone();
                 spawn(&self.tx, "save", move || {
                     let r = (|| {
                         let key = match own {
                             Some((k, c)) => apksign::load(std::path::Path::new(&k), std::path::Path::new(&c))?,
                             None => apksign::default_key()?.0,
                         };
+                        if !smali_srcs.is_empty() {
+                            smali::inject(&file, &smali_srcs, &mut edits)?;
+                        }
                         let (apk, cd) = rebuild::rebuild(&file, &edits)?;
                         let signed = apksign::sign(apk, cd, &key)?;
                         std::fs::write(&out, &signed).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -2316,6 +2325,7 @@ impl eframe::App for App {
             let mut usages = None;
             let mut toast_msg = None;
             let mut change: Option<(String, Option<Vec<u8>>)> = None;
+            let mut stage_smali: Option<String> = None;
             let mut act: Option<Act> = None;
             let st_now = self.st;
             let Some(doc) = self.docs.get_mut(self.active) else { return };
@@ -2330,6 +2340,34 @@ impl eframe::App for App {
                     }
                     if ui.button("Usages").on_hover_text("Find where this class is used").clicked() {
                         usages = Some(c.rsplit('.').next().unwrap_or(c).to_string());
+                    }
+                }
+                // edit a class as round-trippable Smali and stage it for the next Build & sign
+                if matches!(&doc.open, Open::Class(_)) {
+                    ui.separator();
+                    match &doc.editing {
+                        None => {
+                            if ui.button("Edit smali").on_hover_text("Edit as round-trippable Smali; Apply stages it for the next Build & sign").clicked() {
+                                let cls = doc.open.name().to_string();
+                                match st_now.map(|st| smali::export_class(&st.file, &cls)) {
+                                    Some(Ok(t)) => {
+                                        doc.editing = Some(t);
+                                        doc.view = View::Smali;
+                                    }
+                                    Some(Err(e)) => toast_msg = Some(format!("Can't load smali: {e}")),
+                                    None => {}
+                                }
+                            }
+                        }
+                        Some(buf) => {
+                            if ui.button(RichText::new("Apply smali").strong()).on_hover_text("Stage this class for the next Build & sign (assembled when you build)").clicked() {
+                                stage_smali = Some(buf.clone());
+                                doc.editing = None;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                doc.editing = None;
+                            }
+                        }
                     }
                 }
                 let mut extract = None;
@@ -2521,6 +2559,10 @@ impl eframe::App for App {
                 self.edits.insert(name.clone(), new);
                 let what = if name == "AndroidManifest.xml" && what == "replaced" { "updated" } else { what };
                 self.toast(format!("{name} will be {what} when you build (Files tab)"));
+            }
+            if let Some(src) = stage_smali {
+                self.smali_edits.push(src);
+                self.toast(format!("Smali staged ({} class(es)) — use Build & sign to write it", self.smali_edits.len()));
             }
         });
         self.export_window(ctx);

@@ -24,6 +24,7 @@ mod rebuild;
 mod res;
 mod session;
 mod sign;
+mod smali;
 
 use std::fmt::Write as _;
 use std::{fs::File, io::{BufWriter, Read, Write}, process::ExitCode};
@@ -67,8 +68,9 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
   apkscope comment   <apk> <Class|member> <text>
   apkscope map <apk> export <out.jobf|out.mapping>  |  map <apk> import <file>   JADX / Enigma names
-Editing: apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
-                  [--string name[@config]=value]... [--key k.pk8 --cert c.crt]   (zipalign + v2/v3 sign)
+Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
+         apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
+                  [--string name[@config]=value]... [--smali edited.smali]... [--key k.pk8 --cert c.crt]
          apkscope verify <apk>
 Agents:  apkscope mcp                      MCP server over stdio (see README)
 Other:   apkscope disasm <apk> [Class]     apkscope gui [apk]
@@ -587,6 +589,7 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
     let mut edits = rebuild::Edits::new();
     let (mut key, mut cert, mut manifest) = (None, None, None);
     let mut strings = std::collections::BTreeMap::new();
+    let mut smali_srcs: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -603,6 +606,10 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
                 let (k, text) = v.split_once('=').ok_or("--string needs name=value")?;
                 let (name, config) = k.split_once('@').unwrap_or((k, ""));
                 strings.insert((config.to_string(), name.to_string()), text.to_string());
+            }
+            "--smali" => {
+                let f = it.next().ok_or("--smali needs a .smali file")?;
+                smali_srcs.push(std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?);
             }
             "--manifest" => manifest = Some(it.next().ok_or("--manifest needs an XML file")?.clone()),
             "--key" => key = Some(it.next().ok_or("--key needs a file")?.clone()),
@@ -634,6 +641,10 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
     if !strings.is_empty() {
         let table = export::open(&src)?.read("resources.arsc").ok_or("no resources.arsc")?;
         edits.insert("resources.arsc".into(), Some(arsc::set_strings(&table, &strings)?));
+    }
+    if !smali_srcs.is_empty() {
+        let changed = smali::inject(&src, &smali_srcs, &mut edits)?;
+        eprintln!("assembled {} smali class(es) into {}", smali_srcs.len(), changed.join(", "));
     }
     let (apk, cd) = rebuild::rebuild(&src, &edits)?;
     let signed = apksign::sign(apk, cd, &key)?;
@@ -807,6 +818,7 @@ fn main() -> ExitCode {
         [cmd, path] if cmd == "worker" => run_big_stack(|| mcp::worker(path, deobf)),
         [cmd, path] if cmd == "disasm" => disasm(path, None),
         [cmd, path, class] if cmd == "disasm" => disasm(path, Some(class)),
+        [cmd, path, class] if cmd == "smali" => smali::export_class(path, class).and_then(|t| emit(&t)),
         [cmd, path, out] if cmd == "export" => export_cmd(path, out, deobf),
         [cmd, ..] if cmd == "search" => run_big_stack(|| search_cmd(&rest, deobf)),
         [cmd, ..] if cmd == "build" => build_cmd(&rest),

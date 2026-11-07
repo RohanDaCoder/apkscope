@@ -25,6 +25,7 @@ Windows 11). The scripts are in [`bench/`](bench), so you can re-run them. [Back
 | Manifest security overview | no | no | **yes** |
 | JNI exports mapped to Java `native` methods | no | no | **yes** |
 | Edit, rebuild, zipalign, sign (v2 + v3), verify | no | no | **yes** |
+| Patch code: edit a class as Smali, reassemble into the DEX | view only, no reassembly | no | **yes** |
 | JSON output with paging and size caps for agents | JSON export only | no | **yes** |
 
 ## TikTok, all three tools

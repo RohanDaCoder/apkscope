@@ -257,6 +257,10 @@ apkscope frida     app.apk com.example.Api login            # ready-to-run hook 
 apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
 apkscope export    app.apk out/                             # Gradle project for Android Studio
 apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
+
+# patch the code
+apkscope smali     app.apk com.example.Api > Api.smali          # one class as editable Smali
+apkscope build     app.apk out.apk --smali Api.smali            # assemble it back in, rebuild, sign
 ```
 
 `--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.apks`, `.xapk`, `.dex`.
@@ -333,7 +337,7 @@ under half a second of tool time.
 Double-click `apkscope.exe` and drop in an APK. Security overview first, then your app's code apart
 from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
 callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
-**Edit → Build & sign** with undo.
+**Edit smali** on a class to patch its code, then **Build & sign** with undo.
 
 ## Honest limits
 
