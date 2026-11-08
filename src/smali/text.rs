@@ -11,13 +11,56 @@ type R<T> = Result<T, String>;
 
 // ---------- printing ----------
 
-const CLASS_FLAGS: &[(u32, &str)] = &[(0x1, "public"), (0x2, "private"), (0x4, "protected"), (0x8, "static"), (0x10, "final"), (0x200, "interface"), (0x400, "abstract"), (0x1000, "synthetic"), (0x2000, "annotation"), (0x4000, "enum")];
-const FIELD_FLAGS: &[(u32, &str)] = &[(0x1, "public"), (0x2, "private"), (0x4, "protected"), (0x8, "static"), (0x10, "final"), (0x40, "volatile"), (0x80, "transient"), (0x1000, "synthetic"), (0x4000, "enum")];
-const METHOD_FLAGS: &[(u32, &str)] = &[
-    (0x1, "public"), (0x2, "private"), (0x4, "protected"), (0x8, "static"), (0x10, "final"), (0x20, "synchronized"), (0x40, "bridge"), (0x80, "varargs"), (0x100, "native"),
-    (0x400, "abstract"), (0x800, "strictfp"), (0x1000, "synthetic"), (0x10000, "constructor"), (0x20000, "declared-synchronized"),
+const CLASS_FLAGS: &[(u32, &str)] = &[
+    (0x1, "public"),
+    (0x2, "private"),
+    (0x4, "protected"),
+    (0x8, "static"),
+    (0x10, "final"),
+    (0x200, "interface"),
+    (0x400, "abstract"),
+    (0x1000, "synthetic"),
+    (0x2000, "annotation"),
+    (0x4000, "enum"),
 ];
-const HANDLE_KINDS: [&str; 9] = ["static-put", "static-get", "instance-put", "instance-get", "invoke-static", "invoke-instance", "invoke-constructor", "invoke-direct", "invoke-interface"];
+const FIELD_FLAGS: &[(u32, &str)] = &[
+    (0x1, "public"),
+    (0x2, "private"),
+    (0x4, "protected"),
+    (0x8, "static"),
+    (0x10, "final"),
+    (0x40, "volatile"),
+    (0x80, "transient"),
+    (0x1000, "synthetic"),
+    (0x4000, "enum"),
+];
+const METHOD_FLAGS: &[(u32, &str)] = &[
+    (0x1, "public"),
+    (0x2, "private"),
+    (0x4, "protected"),
+    (0x8, "static"),
+    (0x10, "final"),
+    (0x20, "synchronized"),
+    (0x40, "bridge"),
+    (0x80, "varargs"),
+    (0x100, "native"),
+    (0x400, "abstract"),
+    (0x800, "strictfp"),
+    (0x1000, "synthetic"),
+    (0x10000, "constructor"),
+    (0x20000, "declared-synchronized"),
+];
+const HANDLE_KINDS: [&str; 9] = [
+    "static-put",
+    "static-get",
+    "instance-put",
+    "instance-get",
+    "invoke-static",
+    "invoke-instance",
+    "invoke-constructor",
+    "invoke-direct",
+    "invoke-interface",
+];
 const VIS: [&str; 3] = ["build", "runtime", "system"];
 
 fn flags(out: &mut String, a: u32, table: &[(u32, &str)]) {
@@ -65,7 +108,14 @@ fn quote(b: &[u8]) -> String {
                 o.push(c);
             }
             _ => match char::from_u32(u as u32) {
-                Some(c) if !c.is_control() && !c.is_whitespace() && !(0xd800..=0xdfff).contains(&u) && u != 0xfeff => o.push(c),
+                Some(c)
+                    if !c.is_control()
+                        && !c.is_whitespace()
+                        && !(0xd800..=0xdfff).contains(&u)
+                        && u != 0xfeff =>
+                {
+                    o.push(c)
+                }
                 _ => {
                     let _ = write!(o, "\\u{u:04x}");
                 }
@@ -77,7 +127,11 @@ fn quote(b: &[u8]) -> String {
 }
 
 fn hex(v: i64) -> String {
-    if v < 0 { format!("-{:#x}", v.unsigned_abs()) } else { format!("{v:#x}") }
+    if v < 0 {
+        format!("-{:#x}", v.unsigned_abs())
+    } else {
+        format!("{v:#x}")
+    }
 }
 
 fn proto(p: &Proto) -> String {
@@ -94,7 +148,9 @@ fn method_ref(m: &MethodRef) -> String {
     format!("{}->{}{}", name(&m.class), name(&m.name), proto(&m.proto))
 }
 fn handle(h: &Handle) -> String {
-    let k = HANDLE_KINDS.get(h.kind as usize).map_or_else(|| format!("{:#x}", h.kind), |s| s.to_string());
+    let k = HANDLE_KINDS
+        .get(h.kind as usize)
+        .map_or_else(|| format!("{:#x}", h.kind), |s| s.to_string());
     match &h.member {
         Member::Field(f) => format!("{k}@{}", field_ref(f)),
         Member::Method(m) => format!("{k}@{}", method_ref(m)),
@@ -104,11 +160,23 @@ fn handle(h: &Handle) -> String {
 fn float(bits: u32) -> String {
     let f = f32::from_bits(bits);
     // shortcut: NaN payloads other than the canonical one print as NaNf
-    if f.is_nan() { "NaNf".into() } else if f.is_infinite() { format!("{}Infinityf", if f < 0.0 { "-" } else { "" }) } else { format!("{f:?}f") }
+    if f.is_nan() {
+        "NaNf".into()
+    } else if f.is_infinite() {
+        format!("{}Infinityf", if f < 0.0 { "-" } else { "" })
+    } else {
+        format!("{f:?}f")
+    }
 }
 fn double(bits: u64) -> String {
     let f = f64::from_bits(bits);
-    if f.is_nan() { "NaN".into() } else if f.is_infinite() { format!("{}Infinity", if f < 0.0 { "-" } else { "" }) } else { format!("{f:?}") }
+    if f.is_nan() {
+        "NaN".into()
+    } else if f.is_infinite() {
+        format!("{}Infinity", if f < 0.0 { "-" } else { "" })
+    } else {
+        format!("{f:?}")
+    }
 }
 
 fn value(o: &mut String, v: &Value, ind: usize) {
@@ -119,7 +187,16 @@ fn value(o: &mut String, v: &Value, ind: usize) {
         Value::Char(x) => {
             let q = quote(&mutf8(&[*x]));
             let inner = &q[1..q.len() - 1];
-            *o += &format!("'{}'", if inner == "\\'" { "\\'" } else if inner == "\"" { "\"" } else { inner });
+            *o += &format!(
+                "'{}'",
+                if inner == "\\'" {
+                    "\\'"
+                } else if inner == "\"" {
+                    "\""
+                } else {
+                    inner
+                }
+            );
         }
         Value::Int(x) => *o += &hex(*x as i64),
         Value::Long(x) => *o += &format!("{}L", hex(*x)),
@@ -167,7 +244,9 @@ fn elems(o: &mut String, a: &Anno, ind: usize) {
 fn annos(o: &mut String, list: &[Anno], ind: usize) {
     let pad = "    ".repeat(ind);
     for a in list {
-        let vis = VIS.get(a.vis as usize).map_or_else(|| a.vis.to_string(), |s| s.to_string());
+        let vis = VIS
+            .get(a.vis as usize)
+            .map_or_else(|| a.vis.to_string(), |s| s.to_string());
         *o += &format!("{pad}.annotation {vis} {}\n", name(&a.ty));
         elems(o, a, ind + 1);
         *o += &format!("{pad}.end annotation\n");
@@ -225,15 +304,28 @@ fn method(o: &mut String, m: &Method) {
     *o += &format!("{}{}\n", name(&m.name), proto(&m.proto));
     let ins = m.ins();
     let base = m.code.as_ref().map_or(0, |c| c.registers - ins);
-    let reg = |r: u16| if r >= base { format!("p{}", r - base) } else { format!("v{r}") };
+    let reg = |r: u16| {
+        if r >= base {
+            format!("p{}", r - base)
+        } else {
+            format!("v{r}")
+        }
+    };
     if let Some(c) = &m.code {
         *o += &format!("    .locals {}\n", c.registers - ins);
     }
     // parameters: debug names and annotations, by p-register
     let mut p = u16::from(m.access & ACC_STATIC == 0);
     for (i, t) in m.proto.params.iter().enumerate() {
-        let nm = m.code.as_ref().and_then(|c| c.param_names.get(i).cloned().flatten());
-        let an = m.param_annos.as_ref().and_then(|v| v.get(i)).filter(|v| !v.is_empty());
+        let nm = m
+            .code
+            .as_ref()
+            .and_then(|c| c.param_names.get(i).cloned().flatten());
+        let an = m
+            .param_annos
+            .as_ref()
+            .and_then(|v| v.get(i))
+            .filter(|v| !v.is_empty());
         if nm.is_some() || an.is_some() {
             *o += &format!("    .param p{p}");
             if let Some(n) = &nm {
@@ -324,14 +416,28 @@ fn method(o: &mut String, m: &Method) {
                     let mut b = [0u8; 8];
                     b[..ch.len()].copy_from_slice(ch);
                     let v = i64::from_le_bytes(b);
-                    let v = if w < 8 { (v << (64 - 8 * w)) >> (64 - 8 * w) } else { v };
+                    let v = if w < 8 {
+                        (v << (64 - 8 * w)) >> (64 - 8 * w)
+                    } else {
+                        v
+                    };
                     *o += &format!("        {}{suffix}\n", hex(v));
                 }
                 *o += "    .end array-data\n";
             }
             Item::Line(l) => *o += &format!("    .line {l}\n"),
-            Item::Local { reg: r, name: n, ty, sig } => {
-                *o += &format!("    .local {}, {}:{}", reg(*r), n.as_ref().map_or("null".into(), |x| quote(x)), ty.as_ref().map_or("null".into(), |x| name(x).into_owned()));
+            Item::Local {
+                reg: r,
+                name: n,
+                ty,
+                sig,
+            } => {
+                *o += &format!(
+                    "    .local {}, {}:{}",
+                    reg(*r),
+                    n.as_ref().map_or("null".into(), |x| quote(x)),
+                    ty.as_ref().map_or("null".into(), |x| name(x).into_owned())
+                );
                 if let Some(s) = sig {
                     *o += &format!(", {}", quote(s));
                 }
@@ -341,7 +447,12 @@ fn method(o: &mut String, m: &Method) {
             Item::Restart(r) => *o += &format!("    .restart local {}\n", reg(*r)),
             Item::Prologue => *o += "    .prologue\n",
             Item::Epilogue => *o += "    .epilogue\n",
-            Item::SetFile(f) => *o += &format!("    .source {}\n", f.as_ref().map_or("null".into(), |x| quote(x))),
+            Item::SetFile(f) => {
+                *o += &format!(
+                    "    .source {}\n",
+                    f.as_ref().map_or("null".into(), |x| quote(x))
+                )
+            }
         }
     }
     if !c.tries.is_empty() {
@@ -350,15 +461,35 @@ fn method(o: &mut String, m: &Method) {
     for t in &c.tries {
         for (ty, h) in &t.handlers {
             match ty {
-                Some(ty) => *o += &format!("    .catch {} {{{} .. {}}} {}\n", name(ty), lbl("try_start", t.start), lbl("try_end", t.end), lbl("catch", *h)),
-                None => *o += &format!("    .catchall {{{} .. {}}} {}\n", lbl("try_start", t.start), lbl("try_end", t.end), lbl("catchall", *h)),
+                Some(ty) => {
+                    *o += &format!(
+                        "    .catch {} {{{} .. {}}} {}\n",
+                        name(ty),
+                        lbl("try_start", t.start),
+                        lbl("try_end", t.end),
+                        lbl("catch", *h)
+                    )
+                }
+                None => {
+                    *o += &format!(
+                        "    .catchall {{{} .. {}}} {}\n",
+                        lbl("try_start", t.start),
+                        lbl("try_end", t.end),
+                        lbl("catchall", *h)
+                    )
+                }
             }
         }
     }
     *o += ".end method\n";
 }
 
-fn print_ins(o: &mut String, i: &Ins, reg: &dyn Fn(u16) -> String, lbl: &dyn Fn(&str, u32) -> String) {
+fn print_ins(
+    o: &mut String,
+    i: &Ins,
+    reg: &dyn Fn(u16) -> String,
+    lbl: &dyn Fn(&str, u32) -> String,
+) {
     let (mn, f, _) = bytecode::info(i.op).unwrap();
     o.push_str(mn);
     let r = |k: usize| reg(i.regs[k]);
@@ -407,15 +538,28 @@ fn print_ins(o: &mut String, i: &Ins, reg: &dyn Fn(u16) -> String, lbl: &dyn Fn(
     };
     let list = || -> String {
         if f == Fmt::F3rc || f == Fmt::F4rcc {
-            if i.n == 0 { "{}".into() } else { format!("{{{} .. {}}}", reg(i.regs[0]), reg(i.regs[0] + i.n as u16 - 1)) }
+            if i.n == 0 {
+                "{}".into()
+            } else {
+                format!(
+                    "{{{} .. {}}}",
+                    reg(i.regs[0]),
+                    reg(i.regs[0] + i.n as u16 - 1)
+                )
+            }
         } else {
-            format!("{{{}}}", (0..i.n as usize).map(r).collect::<Vec<_>>().join(", "))
+            format!(
+                "{{{}}}",
+                (0..i.n as usize).map(r).collect::<Vec<_>>().join(", ")
+            )
         }
     };
     let s = match f {
         Fmt::F10x => String::new(),
         Fmt::F12x | Fmt::F22x | Fmt::F32x => format!(" {}, {}", r(0), r(1)),
-        Fmt::F11n | Fmt::F21s | Fmt::F31i | Fmt::F21h | Fmt::F51l => format!(" {}, {}", r(0), lit(i.lit)),
+        Fmt::F11n | Fmt::F21s | Fmt::F31i | Fmt::F21h | Fmt::F51l => {
+            format!(" {}, {}", r(0), lit(i.lit))
+        }
         Fmt::F11x => format!(" {}", r(0)),
         Fmt::F10t | Fmt::F20t | Fmt::F30t => format!(" {}", target()),
         Fmt::F21t | Fmt::F31t => format!(" {}, {}", r(0), target()),
@@ -425,7 +569,12 @@ fn print_ins(o: &mut String, i: &Ins, reg: &dyn Fn(u16) -> String, lbl: &dyn Fn(
         Fmt::F22t => format!(" {}, {}, {}", r(0), r(1), target()),
         Fmt::F22c => format!(" {}, {}, {}", r(0), r(1), rf()),
         Fmt::F35c | Fmt::F3rc => format!(" {}, {}", list(), rf()),
-        Fmt::F45cc | Fmt::F4rcc => format!(" {}, {}, {}", list(), rf(), i.proto.as_ref().map_or(String::new(), proto)),
+        Fmt::F45cc | Fmt::F4rcc => format!(
+            " {}, {}, {}",
+            list(),
+            rf(),
+            i.proto.as_ref().map_or(String::new(), proto)
+        ),
     };
     o.push_str(&s);
 }
@@ -434,7 +583,11 @@ fn print_ins(o: &mut String, i: &Ins, reg: &dyn Fn(u16) -> String, lbl: &dyn Fn(
 
 fn opcodes() -> &'static HashMap<&'static str, u8> {
     static T: std::sync::OnceLock<HashMap<&'static str, u8>> = std::sync::OnceLock::new();
-    T.get_or_init(|| (0..=255u8).filter_map(|op| bytecode::info(op).map(|(n, _, _)| (n, op))).collect())
+    T.get_or_init(|| {
+        (0..=255u8)
+            .filter_map(|op| bytecode::info(op).map(|(n, _, _)| (n, op)))
+            .collect()
+    })
 }
 
 struct P<'a> {
@@ -443,12 +596,20 @@ struct P<'a> {
 }
 
 fn text_bytes(t: &str) -> S {
-    if t.is_ascii() { s(t.as_bytes()) } else { Arc::from(mutf8(&t.encode_utf16().collect::<Vec<_>>())) }
+    if t.is_ascii() {
+        s(t.as_bytes())
+    } else {
+        Arc::from(mutf8(&t.encode_utf16().collect::<Vec<_>>()))
+    }
 }
 
 impl<'a> P<'a> {
     fn err<T>(&self, m: impl std::fmt::Display) -> R<T> {
-        let line = self.s[..self.i.min(self.s.len())].iter().filter(|&&b| b == b'\n').count() + 1;
+        let line = self.s[..self.i.min(self.s.len())]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1;
         Err(format!("line {line}: {m}"))
     }
     fn peek(&self) -> Option<u8> {
@@ -491,7 +652,11 @@ impl<'a> P<'a> {
         }
     }
     fn expect(&mut self, t: &str) -> R<()> {
-        if self.eat(t) { Ok(()) } else { self.err(format!("expected `{t}`")) }
+        if self.eat(t) {
+            Ok(())
+        } else {
+            self.err(format!("expected `{t}`"))
+        }
     }
     fn eol(&mut self) -> R<()> {
         self.ws();
@@ -501,8 +666,13 @@ impl<'a> P<'a> {
         }
     }
     fn rest_of_line(&self) -> String {
-        let e = self.s[self.i..].iter().position(|&b| b == b'\n').map_or(self.s.len(), |p| self.i + p);
-        String::from_utf8_lossy(&self.s[self.i..e]).trim().to_string()
+        let e = self.s[self.i..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(self.s.len(), |p| self.i + p);
+        String::from_utf8_lossy(&self.s[self.i..e])
+            .trim()
+            .to_string()
     }
     /// a run of non-space characters, stopping at `,` `}` `)` and comments
     fn word(&mut self) -> &'a str {
@@ -524,7 +694,10 @@ impl<'a> P<'a> {
         }
         match self.peek() {
             Some(b'L') => {
-                let e = self.s[self.i..].iter().position(|&b| b == b';' || b == b'\n').map(|p| self.i + p);
+                let e = self.s[self.i..]
+                    .iter()
+                    .position(|&b| b == b';' || b == b'\n')
+                    .map(|p| self.i + p);
                 match e {
                     Some(e) if self.s[e] == b';' => self.i = e + 1,
                     _ => return self.err("class descriptor without `;`"),
@@ -533,7 +706,9 @@ impl<'a> P<'a> {
             Some(b'V' | b'Z' | b'B' | b'S' | b'C' | b'I' | b'J' | b'F' | b'D') => self.i += 1,
             _ => return self.err(format!("expected a type, found `{}`", self.rest_of_line())),
         }
-        Ok(text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| e.to_string())?))
+        Ok(text_bytes(
+            std::str::from_utf8(&self.s[st..self.i]).map_err(|e| e.to_string())?,
+        ))
     }
     fn proto(&mut self) -> R<Proto> {
         self.expect("(")?;
@@ -541,7 +716,10 @@ impl<'a> P<'a> {
         while !self.eat(")") {
             params.push(self.ty()?);
         }
-        Ok(Proto { params, ret: self.ty()? })
+        Ok(Proto {
+            params,
+            ret: self.ty()?,
+        })
     }
     fn member(&mut self) -> R<Member> {
         let class = self.ty()?;
@@ -555,10 +733,18 @@ impl<'a> P<'a> {
         }
         let nm = text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| e.to_string())?);
         if self.peek() == Some(b'(') {
-            Ok(Member::Method(MethodRef { class, name: nm, proto: self.proto()? }))
+            Ok(Member::Method(MethodRef {
+                class,
+                name: nm,
+                proto: self.proto()?,
+            }))
         } else {
             self.expect(":")?;
-            Ok(Member::Field(FieldRef { class, name: nm, ty: self.ty()? }))
+            Ok(Member::Field(FieldRef {
+                class,
+                name: nm,
+                ty: self.ty()?,
+            }))
         }
     }
     fn field_ref(&mut self) -> R<FieldRef> {
@@ -583,7 +769,9 @@ impl<'a> P<'a> {
         self.i += 1;
         let mut units: Vec<u16> = vec![];
         loop {
-            let Some(c) = self.peek() else { return self.err("unterminated string") };
+            let Some(c) = self.peek() else {
+                return self.err("unterminated string");
+            };
             if c == q {
                 self.i += 1;
                 break;
@@ -603,8 +791,14 @@ impl<'a> P<'a> {
                     b'f' => units.push(12),
                     b'0' => units.push(0),
                     b'u' => {
-                        let h = self.s.get(self.i..self.i + 4).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u16::from_str_radix(h, 16).ok());
-                        let Some(h) = h else { return self.err("bad \\u escape") };
+                        let h = self
+                            .s
+                            .get(self.i..self.i + 4)
+                            .and_then(|h| std::str::from_utf8(h).ok())
+                            .and_then(|h| u16::from_str_radix(h, 16).ok());
+                        let Some(h) = h else {
+                            return self.err("bad \\u escape");
+                        };
                         units.push(h);
                         self.i += 4;
                     }
@@ -619,7 +813,8 @@ impl<'a> P<'a> {
                 0xe0..=0xef => 3,
                 _ => 4,
             };
-            let ch = std::str::from_utf8(self.s.get(self.i..self.i + len).unwrap_or(&[])).map_err(|e| e.to_string())?;
+            let ch = std::str::from_utf8(self.s.get(self.i..self.i + len).unwrap_or(&[]))
+                .map_err(|e| e.to_string())?;
             let mut buf = [0u16; 2];
             units.extend_from_slice(ch.chars().next().unwrap().encode_utf16(&mut buf));
             self.i += len;
@@ -647,7 +842,10 @@ impl<'a> P<'a> {
     }
     fn number(&mut self) -> R<i64> {
         let w = self.word();
-        parse_int(w).ok_or_else(|| self.err::<()>(format!("expected a number, found `{w}`")).unwrap_err())
+        parse_int(w).ok_or_else(|| {
+            self.err::<()>(format!("expected a number, found `{w}`"))
+                .unwrap_err()
+        })
     }
     fn label(&mut self, labels: &mut Labels) -> R<u32> {
         self.ws();
@@ -720,7 +918,10 @@ impl<'a> P<'a> {
         if let Some((k, _)) = w.split_once('@') {
             if let Some(kind) = HANDLE_KINDS.iter().position(|x| *x == k) {
                 self.i = save + k.len() + 1;
-                return Ok(Value::MethodHandle(Box::new(Handle { kind: kind as u16, member: self.member()? })));
+                return Ok(Value::MethodHandle(Box::new(Handle {
+                    kind: kind as u16,
+                    member: self.member()?,
+                })));
             }
         }
         Ok(match w {
@@ -747,10 +948,14 @@ impl<'a> P<'a> {
             }
             self.ws();
             let st = self.i;
-            while self.peek().is_some_and(|c| !c.is_ascii_whitespace() && c != b'=') {
+            while self
+                .peek()
+                .is_some_and(|c| !c.is_ascii_whitespace() && c != b'=')
+            {
                 self.i += 1;
             }
-            let n = text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| e.to_string())?);
+            let n =
+                text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| e.to_string())?);
             self.expect("=")?;
             out.push((n, self.value(depth + 1)?));
         }
@@ -780,7 +985,10 @@ impl<'a> P<'a> {
             }
             if let Some(&(bit, _)) = table.iter().find(|x| x.1 == w) {
                 a |= bit;
-            } else if let Some(v) = w.strip_prefix("0x").and_then(|h| u32::from_str_radix(h, 16).ok()) {
+            } else if let Some(v) = w
+                .strip_prefix("0x")
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+            {
                 a |= v;
             } else {
                 self.i = save;
@@ -810,8 +1018,16 @@ fn parse_int(w: &str) -> Option<i64> {
         Some(r) => (true, r),
         None => (false, w.strip_prefix('+').unwrap_or(w)),
     };
-    let v = if let Some(h) = w.strip_prefix("0x").or_else(|| w.strip_prefix("0X")) { u64::from_str_radix(h, 16).ok()? } else { w.parse::<u64>().ok()? };
-    Some(if neg { (v as i64).wrapping_neg() } else { v as i64 })
+    let v = if let Some(h) = w.strip_prefix("0x").or_else(|| w.strip_prefix("0X")) {
+        u64::from_str_radix(h, 16).ok()?
+    } else {
+        w.parse::<u64>().ok()?
+    };
+    Some(if neg {
+        (v as i64).wrapping_neg()
+    } else {
+        v as i64
+    })
 }
 
 fn literal(w: &str) -> Option<Value> {
@@ -819,7 +1035,11 @@ fn literal(w: &str) -> Option<Value> {
     if !is_hex {
         let fl = |x: &str| -> Option<f64> {
             match x.trim_start_matches('-') {
-                "Infinity" => Some(if x.starts_with('-') { f64::NEG_INFINITY } else { f64::INFINITY }),
+                "Infinity" => Some(if x.starts_with('-') {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }),
                 "NaN" => Some(f64::NAN),
                 _ => x.parse::<f64>().ok(),
             }
@@ -827,7 +1047,11 @@ fn literal(w: &str) -> Option<Value> {
         if let Some(x) = w.strip_suffix(['f', 'F']) {
             if let Some(v) = fl(x) {
                 // shortest-repr float text parses back to the same bits
-                return Some(Value::Float(x.parse::<f32>().map(f32::to_bits).unwrap_or((v as f32).to_bits())));
+                return Some(Value::Float(
+                    x.parse::<f32>()
+                        .map(f32::to_bits)
+                        .unwrap_or((v as f32).to_bits()),
+                ));
             }
         }
         if w.contains(['.', 'e', 'E']) || w.trim_start_matches('-') == "Infinity" || w == "NaN" {
@@ -846,13 +1070,25 @@ fn literal(w: &str) -> Option<Value> {
 
 /// Parse one class from Smali.
 pub fn parse(text: &str) -> R<Class> {
-    let mut p = P { s: text.as_bytes(), i: 0 };
+    let mut p = P {
+        s: text.as_bytes(),
+        i: 0,
+    };
     p.wsn();
     p.expect(".class")?;
     let access = p.flags(CLASS_FLAGS)?;
     let name = p.ty()?;
     p.eol()?;
-    let mut c = Class { name, access, sup: None, ifaces: vec![], source: None, annos: vec![], fields: vec![], methods: vec![] };
+    let mut c = Class {
+        name,
+        access,
+        sup: None,
+        ifaces: vec![],
+        source: None,
+        annos: vec![],
+        fields: vec![],
+        methods: vec![],
+    };
     loop {
         p.wsn();
         if p.peek().is_none() {
@@ -881,13 +1117,18 @@ pub fn parse(text: &str) -> R<Class> {
 fn spec_name(p: &mut P, stop: &[u8]) -> R<S> {
     p.ws();
     let st = p.i;
-    while p.peek().is_some_and(|c| !stop.contains(&c) && !c.is_ascii_whitespace()) {
+    while p
+        .peek()
+        .is_some_and(|c| !stop.contains(&c) && !c.is_ascii_whitespace())
+    {
         p.i += 1;
     }
     if p.i == st {
         return p.err("missing name");
     }
-    Ok(text_bytes(std::str::from_utf8(&p.s[st..p.i]).map_err(|e| e.to_string())?))
+    Ok(text_bytes(
+        std::str::from_utf8(&p.s[st..p.i]).map_err(|e| e.to_string())?,
+    ))
 }
 
 fn field(p: &mut P) -> R<Field> {
@@ -897,7 +1138,13 @@ fn field(p: &mut P) -> R<Field> {
     let ty = p.ty()?;
     let init = if p.eat("=") { Some(p.value(0)?) } else { None };
     p.eol()?;
-    let mut f = Field { name, ty, access, init, annos: vec![] };
+    let mut f = Field {
+        name,
+        ty,
+        access,
+        init,
+        annos: vec![],
+    };
     // optional annotations closed by .end field
     let save = p.i;
     p.wsn();
@@ -921,7 +1168,14 @@ fn method_p(p: &mut P) -> R<Method> {
     let name = spec_name(p, b"(")?;
     let proto = p.proto()?;
     p.eol()?;
-    let mut m = Method { name, proto, access, code: None, annos: vec![], param_annos: None };
+    let mut m = Method {
+        name,
+        proto,
+        access,
+        code: None,
+        annos: vec![],
+        param_annos: None,
+    };
     let ins = m.ins();
     let nparams = m.proto.params.len();
     // p-number -> parameter index
@@ -936,7 +1190,11 @@ fn method_p(p: &mut P) -> R<Method> {
     let mut tries: Vec<Try> = vec![];
     let mut names: Vec<Option<S>> = vec![None; nparams];
     let mut pannos: Vec<Vec<Anno>> = vec![vec![]; nparams];
-    let mut labels = Labels { ids: HashMap::new(), defined: HashMap::new(), first_use: HashMap::new() };
+    let mut labels = Labels {
+        ids: HashMap::new(),
+        defined: HashMap::new(),
+        first_use: HashMap::new(),
+    };
     let mut any_code = false;
     let base = |r: Option<u16>| r.map(|r| r - ins);
     loop {
@@ -964,7 +1222,9 @@ fn method_p(p: &mut P) -> R<Method> {
                     let n = p.number()? as u16;
                     let r = if d == ".locals" { n + ins } else { n };
                     if r < ins {
-                        return p.err(format!(".registers {r} is less than the {ins} the parameters need"));
+                        return p.err(format!(
+                            ".registers {r} is less than the {ins} the parameters need"
+                        ));
                     }
                     registers = Some(r);
                 }
@@ -981,10 +1241,17 @@ fn method_p(p: &mut P) -> R<Method> {
                             }
                         }
                     };
-                    let Some(&i) = pidx.get(&pn) else { return p.err(format!("p{pn} is not a parameter")) };
+                    let Some(&i) = pidx.get(&pn) else {
+                        return p.err(format!("p{pn} is not a parameter"));
+                    };
                     if p.eat(",") {
                         p.ws();
-                        names[i] = if p.at("null") { p.word(); None } else { Some(p.string()?) };
+                        names[i] = if p.at("null") {
+                            p.word();
+                            None
+                        } else {
+                            Some(p.string()?)
+                        };
                     }
                     p.eol()?;
                     let save = p.i;
@@ -1024,15 +1291,30 @@ fn method_p(p: &mut P) -> R<Method> {
                     let (mut nm, mut ty, mut sig) = (None, None, None);
                     if p.eat(",") {
                         p.ws();
-                        nm = if p.at("null") { p.i += 4; None } else { Some(p.string()?) };
+                        nm = if p.at("null") {
+                            p.i += 4;
+                            None
+                        } else {
+                            Some(p.string()?)
+                        };
                         p.expect(":")?;
                         p.ws();
-                        ty = if p.at("null") { p.i += 4; None } else { Some(p.ty()?) };
+                        ty = if p.at("null") {
+                            p.i += 4;
+                            None
+                        } else {
+                            Some(p.ty()?)
+                        };
                         if p.eat(",") {
                             sig = Some(p.string()?);
                         }
                     }
-                    items.push(Item::Local { reg, name: nm, ty, sig });
+                    items.push(Item::Local {
+                        reg,
+                        name: nm,
+                        ty,
+                        sig,
+                    });
                 }
                 ".end" => {
                     p.expect("local")?;
@@ -1046,7 +1328,12 @@ fn method_p(p: &mut P) -> R<Method> {
                 ".epilogue" => items.push(Item::Epilogue),
                 ".source" => {
                     p.ws();
-                    items.push(Item::SetFile(if p.at("null") { p.word(); None } else { Some(p.string()?) }));
+                    items.push(Item::SetFile(if p.at("null") {
+                        p.word();
+                        None
+                    } else {
+                        Some(p.string()?)
+                    }));
                 }
                 ".catch" | ".catchall" => {
                     let ty = if d == ".catch" { Some(p.ty()?) } else { None };
@@ -1058,7 +1345,11 @@ fn method_p(p: &mut P) -> R<Method> {
                     let h = p.label(&mut labels)?;
                     match tries.last_mut() {
                         Some(t) if t.start == a && t.end == b => t.handlers.push((ty, h)),
-                        _ => tries.push(Try { start: a, end: b, handlers: vec![(ty, h)] }),
+                        _ => tries.push(Try {
+                            start: a,
+                            end: b,
+                            handlers: vec![(ty, h)],
+                        }),
                     }
                 }
                 ".packed-switch" => {
@@ -1116,11 +1407,21 @@ fn method_p(p: &mut P) -> R<Method> {
             continue;
         }
         let mn = p.word();
-        let Some(&op) = opcodes().get(mn) else { return p.err(format!("unknown instruction `{mn}`")) };
+        let Some(&op) = opcodes().get(mn) else {
+            return p.err(format!("unknown instruction `{mn}`"));
+        };
         any_code = true;
         let b = base(registers);
         let (_, f, kind) = bytecode::info(op).unwrap();
-        let mut i = Ins { op, regs: [0; 5], n: 0, lit: 0, target: 0, r: Ref::None, proto: None };
+        let mut i = Ins {
+            op,
+            regs: [0; 5],
+            n: 0,
+            lit: 0,
+            target: 0,
+            r: Ref::None,
+            proto: None,
+        };
         let regs = |p: &mut P, k: usize, i: &mut Ins| -> R<()> {
             for j in 0..k {
                 if j > 0 {
@@ -1164,7 +1465,10 @@ fn method_p(p: &mut P) -> R<Method> {
                     p.expect("@")?;
                     p.ws();
                     let h = if matches!(p.peek(), Some(b'L' | b'[')) {
-                        Value::MethodHandle(Box::new(Handle { kind: 4, member: Member::Method(p.method_ref()?) }))
+                        Value::MethodHandle(Box::new(Handle {
+                            kind: 4,
+                            member: Member::Method(p.method_ref()?),
+                        }))
                     } else {
                         p.value(0)?
                     };
@@ -1208,7 +1512,9 @@ fn method_p(p: &mut P) -> R<Method> {
                     return p.err("register range runs backwards");
                 }
                 i.regs[0] = a;
-                i.n = (z - a + 1).try_into().map_err(|_| "register range too long".to_string())?;
+                i.n = (z - a + 1)
+                    .try_into()
+                    .map_err(|_| "register range too long".to_string())?;
             } else {
                 let mut n = 0;
                 loop {
@@ -1271,17 +1577,41 @@ fn method_p(p: &mut P) -> R<Method> {
     }
     for (name, id) in &labels.ids {
         if !labels.defined.contains_key(id) {
-            return Err(format!("{}: label {name} is used but never defined", String::from_utf8_lossy(&m.name)));
+            return Err(format!(
+                "{}: label {name} is used but never defined",
+                String::from_utf8_lossy(&m.name)
+            ));
         }
     }
     if pannos.iter().any(|v| !v.is_empty()) {
         m.param_annos = Some(pannos);
     }
     if registers.is_some() || any_code {
-        let debug = names.iter().any(|n| n.is_some()) || items.iter().any(|it| matches!(it, Item::Line(_) | Item::Local { .. } | Item::EndLocal(_) | Item::Restart(_) | Item::Prologue | Item::Epilogue | Item::SetFile(_)));
-        m.code = Some(Code { registers: registers.unwrap_or(ins), items, tries, debug, param_names: if debug { names } else { vec![None; nparams] } });
+        let debug = names.iter().any(|n| n.is_some())
+            || items.iter().any(|it| {
+                matches!(
+                    it,
+                    Item::Line(_)
+                        | Item::Local { .. }
+                        | Item::EndLocal(_)
+                        | Item::Restart(_)
+                        | Item::Prologue
+                        | Item::Epilogue
+                        | Item::SetFile(_)
+                )
+            });
+        m.code = Some(Code {
+            registers: registers.unwrap_or(ins),
+            items,
+            tries,
+            debug,
+            param_names: if debug { names } else { vec![None; nparams] },
+        });
     } else if names.iter().any(|n| n.is_some()) {
-        return Err(format!("{}: .param names need a method body", String::from_utf8_lossy(&m.name)));
+        return Err(format!(
+            "{}: .param names need a method body",
+            String::from_utf8_lossy(&m.name)
+        ));
     }
     Ok(m)
 }

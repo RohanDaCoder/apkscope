@@ -24,7 +24,12 @@ fn der(d: &[u8]) -> Option<(u8, &[u8], &[u8])> {
         if n == 0 || n > 4 {
             return None;
         }
-        (d.get(2..2 + n)?.iter().fold(0usize, |a, &b| (a << 8) | b as usize), 2 + n)
+        (
+            d.get(2..2 + n)?
+                .iter()
+                .fold(0usize, |a, &b| (a << 8) | b as usize),
+            2 + n,
+        )
     };
     Some((tag, d.get(head..head + len)?, d.get(head + len..)?))
 }
@@ -53,7 +58,11 @@ fn oid(c: &[u8]) -> String {
             v = 0;
         }
     }
-    parts.iter().map(u64::to_string).collect::<Vec<_>>().join(".")
+    parts
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// `CN=..., O=..., C=...` of an X.501 Name.
@@ -62,7 +71,9 @@ fn name(c: &[u8]) -> String {
     for (_, set) in children(c) {
         for (_, atv) in children(set) {
             let kids = children(atv);
-            let (Some((_, o)), Some((_, v))) = (kids.first(), kids.get(1)) else { continue };
+            let (Some((_, o)), Some((_, v))) = (kids.first(), kids.get(1)) else {
+                continue;
+            };
             let key = match oid(o).as_str() {
                 "2.5.4.3" => "CN",
                 "2.5.4.6" => "C",
@@ -88,7 +99,12 @@ fn time(tag: u8, c: &[u8]) -> String {
     match tag {
         0x17 if s.len() >= 6 => {
             let yy: u32 = s[..2].parse().unwrap_or(0);
-            format!("{}-{}-{}", if yy < 50 { 2000 + yy } else { 1900 + yy }, &s[2..4], &s[4..6])
+            format!(
+                "{}-{}-{}",
+                if yy < 50 { 2000 + yy } else { 1900 + yy },
+                &s[2..4],
+                &s[4..6]
+            )
         }
         0x18 if s.len() >= 8 => format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..8]),
         _ => s.into_owned(),
@@ -106,7 +122,10 @@ pub struct Cert {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(":")
+    b.iter()
+        .map(|x| format!("{x:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 pub fn parse_cert(der_bytes: &[u8]) -> Option<Cert> {
@@ -120,7 +139,9 @@ pub fn parse_cert(der_bytes: &[u8]) -> Option<Cert> {
     let issuer = name(f.get(2)?.1);
     let validity = children(f.get(3)?.1);
     let subject = name(f.get(4)?.1);
-    let alg = children(f.get(5)?.1).first().and_then(|(_, a)| children(a).first().map(|o| oid(o.1)));
+    let alg = children(f.get(5)?.1)
+        .first()
+        .and_then(|(_, a)| children(a).first().map(|o| oid(o.1)));
     let key = match alg.as_deref() {
         Some("1.2.840.113549.1.1.1") => "RSA",
         Some("1.2.840.10045.2.1") => "EC",
@@ -148,7 +169,9 @@ pub fn pkcs7_cert(d: &[u8]) -> Option<Vec<u8>> {
     let (tag, body, _) = der(certs)?;
     // re-encode the first certificate with its header
     let total = certs.len() - der(certs).map_or(0, |x| x.2.len());
-    (tag == 0x30).then(|| certs[..total].to_vec()).filter(|_| !body.is_empty())
+    (tag == 0x30)
+        .then(|| certs[..total].to_vec())
+        .filter(|_| !body.is_empty())
 }
 
 // ---------- APK signing block ----------
@@ -160,7 +183,9 @@ pub fn central_dir(f: &mut File) -> Option<u64> {
     f.seek(SeekFrom::Start(len - tail)).ok()?;
     let mut buf = vec![0; tail as usize];
     f.read_exact(&mut buf).ok()?;
-    let at = (0..buf.len().saturating_sub(21)).rev().find(|&i| buf[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])?;
+    let at = (0..buf.len().saturating_sub(21))
+        .rev()
+        .find(|&i| buf[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])?;
     Some(u32::from_le_bytes(buf[at + 16..at + 20].try_into().ok()?) as u64)
 }
 
@@ -223,19 +248,55 @@ pub fn scheme_cert(value: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Readable summary for the overview.
-pub fn summary(apk_path: &str, entries: &[String], mut read: impl FnMut(&str) -> Option<Vec<u8>>) -> String {
+pub fn summary(
+    apk_path: &str,
+    entries: &[String],
+    mut read: impl FnMut(&str) -> Option<Vec<u8>>,
+) -> String {
     let mut o = String::new();
     let block = signing_block(apk_path).unwrap_or_default();
     let has = |id| block.iter().any(|b| b.0 == id);
-    let v1 = entries.iter().find(|e| e.starts_with("META-INF/") && [".RSA", ".DSA", ".EC"].iter().any(|x| e.to_uppercase().ends_with(x)));
-    let schemes: Vec<&str> = [(v1.is_some(), "v1 (JAR)"), (has(V2_ID), "v2"), (has(V3_ID), "v3"), (has(V31_ID), "v3.1")].into_iter().filter(|x| x.0).map(|x| x.1).collect();
-    o += &format!("schemes           {}\n", if schemes.is_empty() { "none (unsigned)".to_string() } else { schemes.join(", ") });
+    let v1 = entries.iter().find(|e| {
+        e.starts_with("META-INF/")
+            && [".RSA", ".DSA", ".EC"]
+                .iter()
+                .any(|x| e.to_uppercase().ends_with(x))
+    });
+    let schemes: Vec<&str> = [
+        (v1.is_some(), "v1 (JAR)"),
+        (has(V2_ID), "v2"),
+        (has(V3_ID), "v3"),
+        (has(V31_ID), "v3.1"),
+    ]
+    .into_iter()
+    .filter(|x| x.0)
+    .map(|x| x.1)
+    .collect();
+    o += &format!(
+        "schemes           {}\n",
+        if schemes.is_empty() {
+            "none (unsigned)".to_string()
+        } else {
+            schemes.join(", ")
+        }
+    );
     // newest scheme first; fall back to the v1 signature file
-    let from_block = [V31_ID, V3_ID, V2_ID].iter().filter_map(|id| block.iter().find(|b| b.0 == *id)).filter_map(|b| scheme_cert(&b.1)).find_map(|c| parse_cert(&c));
-    let cert = from_block.or_else(|| v1.and_then(|p| read(p)).and_then(|d| pkcs7_cert(&d)).and_then(|c| parse_cert(&c)));
+    let from_block = [V31_ID, V3_ID, V2_ID]
+        .iter()
+        .filter_map(|id| block.iter().find(|b| b.0 == *id))
+        .filter_map(|b| scheme_cert(&b.1))
+        .find_map(|c| parse_cert(&c));
+    let cert = from_block.or_else(|| {
+        v1.and_then(|p| read(p))
+            .and_then(|d| pkcs7_cert(&d))
+            .and_then(|c| parse_cert(&c))
+    });
     match cert {
         Some(c) => {
-            o += &format!("subject           {}\nissuer            {}\nvalid             {} to {}\nkey               {}\nSHA-256           {}\nSHA-1             {}\n", c.subject, c.issuer, c.not_before, c.not_after, c.key, c.sha256, c.sha1);
+            o += &format!(
+                "subject           {}\nissuer            {}\nvalid             {} to {}\nkey               {}\nSHA-256           {}\nSHA-1             {}\n",
+                c.subject, c.issuer, c.not_before, c.not_after, c.key, c.sha256, c.sha1
+            );
             if c.subject.contains("Android Debug") {
                 o += "                  <- debug certificate\n";
             }
@@ -259,7 +320,10 @@ mod tests {
         let long = [&[0x04, 0x81, 0x80][..], &[0u8; 0x80]].concat();
         assert_eq!(der(&long).unwrap().1.len(), 0x80);
         assert_eq!(oid(&[0x55, 0x04, 0x03]), "2.5.4.3");
-        assert_eq!(oid(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01]), "1.2.840.113549.1.1.1");
+        assert_eq!(
+            oid(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01]),
+            "1.2.840.113549.1.1.1"
+        );
         assert_eq!(time(0x17, b"240131120000Z"), "2024-01-31");
     }
 
@@ -273,8 +337,16 @@ mod tests {
             let block = signing_block(apk).expect("signing block");
             let v2 = block.iter().find(|b| b.0 == V2_ID).expect("v2 scheme");
             let c = parse_cert(&scheme_cert(&v2.1).expect("v2 cert")).expect("parsed cert");
-            assert!(!c.subject.is_empty() && c.sha256.len() == 95, "{apk}: {} / {}", c.subject, c.sha256);
-            eprintln!("{apk}: {} | {} .. {} | {}", c.subject, c.not_before, c.not_after, c.sha256);
+            assert!(
+                !c.subject.is_empty() && c.sha256.len() == 95,
+                "{apk}: {} / {}",
+                c.subject,
+                c.sha256
+            );
+            eprintln!(
+                "{apk}: {} | {} .. {} | {}",
+                c.subject, c.not_before, c.not_after, c.sha256
+            );
         }
     }
 

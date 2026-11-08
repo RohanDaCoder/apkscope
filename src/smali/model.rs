@@ -102,11 +102,22 @@ pub enum Item {
     Label(u32),
     Ins(Ins),
     /// targets are label ids, relative to the switch that uses this payload
-    Packed { first: i32, targets: Vec<u32> },
+    Packed {
+        first: i32,
+        targets: Vec<u32>,
+    },
     Sparse(Vec<(i32, u32)>),
-    Array { width: u16, data: Vec<u8> },
+    Array {
+        width: u16,
+        data: Vec<u8>,
+    },
     Line(u32),
-    Local { reg: u16, name: Option<S>, ty: Option<S>, sig: Option<S> },
+    Local {
+        reg: u16,
+        name: Option<S>,
+        ty: Option<S>,
+        sig: Option<S>,
+    },
     EndLocal(u16),
     Restart(u16),
     Prologue,
@@ -217,7 +228,11 @@ pub fn mutf8(units: &[u16]) -> Vec<u8> {
         match u {
             1..=0x7f => out.push(u as u8),
             0 | 0x80..=0x7ff => out.extend([0xc0 | (u >> 6) as u8, 0x80 | (u & 0x3f) as u8]),
-            _ => out.extend([0xe0 | (u >> 12) as u8, 0x80 | ((u >> 6) & 0x3f) as u8, 0x80 | (u & 0x3f) as u8]),
+            _ => out.extend([
+                0xe0 | (u >> 12) as u8,
+                0x80 | ((u >> 6) & 0x3f) as u8,
+                0x80 | (u & 0x3f) as u8,
+            ]),
         }
     }
     out

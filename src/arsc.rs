@@ -6,11 +6,21 @@ use std::collections::BTreeMap;
 use crate::res::{qualifier, string_pool};
 
 fn u16_at(d: &[u8], o: usize) -> Result<u16, String> {
-    Ok(u16::from_le_bytes(d.get(o..o + 2).ok_or("truncated resources.arsc")?.try_into().unwrap()))
+    Ok(u16::from_le_bytes(
+        d.get(o..o + 2)
+            .ok_or("truncated resources.arsc")?
+            .try_into()
+            .unwrap(),
+    ))
 }
 
 fn u32_at(d: &[u8], o: usize) -> Result<u32, String> {
-    Ok(u32::from_le_bytes(d.get(o..o + 4).ok_or("truncated resources.arsc")?.try_into().unwrap()))
+    Ok(u32::from_le_bytes(
+        d.get(o..o + 4)
+            .ok_or("truncated resources.arsc")?
+            .try_into()
+            .unwrap(),
+    ))
 }
 
 /// One string resource: config qualifier ("" = default), name, value, and where its
@@ -48,7 +58,9 @@ pub fn strings(d: &[u8]) -> Result<Vec<StringRes>, String> {
                     if csize < 8 {
                         break;
                     }
-                    if cty == 0x0201 && types.get(d[c + 8] as usize - 1).map(String::as_str) == Some("string") {
+                    if cty == 0x0201
+                        && types.get(d[c + 8] as usize - 1).map(String::as_str) == Some("string")
+                    {
                         type_strings(d, c, &keys, &values, &mut out)?;
                     }
                     c += csize;
@@ -63,7 +75,13 @@ pub fn strings(d: &[u8]) -> Result<Vec<StringRes>, String> {
     Ok(out)
 }
 
-fn type_strings(d: &[u8], c: usize, keys: &[String], values: &[String], out: &mut Vec<StringRes>) -> Result<(), String> {
+fn type_strings(
+    d: &[u8],
+    c: usize,
+    keys: &[String],
+    values: &[String],
+    out: &mut Vec<StringRes>,
+) -> Result<(), String> {
     let flags = d[c + 9];
     let count = u32_at(d, c + 12)? as usize;
     let entries = c + u32_at(d, c + 16)? as usize;
@@ -74,9 +92,13 @@ fn type_strings(d: &[u8], c: usize, keys: &[String], values: &[String], out: &mu
         let o = if flags & 0x01 != 0 {
             Some(u16_at(d, offsets + k * 4 + 2)? as usize * 4)
         } else if flags & 0x02 != 0 {
-            Some(u16_at(d, offsets + k * 2)?).filter(|&o| o != 0xffff).map(|o| o as usize * 4)
+            Some(u16_at(d, offsets + k * 2)?)
+                .filter(|&o| o != 0xffff)
+                .map(|o| o as usize * 4)
         } else {
-            Some(u32_at(d, offsets + k * 4)?).filter(|&o| o != u32::MAX).map(|o| o as usize)
+            Some(u32_at(d, offsets + k * 4)?)
+                .filter(|&o| o != u32::MAX)
+                .map(|o| o as usize)
         };
         list.extend(o);
     }
@@ -91,7 +113,12 @@ fn type_strings(d: &[u8], c: usize, keys: &[String], values: &[String], out: &mu
         let v = e + u16_at(d, e)? as usize;
         if d.get(v + 3) == Some(&0x03) {
             let idx = u32_at(d, v + 4)? as usize;
-            out.push(StringRes { config: config.clone(), name: keys.get(key).cloned().unwrap_or_default(), value: values.get(idx).cloned().unwrap_or_default(), at: v + 3 });
+            out.push(StringRes {
+                config: config.clone(),
+                name: keys.get(key).cloned().unwrap_or_default(),
+                value: values.get(idx).cloned().unwrap_or_default(),
+                at: v + 3,
+            });
         }
     }
     Ok(())
@@ -117,18 +144,26 @@ fn encode(s: &str, utf8: bool) -> Vec<u8> {
             o.extend_from_slice(&((0x8000 | (units.len() >> 16)) as u16).to_le_bytes());
         }
         o.extend_from_slice(&(units.len() as u16).to_le_bytes());
-        units.iter().for_each(|u| o.extend_from_slice(&u.to_le_bytes()));
+        units
+            .iter()
+            .for_each(|u| o.extend_from_slice(&u.to_le_bytes()));
         o.extend_from_slice(&[0, 0]);
     }
     o
 }
 
 /// Change string values. `changes`: (config, name) -> new text.
-pub fn set_strings(d: &[u8], changes: &BTreeMap<(String, String), String>) -> Result<Vec<u8>, String> {
+pub fn set_strings(
+    d: &[u8],
+    changes: &BTreeMap<(String, String), String>,
+) -> Result<Vec<u8>, String> {
     let all = strings(d)?;
     let mut targets = Vec::new();
     for ((config, name), text) in changes {
-        let r = all.iter().find(|r| &r.config == config && &r.name == name).ok_or_else(|| format!("no string resource {name} in config \"{config}\""))?;
+        let r = all
+            .iter()
+            .find(|r| &r.config == config && &r.name == name)
+            .ok_or_else(|| format!("no string resource {name} in config \"{config}\""))?;
         targets.push((r.at, text.clone()));
     }
     // the global string pool is the table's first chunk
@@ -136,34 +171,58 @@ pub fn set_strings(d: &[u8], changes: &BTreeMap<(String, String), String>) -> Re
     if u16_at(d, pool)? != 0x0001 {
         return Err("resources.arsc has no global string pool first".into());
     }
-    let (psize, count, styles, flags) = (u32_at(d, pool + 4)? as usize, u32_at(d, pool + 8)? as usize, u32_at(d, pool + 12)? as usize, u32_at(d, pool + 16)?);
-    let (sstart, ystart) = (u32_at(d, pool + 20)? as usize, u32_at(d, pool + 24)? as usize);
+    let (psize, count, styles, flags) = (
+        u32_at(d, pool + 4)? as usize,
+        u32_at(d, pool + 8)? as usize,
+        u32_at(d, pool + 12)? as usize,
+        u32_at(d, pool + 16)?,
+    );
+    let (sstart, ystart) = (
+        u32_at(d, pool + 20)? as usize,
+        u32_at(d, pool + 24)? as usize,
+    );
     let hsize = u16_at(d, pool + 2)? as usize;
     let utf8 = flags & 0x100 != 0;
-    let str_offsets: Vec<u32> = (0..count).map(|k| u32_at(d, pool + hsize + k * 4)).collect::<Result<_, _>>()?;
-    let style_offsets: Vec<u32> = (0..styles).map(|k| u32_at(d, pool + hsize + count * 4 + k * 4)).collect::<Result<_, _>>()?;
+    let str_offsets: Vec<u32> = (0..count)
+        .map(|k| u32_at(d, pool + hsize + k * 4))
+        .collect::<Result<_, _>>()?;
+    let style_offsets: Vec<u32> = (0..styles)
+        .map(|k| u32_at(d, pool + hsize + count * 4 + k * 4))
+        .collect::<Result<_, _>>()?;
     let str_end = if ystart != 0 { ystart } else { psize };
     let mut sdata = d[pool + sstart..pool + str_end].to_vec();
-    let ydata = if ystart != 0 { d[pool + ystart..pool + psize].to_vec() } else { Vec::new() };
+    let ydata = if ystart != 0 {
+        d[pool + ystart..pool + psize].to_vec()
+    } else {
+        Vec::new()
+    };
     let mut new_offsets = str_offsets.clone();
     for (_, text) in &targets {
         new_offsets.push(sdata.len() as u32);
         sdata.extend(encode(text, utf8));
     }
-    while sdata.len() % 4 != 0 {
+    while !sdata.len().is_multiple_of(4) {
         sdata.push(0);
     }
     let n = new_offsets.len();
     let new_sstart = hsize + 4 * n + 4 * styles;
-    let new_ystart = if ystart != 0 { new_sstart + sdata.len() } else { 0 };
+    let new_ystart = if ystart != 0 {
+        new_sstart + sdata.len()
+    } else {
+        0
+    };
     let mut chunk = d[pool..pool + hsize].to_vec();
     let new_size = new_sstart + sdata.len() + ydata.len();
     chunk[4..8].copy_from_slice(&(new_size as u32).to_le_bytes());
     chunk[8..12].copy_from_slice(&(n as u32).to_le_bytes());
     chunk[20..24].copy_from_slice(&(new_sstart as u32).to_le_bytes());
     chunk[24..28].copy_from_slice(&(new_ystart as u32).to_le_bytes());
-    new_offsets.iter().for_each(|o| chunk.extend_from_slice(&o.to_le_bytes()));
-    style_offsets.iter().for_each(|o| chunk.extend_from_slice(&o.to_le_bytes()));
+    new_offsets
+        .iter()
+        .for_each(|o| chunk.extend_from_slice(&o.to_le_bytes()));
+    style_offsets
+        .iter()
+        .for_each(|o| chunk.extend_from_slice(&o.to_le_bytes()));
     chunk.extend(sdata);
     chunk.extend(ydata);
     let delta = chunk.len() as isize - psize as isize;
@@ -191,7 +250,10 @@ mod tests {
         assert_eq!(encode("hi", true), vec![2, 2, b'h', b'i', 0]);
         assert_eq!(encode("hi", false), vec![2, 0, b'h', 0, b'i', 0, 0, 0]);
         // long UTF-8 strings use two-byte lengths
-        assert_eq!(&encode(&"x".repeat(200), true)[..4], &[0x80, 200, 0x80, 200]);
+        assert_eq!(
+            &encode(&"x".repeat(200), true)[..4],
+            &[0x80, 200, 0x80, 200]
+        );
     }
 
     /// change app_name in a real table, then read it back with the regular decoder
@@ -201,17 +263,45 @@ mod tests {
         if !std::path::Path::new(apk).exists() {
             return;
         }
-        let d = crate::export::open(apk).unwrap().read("resources.arsc").unwrap();
+        let d = crate::export::open(apk)
+            .unwrap()
+            .read("resources.arsc")
+            .unwrap();
         let all = strings(&d).unwrap();
-        let name = all.iter().find(|r| r.config.is_empty() && r.name == "app_name").expect("app_name").clone();
-        let other = all.iter().find(|r| r.config.is_empty() && r.name != "app_name").unwrap().clone();
+        let name = all
+            .iter()
+            .find(|r| r.config.is_empty() && r.name == "app_name")
+            .expect("app_name")
+            .clone();
+        let other = all
+            .iter()
+            .find(|r| r.config.is_empty() && r.name != "app_name")
+            .unwrap()
+            .clone();
         let mut ch = BTreeMap::new();
-        ch.insert((String::new(), "app_name".to_string()), "Zestle (apkscope) – ünïcode".to_string());
+        ch.insert(
+            (String::new(), "app_name".to_string()),
+            "Zestle (apkscope) – ünïcode".to_string(),
+        );
         let out = set_strings(&d, &ch).unwrap();
         let after = strings(&out).unwrap();
-        assert_eq!(after.iter().find(|r| r.config.is_empty() && r.name == "app_name").unwrap().value, "Zestle (apkscope) – ünïcode");
+        assert_eq!(
+            after
+                .iter()
+                .find(|r| r.config.is_empty() && r.name == "app_name")
+                .unwrap()
+                .value,
+            "Zestle (apkscope) – ünïcode"
+        );
         // everything else unchanged
-        assert_eq!(after.iter().find(|r| r.config == other.config && r.name == other.name).unwrap().value, other.value);
+        assert_eq!(
+            after
+                .iter()
+                .find(|r| r.config == other.config && r.name == other.name)
+                .unwrap()
+                .value,
+            other.value
+        );
         assert_eq!(after.len(), all.len());
         // the full decoder still reads the table
         let t = crate::res::parse_table(&out).unwrap();

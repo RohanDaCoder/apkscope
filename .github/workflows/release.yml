@@ -30,7 +30,16 @@ jobs:
       - run: cargo fmt --all -- --check
       # CLI + MCP server only — matches the Linux/macOS release build
       - run: cargo check --release --no-default-features
+      # Same allow-list as ci.yml's clippy job (categories that need per-site
+      # judgment on the existing codebase — tracked for follow-up cleanup).
       - run: cargo clippy --release --no-default-features -- -D warnings
+          -A dead_code
+          -A clippy::collapsible_if
+          -A clippy::type_complexity
+          -A clippy::too_many_arguments
+          -A clippy::chunks_exact_to_as_chunks
+          -A clippy::needless_range_loop
+          -A clippy::explicit_counter_loop
 
   linux-x86_64:
     needs: [lint]

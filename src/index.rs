@@ -36,7 +36,11 @@ impl Rows {
         pairs.retain(|p| (p.0 as usize) < n);
         pairs.sort_unstable();
         pairs.dedup();
-        let mut r = Rows { ids: Vec::new(), start: Vec::new(), classes: Vec::with_capacity(pairs.len()) };
+        let mut r = Rows {
+            ids: Vec::new(),
+            start: Vec::new(),
+            classes: Vec::with_capacity(pairs.len()),
+        };
         for (id, class) in pairs {
             if r.ids.last() != Some(&id) {
                 r.ids.push(id);
@@ -86,7 +90,9 @@ fn class_refs(dx: &Dex, c: usize, k: u32, out: &mut [Vec<(u32, u32)>; 4]) {
             out[METHOD].push((m.method_idx, k));
             let Some(code) = &m.code else { continue };
             for i in bytecode::decode(code.insns).unwrap_or_default() {
-                let Some((_, _, r)) = bytecode::info(i.op) else { continue };
+                let Some((_, _, r)) = bytecode::info(i.op) else {
+                    continue;
+                };
                 match r {
                     Ref::String => out[STRING].push((i.idx, k)),
                     Ref::Type => out[TYPE].push((i.idx, k)),
@@ -101,7 +107,12 @@ fn class_refs(dx: &Dex, c: usize, k: u32, out: &mut [Vec<(u32, u32)>; 4]) {
         vals.iter().for_each(|v| value_refs(v, out, k));
     }
     if let Ok(a) = dx.annotations(c) {
-        let all = a.class.iter().chain(a.fields.values().flatten()).chain(a.methods.values().flatten()).chain(a.params.values().flatten().flatten());
+        let all = a
+            .class
+            .iter()
+            .chain(a.fields.values().flatten())
+            .chain(a.methods.values().flatten())
+            .chain(a.params.values().flatten().flatten());
         for ann in all {
             value_refs(&Value::Annotation(ann.clone()), out, k);
         }
@@ -109,14 +120,21 @@ fn class_refs(dx: &Dex, c: usize, k: u32, out: &mut [Vec<(u32, u32)>; 4]) {
 }
 
 /// `classes`: the top-level classes as (dex, class index); their position is the class id.
-pub fn build(dexes: &[Dex], classes: &[(usize, usize)], threads: usize, done: &AtomicUsize) -> Index {
+pub fn build(
+    dexes: &[Dex],
+    classes: &[(usize, usize)],
+    threads: usize,
+    done: &AtomicUsize,
+) -> Index {
     let next = AtomicUsize::new(0);
     // per dex, per kind: (id, class) pairs from all threads
-    let parts: Mutex<Vec<[Vec<(u32, u32)>; 4]>> = Mutex::new((0..dexes.len()).map(|_| Default::default()).collect());
+    let parts: Mutex<Vec<[Vec<(u32, u32)>; 4]>> =
+        Mutex::new((0..dexes.len()).map(|_| Default::default()).collect());
     std::thread::scope(|s| {
         for _ in 0..threads.max(1) {
             s.spawn(|| {
-                let mut local: Vec<[Vec<(u32, u32)>; 4]> = (0..dexes.len()).map(|_| Default::default()).collect();
+                let mut local: Vec<[Vec<(u32, u32)>; 4]> =
+                    (0..dexes.len()).map(|_| Default::default()).collect();
                 loop {
                     let k = next.fetch_add(1, Ordering::Relaxed);
                     let Some(&(d, c)) = classes.get(k) else { break };
@@ -146,7 +164,12 @@ pub fn build(dexes: &[Dex], classes: &[(usize, usize)], threads: usize, done: &A
         .map(|(kinds, dx)| {
             let n = dx.counts();
             let [a, b, c, d] = kinds;
-            [Rows::build(n[0], a), Rows::build(n[1], b), Rows::build(n[2], c), Rows::build(n[3], d)]
+            [
+                Rows::build(n[0], a),
+                Rows::build(n[1], b),
+                Rows::build(n[2], c),
+                Rows::build(n[3], d),
+            ]
         })
         .collect();
     Index { by_dex }

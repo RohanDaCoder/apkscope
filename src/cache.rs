@@ -22,16 +22,50 @@ pub fn root() -> PathBuf {
 pub fn dir_for(apk: &str, deobf: bool, tag: u64) -> PathBuf {
     let meta = fs::metadata(apk).ok();
     let size = meta.as_ref().map_or(0, |m| m.len());
-    let mtime = meta.and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
-    let name = Path::new(apk).file_stem().map_or("apk".into(), |s| s.to_string_lossy().into_owned());
-    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(40).collect();
-    root().join(format!("{safe}-{size:x}-{mtime:x}-{}-{}{}", if deobf { "d" } else { "n" }, env!("CARGO_PKG_VERSION"), if tag == 0 { String::new() } else { format!("-u{:x}", tag & 0xffff_ffff) }))
+    let mtime = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let name = Path::new(apk)
+        .file_stem()
+        .map_or("apk".into(), |s| s.to_string_lossy().into_owned());
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(40)
+        .collect();
+    root().join(format!(
+        "{safe}-{size:x}-{mtime:x}-{}-{}{}",
+        if deobf { "d" } else { "n" },
+        env!("CARGO_PKG_VERSION"),
+        if tag == 0 {
+            String::new()
+        } else {
+            format!("-u{:x}", tag & 0xffff_ffff)
+        }
+    ))
 }
 
 /// Total size of every cache, in bytes.
 pub fn total_size() -> u64 {
     fn walk(p: &Path) -> u64 {
-        fs::read_dir(p).map_or(0, |rd| rd.flatten().map(|e| if e.path().is_dir() { walk(&e.path()) } else { e.metadata().map_or(0, |m| m.len()) }).sum())
+        fs::read_dir(p).map_or(0, |rd| {
+            rd.flatten()
+                .map(|e| {
+                    if e.path().is_dir() {
+                        walk(&e.path())
+                    } else {
+                        e.metadata().map_or(0, |m| m.len())
+                    }
+                })
+                .sum()
+        })
     }
     walk(&root())
 }
@@ -51,12 +85,26 @@ pub struct Reader {
 impl Reader {
     pub fn open(dir: &Path, classes: usize) -> Option<Reader> {
         let mut raw = Vec::new();
-        File::open(dir.join("code.idx")).ok()?.read_to_end(&mut raw).ok()?;
+        File::open(dir.join("code.idx"))
+            .ok()?
+            .read_to_end(&mut raw)
+            .ok()?;
         if raw.len() != classes * 12 {
             return None;
         }
-        let slots = raw.chunks_exact(12).map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u32::from_le_bytes(c[8..].try_into().unwrap()))).collect();
-        Some(Reader { bin: dir.join("code.bin"), slots })
+        let slots = raw
+            .chunks_exact(12)
+            .map(|c| {
+                (
+                    u64::from_le_bytes(c[..8].try_into().unwrap()),
+                    u32::from_le_bytes(c[8..].try_into().unwrap()),
+                )
+            })
+            .collect();
+        Some(Reader {
+            bin: dir.join("code.bin"),
+            slots,
+        })
     }
 
     /// A handle for one reading thread.
@@ -88,7 +136,11 @@ impl Writer {
         fs::create_dir_all(dir).ok()?;
         let _ = fs::remove_file(dir.join("code.idx"));
         let f = File::create(dir.join("code.bin")).ok()?;
-        Some(Writer { dir: dir.to_path_buf(), out: Mutex::new((f, 0)), slots: Mutex::new(vec![(0, 0); classes]) })
+        Some(Writer {
+            dir: dir.to_path_buf(),
+            out: Mutex::new((f, 0)),
+            slots: Mutex::new(vec![(0, 0); classes]),
+        })
     }
 
     pub fn put(&self, k: usize, text: &str) {

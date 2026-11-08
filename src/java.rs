@@ -8,7 +8,7 @@ use crate::bytecode::{self, Insn};
 use crate::cfg::{self, Cfg, Term};
 use crate::dex::{self, Dex};
 use crate::imports::type_ref;
-use crate::ir::{self, jtype, Ctx, Expr};
+use crate::ir::{self, Ctx, Expr, jtype};
 use crate::opt::{self, Bir};
 
 type R<T> = Result<T, String>;
@@ -16,7 +16,11 @@ type R<T> = Result<T, String>;
 fn modifiers(access: u32, method: bool) -> String {
     let mut s = String::new();
     let flags: &[(u32, &str)] = &[
-        (0x1, "public"), (0x2, "private"), (0x4, "protected"), (0x8, "static"), (0x10, "final"),
+        (0x1, "public"),
+        (0x2, "private"),
+        (0x4, "protected"),
+        (0x8, "static"),
+        (0x10, "final"),
         (0x400, "abstract"),
     ];
     for &(bit, name) in flags {
@@ -25,10 +29,18 @@ fn modifiers(access: u32, method: bool) -> String {
             s.push(' ');
         }
     }
-    if method && access & 0x20 != 0 { s += "synchronized " }
-    if method && access & 0x100 != 0 { s += "native " }
-    if !method && access & 0x40 != 0 { s += "volatile " }
-    if !method && access & 0x80 != 0 { s += "transient " }
+    if method && access & 0x20 != 0 {
+        s += "synchronized "
+    }
+    if method && access & 0x100 != 0 {
+        s += "native "
+    }
+    if !method && access & 0x40 != 0 {
+        s += "volatile "
+    }
+    if !method && access & 0x80 != 0 {
+        s += "transient "
+    }
     s
 }
 
@@ -41,28 +53,50 @@ pub fn class(dex: &Dex, c: usize) -> R<String> {
     // a top-level class's name may legally contain `$` (it has no outer class here)
     let name = name.rsplit('.').next().unwrap_or(name);
     INLINED.with(|i| i.borrow_mut().clear());
-    let fam = dex.descendants(c).into_iter().map(|k| (k, dex.parent_of(k))).collect();
+    let fam = dex
+        .descendants(c)
+        .into_iter()
+        .map(|k| (k, dex.parent_of(k)))
+        .collect();
     FAMILY.with(|f| *f.borrow_mut() = (dex as *const Dex as usize, c, fam));
     let body = class_body(dex, c, name)?;
-    let text = if pkg.is_empty() { body } else { format!("package {pkg};\n\n{body}") };
+    let text = if pkg.is_empty() {
+        body
+    } else {
+        format!("package {pkg};\n\n{body}")
+    };
     Ok(crate::imports::resolve(&text, pkg, &own))
 }
 
 /// Name of an inner class inside its outer one: `a/B$C` in `a/B` -> `C`, `a/B$1` -> `AnonymousClass1`.
 pub fn inner_name(desc: &str, outer: &str) -> String {
-    let rest = desc.trim_end_matches(';').get(outer.trim_end_matches(';').len() + 1..).unwrap_or(desc);
-    if rest.starts_with(|c: char| c.is_ascii_digit()) { format!("AnonymousClass{rest}") } else { rest.to_string() }
+    let rest = desc
+        .trim_end_matches(';')
+        .get(outer.trim_end_matches(';').len() + 1..)
+        .unwrap_or(desc);
+    if rest.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("AnonymousClass{rest}")
+    } else {
+        rest.to_string()
+    }
 }
 
 /// Annotations that are compiler bookkeeping, never written in source.
-const HIDDEN: [&str; 2] = ["Lkotlin/Metadata;", "Lkotlin/jvm/internal/SourceDebugExtension;"];
+const HIDDEN: [&str; 2] = [
+    "Lkotlin/Metadata;",
+    "Lkotlin/jvm/internal/SourceDebugExtension;",
+];
 
 fn system<'x>(anns: &'x [dex::Annotation], dex: &Dex, desc: &str) -> Option<&'x dex::Annotation> {
-    anns.iter().find(|a| a.visibility == 2 && dex.type_name(a.type_idx).is_ok_and(|t| t == desc))
+    anns.iter()
+        .find(|a| a.visibility == 2 && dex.type_name(a.type_idx).is_ok_and(|t| t == desc))
 }
 
 fn element<'x>(a: &'x dex::Annotation, dex: &Dex, name: &str) -> Option<&'x dex::Value> {
-    a.elements.iter().find(|(n, _)| dex.string(*n).is_ok_and(|s| s == name)).map(|e| &e.1)
+    a.elements
+        .iter()
+        .find(|(n, _)| dex.string(*n).is_ok_and(|s| s == name))
+        .map(|e| &e.1)
 }
 
 fn value_text(dex: &Dex, v: &dex::Value) -> String {
@@ -76,12 +110,31 @@ fn value_text(dex: &Dex, v: &dex::Value) -> String {
         Int(x, _) => x.to_string(),
         Float(f) => format!("{f:?}f"),
         Double(d) => format!("{d:?}"),
-        Str(i) => dex.string(*i).map_or("null".into(), |s| ir::java_string(&s)),
-        Type(t) => dex.type_name(*t).map_or("null".into(), |t| format!("{}.class", type_ref(&t))),
-        Field(f) | Enum(f) => dex.field_parts(*f).map_or("null".into(), |(c, ty, n)| format!("{}.{}", type_ref(&c), crate::deobf::field(&c, &n, &ty).unwrap_or(n))),
-        Method(m) => dex.method_ref(*m).map_or("null".into(), |r| format!("null /* {r} */")),
+        Str(i) => dex
+            .string(*i)
+            .map_or("null".into(), |s| ir::java_string(&s)),
+        Type(t) => dex
+            .type_name(*t)
+            .map_or("null".into(), |t| format!("{}.class", type_ref(&t))),
+        Field(f) | Enum(f) => dex.field_parts(*f).map_or("null".into(), |(c, ty, n)| {
+            format!(
+                "{}.{}",
+                type_ref(&c),
+                crate::deobf::field(&c, &n, &ty).unwrap_or(n)
+            )
+        }),
+        Method(m) => dex
+            .method_ref(*m)
+            .map_or("null".into(), |r| format!("null /* {r} */")),
         MethodType(_) | MethodHandle(_) => "null /* method handle */".into(),
-        Array(items) => format!("{{{}}}", items.iter().map(|x| value_text(dex, x)).collect::<Vec<_>>().join(", ")),
+        Array(items) => format!(
+            "{{{}}}",
+            items
+                .iter()
+                .map(|x| value_text(dex, x))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Annotation(a) => annotation_text(dex, a).unwrap_or_default(),
         Null => "null".into(),
         Bool(b) => b.to_string(),
@@ -101,8 +154,14 @@ fn typed_value(dex: &Dex, v: &dex::Value, ty: &str) -> String {
         (Int(x, k), "S") if *k != 's' => format!("(short) {x}"),
         (Float(f), _) if f.is_nan() => "Float.NaN".into(),
         (Double(d), _) if d.is_nan() => "Double.NaN".into(),
-        (Float(f), _) if f.is_infinite() => format!("Float.{}_INFINITY", if *f > 0.0 { "POSITIVE" } else { "NEGATIVE" }),
-        (Double(d), _) if d.is_infinite() => format!("Double.{}_INFINITY", if *d > 0.0 { "POSITIVE" } else { "NEGATIVE" }),
+        (Float(f), _) if f.is_infinite() => format!(
+            "Float.{}_INFINITY",
+            if *f > 0.0 { "POSITIVE" } else { "NEGATIVE" }
+        ),
+        (Double(d), _) if d.is_infinite() => format!(
+            "Double.{}_INFINITY",
+            if *d > 0.0 { "POSITIVE" } else { "NEGATIVE" }
+        ),
         _ => value_text(dex, v),
     }
 }
@@ -114,17 +173,32 @@ fn annotation_text(dex: &Dex, a: &dex::Annotation) -> Option<String> {
         return None;
     }
     let mut s = format!("@{}", type_ref(&desc));
-    let els: Vec<(String, String)> = a.elements.iter().map(|(n, v)| (dex.string(*n).unwrap_or_default(), value_text(dex, v))).collect();
+    let els: Vec<(String, String)> = a
+        .elements
+        .iter()
+        .map(|(n, v)| (dex.string(*n).unwrap_or_default(), value_text(dex, v)))
+        .collect();
     match els.as_slice() {
         [] => {}
         [(n, v)] if n == "value" => s += &format!("({v})"),
-        _ => s += &format!("({})", els.iter().map(|(n, v)| format!("{n} = {v}")).collect::<Vec<_>>().join(", ")),
+        _ => {
+            s += &format!(
+                "({})",
+                els.iter()
+                    .map(|(n, v)| format!("{n} = {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     }
     Some(s)
 }
 
 fn annotation_lines(dex: &Dex, anns: &[dex::Annotation], indent: &str) -> String {
-    anns.iter().filter_map(|a| annotation_text(dex, a)).map(|t| format!("{indent}{t}\n")).collect()
+    anns.iter()
+        .filter_map(|a| annotation_text(dex, a))
+        .map(|t| format!("{indent}{t}\n"))
+        .collect()
 }
 
 fn class_body(dex: &Dex, c: usize, name: &str) -> R<String> {
@@ -133,7 +207,11 @@ fn class_body(dex: &Dex, c: usize, name: &str) -> R<String> {
     let anns = dex.annotations(c).unwrap_or_default();
     let mut out = String::new();
     if crate::deobf::class(&def.class).is_some() {
-        let orig = def.class.trim_start_matches('L').trim_end_matches(';').replace('/', ".");
+        let orig = def
+            .class
+            .trim_start_matches('L')
+            .trim_end_matches(';')
+            .replace('/', ".");
         let _ = writeln!(out, "/* renamed from: {orig} */");
     }
     out += &user_note(&def.class, "");
@@ -141,18 +219,45 @@ fn class_body(dex: &Dex, c: usize, name: &str) -> R<String> {
     // a nested class's real modifiers (private, static ...) live in its InnerClass annotation
     let a = system(&anns.class, dex, "Ldalvik/annotation/InnerClass;")
         .and_then(|ic| element(ic, dex, "accessFlags"))
-        .and_then(|v| if let dex::Value::Int(f, _) = v { Some(*f as u32) } else { None })
+        .and_then(|v| {
+            if let dex::Value::Int(f, _) = v {
+                Some(*f as u32)
+            } else {
+                None
+            }
+        })
         .unwrap_or(def.access);
-    let kind = if a & 0x2000 != 0 { "@interface" } else if a & 0x200 != 0 { "interface" } else if a & 0x4000 != 0 { "enum" } else { "class" };
+    let kind = if a & 0x2000 != 0 {
+        "@interface"
+    } else if a & 0x200 != 0 {
+        "interface"
+    } else if a & 0x4000 != 0 {
+        "enum"
+    } else {
+        "class"
+    };
     // interfaces are implicitly abstract; enums can't be declared final or abstract
     let mods = modifiers(a & if a & 0x4200 != 0 { !0x410 } else { !0 }, false);
     let _ = write!(out, "{mods}{kind} {name}");
-    if let Some(s) = def.superclass.as_deref().filter(|s| *s != "Ljava/lang/Object;" && kind == "class") {
+    if let Some(s) = def
+        .superclass
+        .as_deref()
+        .filter(|s| *s != "Ljava/lang/Object;" && kind == "class")
+    {
         let _ = write!(out, " extends {}", type_ref(s));
     }
     if !def.interfaces.is_empty() && kind != "@interface" {
         let list: Vec<_> = def.interfaces.iter().map(|i| type_ref(i)).collect();
-        let _ = write!(out, " {} {}", if kind == "interface" { "extends" } else { "implements" }, list.join(", "));
+        let _ = write!(
+            out,
+            " {} {}",
+            if kind == "interface" {
+                "extends"
+            } else {
+                "implements"
+            },
+            list.join(", ")
+        );
     }
     out += " {\n";
     out += &members(dex, c, name, a, &def, &data, &anns, None)?;
@@ -163,7 +268,16 @@ fn class_body(dex: &Dex, c: usize, name: &str) -> R<String> {
 /// Fields, nested classes and methods of a class, indented one level.
 /// `anon` = synthetic capture fields to hide when the class is printed inline (constructor hidden too).
 /// `access` = effective class flags (a nested class's come from its InnerClass annotation).
-fn members(dex: &Dex, c: usize, name: &str, access: u32, def: &dex::ClassDef, data: &dex::ClassData, anns: &dex::Annotations, anon: Option<&HashSet<u32>>) -> R<String> {
+fn members(
+    dex: &Dex,
+    c: usize,
+    name: &str,
+    access: u32,
+    def: &dex::ClassDef,
+    data: &dex::ClassData,
+    anns: &dex::Annotations,
+    anon: Option<&HashSet<u32>>,
+) -> R<String> {
     let mut out = String::new();
     // nested classes and methods are rendered first: rendering decides which anonymous classes get
     // inlined, and an interface's static initializer may turn into field initializers
@@ -171,39 +285,58 @@ fn members(dex: &Dex, c: usize, name: &str, access: u32, def: &dex::ClassDef, da
     for k in kids_of(dex, c) {
         let kdesc = dex.class_descriptor(k)?;
         let renamed = |d: &str| crate::deobf::class(d).unwrap_or(d).to_string();
-        let inner = class_body(dex, k, &inner_name(&renamed(&kdesc), &renamed(&def.class))).unwrap_or_else(|e| format!("/* class {} failed: {e} */\n", jtype(&kdesc)));
+        let inner = class_body(dex, k, &inner_name(&renamed(&kdesc), &renamed(&def.class)))
+            .unwrap_or_else(|e| format!("/* class {} failed: {e} */\n", jtype(&kdesc)));
         kids.push((kdesc, inner));
     }
     let mut rendered = Vec::new();
     for m in &data.methods {
-        let mname = dex.method_parts(m.method_idx).map(|p| p.1).unwrap_or_default();
+        let mname = dex
+            .method_parts(m.method_idx)
+            .map(|p| p.1)
+            .unwrap_or_default();
         if anon.is_some() && mname == "<init>" {
             continue;
         }
         // a broken method must not take down the whole class
-        let text = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| method(dex, &def.class, name, m, anns))) {
+        let text = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            method(dex, &def.class, name, m, anns)
+        })) {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => smali_fallback(dex, m, &format!("could not decompile: {e}")),
             Err(_) => smali_fallback(dex, m, "the decompiler crashed on this method"),
         };
         // the compiler writes values()/valueOf()/$values() for every enum
-        let synthetic_enum = access & 0x4000 != 0 && (m.access & 0x1000 != 0 || ((mname == "values" || mname == "valueOf") && m.access & 0x8 != 0));
+        let synthetic_enum = access & 0x4000 != 0
+            && (m.access & 0x1000 != 0
+                || ((mname == "values" || mname == "valueOf") && m.access & 0x8 != 0));
         if synthetic_enum {
             continue;
         }
-        let text = if access & 0x4000 != 0 && mname == "<init>" { enum_ctor(&text) } else { text };
+        let text = if access & 0x4000 != 0 && mname == "<init>" {
+            enum_ctor(&text)
+        } else {
+            text
+        };
         rendered.push((mname == "<clinit>", text));
     }
     // interfaces can't have `static { }`: `NAME = value;` lines become field initializers
     let mut inits: HashMap<String, String> = HashMap::new();
     if access & 0x200 != 0 {
         if let Some(k) = rendered.iter().position(|r| r.0) {
-            let body: Vec<&str> = rendered[k].1.lines().map(str::trim).filter(|l| !l.is_empty() && *l != "static {" && *l != "}").collect();
+            let body: Vec<&str> = rendered[k]
+                .1
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && *l != "static {" && *l != "}")
+                .collect();
             let parsed: Option<Vec<(String, String)>> = body
                 .iter()
                 .map(|l| {
                     let (n, v) = l.strip_suffix(';')?.split_once(" = ")?;
-                    n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$').then(|| (n.to_string(), v.to_string()))
+                    n.chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                        .then(|| (n.to_string(), v.to_string()))
                 })
                 .collect();
             if let Some(p) = parsed {
@@ -256,14 +389,27 @@ fn members(dex: &Dex, c: usize, name: &str, access: u32, def: &dex::ClassDef, da
         let init = match (inits.get(&shown), static_val) {
             (Some(v), _) => format!(" = {v}"),
             // the default (0/null/false) is implied; only real constants are written out
-            (None, Some(v)) if !matches!(v, dex::Value::Null | dex::Value::Int(0, _) | dex::Value::Bool(false)) || faccess & 0x10 != 0 => {
+            (None, Some(v))
+                if !matches!(
+                    v,
+                    dex::Value::Null | dex::Value::Int(0, _) | dex::Value::Bool(false)
+                ) || faccess & 0x10 != 0 =>
+            {
                 format!(" = {}", typed_value(dex, v, &ty))
             }
             _ => String::new(),
         };
-        let _ = writeln!(out, "    {}{} {shown}{init};{note}", modifiers(faccess, false), type_ref(&ty));
+        let _ = writeln!(
+            out,
+            "    {}{} {shown}{init};{note}",
+            modifiers(faccess, false),
+            type_ref(&ty)
+        );
     }
-    let methods: String = rendered.into_iter().map(|(_, t)| format!("\n{t}")).collect();
+    let methods: String = rendered
+        .into_iter()
+        .map(|(_, t)| format!("\n{t}"))
+        .collect();
     let _ = &static_vals;
     for (kdesc, inner) in kids {
         if INLINED.with(|i| i.borrow().contains(&kdesc)) {
@@ -295,12 +441,22 @@ thread_local! {
 /// the current file's family so the nesting of every class in the DEX never has to be built.
 fn kids_of(dex: &Dex, c: usize) -> Vec<usize> {
     let key = dex as *const Dex as usize;
-    let from = |fam: &[(usize, Option<usize>)]| fam.iter().filter(|f| f.1 == Some(c)).map(|f| f.0).collect();
-    FAMILY.with(|f| {
-        let f = f.borrow();
-        (f.0 == key && (f.1 == c || f.2.iter().any(|x| x.0 == c))).then(|| from(&f.2))
-    })
-    .unwrap_or_else(|| from(&dex.descendants(c).into_iter().map(|k| (k, dex.parent_of(k))).collect::<Vec<_>>()))
+    let from = |fam: &[(usize, Option<usize>)]| {
+        fam.iter().filter(|f| f.1 == Some(c)).map(|f| f.0).collect()
+    };
+    FAMILY
+        .with(|f| {
+            let f = f.borrow();
+            (f.0 == key && (f.1 == c || f.2.iter().any(|x| x.0 == c))).then(|| from(&f.2))
+        })
+        .unwrap_or_else(|| {
+            from(
+                &dex.descendants(c)
+                    .into_iter()
+                    .map(|k| (k, dex.parent_of(k)))
+                    .collect::<Vec<_>>(),
+            )
+        })
 }
 
 /// Text standing in for a synthetic capture field (`this.val$x` -> `x`) inside an inline class.
@@ -325,15 +481,30 @@ fn anon_ctor(dex: &Dex, c: usize) -> Option<AnonCtor> {
         return None;
     }
     let data = dex.class_data(c).ok()?;
-    let mut ctors = data.methods.iter().filter(|m| dex.method_parts(m.method_idx).is_ok_and(|p| p.1 == "<init>"));
-    let (ctor, None) = (ctors.next()?, ctors.next()) else { return None };
+    let mut ctors = data.methods.iter().filter(|m| {
+        dex.method_parts(m.method_idx)
+            .is_ok_and(|p| p.1 == "<init>")
+    });
+    let (ctor, None) = (ctors.next()?, ctors.next()) else {
+        return None;
+    };
     let code = ctor.code.as_ref()?;
     let insns = bytecode::decode(code.insns).ok()?;
     let cfg = cfg::build(&insns, code.insns, &code.tries).ok()?;
     if cfg.blocks.len() != 1 {
         return None;
     }
-    let mut bir: Bir = vec![ir::lower(dex, &insns, code.insns, 0, cfg.blocks[0].last, &cfg.blocks[0].term).ok()?];
+    let mut bir: Bir = vec![
+        ir::lower(
+            dex,
+            &insns,
+            code.insns,
+            0,
+            cfg.blocks[0].last,
+            &cfg.blocks[0].term,
+        )
+        .ok()?,
+    ];
     opt::inline(&cfg, &mut bir, code.registers as usize);
     let (_, _, proto) = dex.method_parts(ctor.method_idx).ok()?;
     let params = dex.proto_parts(proto).ok()?.1;
@@ -344,11 +515,21 @@ fn anon_ctor(dex: &Dex, c: usize) -> Option<AnonCtor> {
         reg_param.insert(r, k);
         r += if p == "J" || p == "D" { 2 } else { 1 };
     }
-    let mut out = AnonCtor { fields: vec![], super_args: vec![], super_ctor: u32::MAX };
+    let mut out = AnonCtor {
+        fields: vec![],
+        super_args: vec![],
+        super_ctor: u32::MAX,
+    };
     for st in &bir[0].0 {
         match st {
-            ir::Stmt::Store(ir::Expr::Field(Some(o), f), ir::Expr::Reg(p)) if **o == ir::Expr::Reg(this) => out.fields.push((*reg_param.get(p)?, *f)),
-            ir::Stmt::Do(ir::Expr::Invoke(ir::Call::Direct, m, a)) if a.first() == Some(&ir::Expr::Reg(this)) && out.super_ctor == u32::MAX => {
+            ir::Stmt::Store(ir::Expr::Field(Some(o), f), ir::Expr::Reg(p))
+                if **o == ir::Expr::Reg(this) =>
+            {
+                out.fields.push((*reg_param.get(p)?, *f))
+            }
+            ir::Stmt::Do(ir::Expr::Invoke(ir::Call::Direct, m, a))
+                if a.first() == Some(&ir::Expr::Reg(this)) && out.super_ctor == u32::MAX =>
+            {
                 out.super_ctor = *m;
                 for x in &a[1..] {
                     out.super_args.push(match x {
@@ -375,10 +556,19 @@ pub fn anon_new(ctx: &ir::Ctx, desc: &str, args: &[ir::Expr]) -> Option<String> 
     let info = anon_ctor(dex, c)?;
     let def = dex.class_def(c).ok()?;
     let sup = match def.superclass.as_deref() {
-        Some("Ljava/lang/Object;") | None => def.interfaces.first().cloned().unwrap_or_else(|| "Ljava/lang/Object;".into()),
+        Some("Ljava/lang/Object;") | None => def
+            .interfaces
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Ljava/lang/Object;".into()),
         Some(s) => s.to_string(),
     };
-    let sparams = dex.method_parts(info.super_ctor).ok().and_then(|(_, _, p)| dex.proto_parts(p).ok()).map(|p| p.1).unwrap_or_default();
+    let sparams = dex
+        .method_parts(info.super_ctor)
+        .ok()
+        .and_then(|(_, _, p)| dex.proto_parts(p).ok())
+        .map(|p| p.1)
+        .unwrap_or_default();
     let mut sargs = Vec::new();
     for (k, a) in info.super_args.iter().enumerate() {
         let want = sparams.get(k).map(String::as_str);
@@ -391,20 +581,47 @@ pub fn anon_new(ctx: &ir::Ctx, desc: &str, args: &[ir::Expr]) -> Option<String> 
     let mut caps = HashMap::new();
     for &(p, f) in &info.fields {
         let text = ctx.expr(args.get(p)?, None);
-        caps.insert(f, if text == "this" { outer_this.clone() } else { text });
+        caps.insert(
+            f,
+            if text == "this" {
+                outer_this.clone()
+            } else {
+                text
+            },
+        );
     }
     let data = dex.class_data(c).ok()?;
     let anns = dex.annotations(c).ok()?;
     let hidden: HashSet<u32> = caps.keys().copied().collect();
     CAPTURES.with(|x| x.borrow_mut().push(caps));
-    let body = members(dex, c, &ir::simple(&sup), def.access, &def, &data, &anns, Some(&hidden));
+    let body = members(
+        dex,
+        c,
+        &ir::simple(&sup),
+        def.access,
+        &def,
+        &data,
+        &anns,
+        Some(&hidden),
+    );
     CAPTURES.with(|x| x.borrow_mut().pop());
     let body = body.ok()?;
     INLINED.with(|i| i.borrow_mut().insert(def.class.clone()));
-    Some(format!("new {}({}) {{\n{}}}", type_ref(&sup), sargs.join(", "), body.trim_start_matches('\n')))
+    Some(format!(
+        "new {}({}) {{\n{}}}",
+        type_ref(&sup),
+        sargs.join(", "),
+        body.trim_start_matches('\n')
+    ))
 }
 
-fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex::Annotations) -> R<String> {
+fn method(
+    dex: &Dex,
+    class: &str,
+    class_name: &str,
+    m: &dex::Method,
+    anns: &dex::Annotations,
+) -> R<String> {
     let (owner, mut name, proto) = dex.method_parts(m.method_idx)?;
     let renamed_from = crate::deobf::method(&owner, &name).map(|n| std::mem::replace(&mut name, n));
     let (ret, params) = dex.proto_parts(proto)?;
@@ -412,18 +629,39 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
     let mods = modifiers(m.access, true);
     let no_anns = Vec::new();
     let manns = anns.methods.get(&m.method_idx).unwrap_or(&no_anns);
-    let note = user_note(&format!("{owner}->{}()", renamed_from.as_deref().unwrap_or(&name)), "    ");
-    let pre = format!("{note}{}{}", renamed_comment(&renamed_from), annotation_lines(dex, manns, "    "));
+    let note = user_note(
+        &format!("{owner}->{}()", renamed_from.as_deref().unwrap_or(&name)),
+        "    ",
+    );
+    let pre = format!(
+        "{note}{}{}",
+        renamed_comment(&renamed_from),
+        annotation_lines(dex, manns, "    ")
+    );
     let throws = system(manns, dex, "Ldalvik/annotation/Throws;")
         .and_then(|t| element(t, dex, "value"))
         .map_or(String::new(), |v| match v {
             dex::Value::Array(ts) if !ts.is_empty() => {
-                format!(" throws {}", ts.iter().map(|t| value_text(dex, t).trim_end_matches(".class").to_string()).collect::<Vec<_>>().join(", "))
+                format!(
+                    " throws {}",
+                    ts.iter()
+                        .map(|t| value_text(dex, t).trim_end_matches(".class").to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
             _ => String::new(),
         });
     let pann = |k: usize| -> String {
-        anns.params.get(&m.method_idx).and_then(|p| p.get(k)).map_or(String::new(), |set| set.iter().filter_map(|a| annotation_text(dex, a)).map(|t| t + " ").collect())
+        anns.params
+            .get(&m.method_idx)
+            .and_then(|p| p.get(k))
+            .map_or(String::new(), |set| {
+                set.iter()
+                    .filter_map(|a| annotation_text(dex, a))
+                    .map(|t| t + " ")
+                    .collect()
+            })
     };
     let Some(code) = &m.code else {
         let mut used = HashMap::new();
@@ -434,20 +672,39 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
                 let base = ir::name_for(Some(p));
                 let n = used.entry(base.clone()).or_insert(0);
                 *n += 1;
-                format!("{}{} {}", pann(k), type_ref(p), if *n == 1 { base } else { format!("{base}{n}") })
+                format!(
+                    "{}{} {}",
+                    pann(k),
+                    type_ref(p),
+                    if *n == 1 { base } else { format!("{base}{n}") }
+                )
             })
             .collect();
         let default = system(&anns.class, dex, "Ldalvik/annotation/AnnotationDefault;")
             .and_then(|d| element(d, dex, "value"))
-            .and_then(|v| if let dex::Value::Annotation(a) = v { element(a, dex, &name).map(|x| format!(" default {}", value_text(dex, x))) } else { None })
+            .and_then(|v| {
+                if let dex::Value::Annotation(a) = v {
+                    element(a, dex, &name).map(|x| format!(" default {}", value_text(dex, x)))
+                } else {
+                    None
+                }
+            })
             .unwrap_or_default();
-        let head = format!("{mods}{} {name}({}){throws}{default}", type_ref(&ret), sig.join(", "));
+        let head = format!(
+            "{mods}{} {name}({}){throws}{default}",
+            type_ref(&ret),
+            sig.join(", ")
+        );
         return Ok(format!("{pre}    {head};\n"));
     };
 
     let insns = bytecode::decode(code.insns)?;
     let mut cfg = cfg::build(&insns, code.insns, &code.tries)?;
-    let mut bir: Bir = cfg.blocks.iter().map(|b| ir::lower(dex, &insns, code.insns, b.first, b.last, &b.term)).collect::<R<_>>()?;
+    let mut bir: Bir = cfg
+        .blocks
+        .iter()
+        .map(|b| ir::lower(dex, &insns, code.insns, b.first, b.last, &b.term))
+        .collect::<R<_>>()?;
     opt::inline(&cfg, &mut bir, code.registers as usize);
     if opt::merge_conditions(&mut cfg, &mut bir) {
         cfg.recompute();
@@ -467,23 +724,43 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
         param_info.push((p.clone(), None));
         r += if p == "J" || p == "D" { 2 } else { 1 };
     }
-    let mut ctx = Ctx { dex, class, ret: ret.clone(), vars: None };
+    let mut ctx = Ctx {
+        dex,
+        class,
+        ret: ret.clone(),
+        vars: None,
+    };
     if let Some(vars) = opt::webs(&cfg, &mut bir, &param_regs) {
         ir::fold_split_new(dex, &cfg, &mut bir, &vars);
         ir::propagate_constants(&mut bir, &vars);
         ir::fold_concat(dex, &mut bir, &vars);
-        let ps: Vec<(usize, String, Option<String>)> = param_info.iter().cloned().enumerate().map(|(d, (t, n))| (d, t, n)).collect();
+        let ps: Vec<(usize, String, Option<String>)> = param_info
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(d, (t, n))| (d, t, n))
+            .collect();
         ctx.assign_vars(vars, &bir, &ps);
     }
     let pname = |k: usize| -> String {
         let d = k + !is_static as usize;
-        ctx.vars.as_ref().map_or(format!("p{k}"), |v| v.name[v.root[d]].clone())
+        ctx.vars
+            .as_ref()
+            .map_or(format!("p{k}"), |v| v.name[v.root[d]].clone())
     };
-    let sig: Vec<String> = params.iter().enumerate().map(|(k, p)| format!("{}{} {}", pann(k), type_ref(p), pname(k))).collect();
+    let sig: Vec<String> = params
+        .iter()
+        .enumerate()
+        .map(|(k, p)| format!("{}{} {}", pann(k), type_ref(p), pname(k)))
+        .collect();
     let head = match name.as_str() {
         "<clinit>" => "static".to_string(),
         "<init>" => format!("{mods}{}({}){throws}", class_name, sig.join(", ")),
-        _ => format!("{mods}{} {name}({}){throws}", type_ref(&ret), sig.join(", ")),
+        _ => format!(
+            "{mods}{} {name}({}){throws}",
+            type_ref(&ret),
+            sig.join(", ")
+        ),
     };
 
     let mut e = Emitter::new(&ctx, &insns, &cfg, &bir);
@@ -498,12 +775,18 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
     }
     e.seq(0, None, 2);
     // exception handlers not reached by the structured walk
-    let mut handlers: Vec<(Option<u32>, usize)> = cfg.blocks.iter().flat_map(|b| b.handlers.iter().copied()).collect();
+    let mut handlers: Vec<(Option<u32>, usize)> = cfg
+        .blocks
+        .iter()
+        .flat_map(|b| b.handlers.iter().copied())
+        .collect();
     handlers.sort_by_key(|h| h.1);
     handlers.dedup_by_key(|h| h.1);
     for (ty, h) in handlers {
         if !e.visited[h] {
-            let ty = ty.map_or(Ok("Throwable".into()), |t| dex.type_name(t).map(|t| type_ref(&t)))?;
+            let ty = ty.map_or(Ok("Throwable".into()), |t| {
+                dex.type_name(t).map(|t| type_ref(&t))
+            })?;
             e.line(1, format!("// catch ({ty}) handler"));
             e.seq(h, None, 2);
         }
@@ -513,7 +796,10 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
     let warn = if warn.is_empty() {
         String::new()
     } else {
-        format!("    /* WARNING: {}. The Java below may not match the bytecode exactly; check the Smali. */\n", warn.join("; "))
+        format!(
+            "    /* WARNING: {}. The Java below may not match the bytecode exactly; check the Smali. */\n",
+            warn.join("; ")
+        )
     };
     Ok(format!("{pre}{warn}    {head} {{\n{body}    }}\n"))
 }
@@ -521,11 +807,18 @@ fn method(dex: &Dex, class: &str, class_name: &str, m: &dex::Method, anns: &dex:
 /// `T x = v;` declared inside a block but read after the block closes is not valid Java:
 /// move the declaration to the top of the method and keep a plain assignment in place.
 fn hoist_declarations(lines: &mut Vec<(usize, String)>) {
-    let is_label = |l: &str| l.ends_with(':') && l.starts_with('L') && l[1..l.len() - 1].chars().all(|c| c.is_ascii_hexdigit());
+    let is_label = |l: &str| {
+        l.ends_with(':')
+            && l.starts_with('L')
+            && l[1..l.len() - 1].chars().all(|c| c.is_ascii_hexdigit())
+    };
     // word -> line numbers it appears on
     let mut seen: HashMap<&str, Vec<usize>> = HashMap::new();
     for (k, (_, l)) in lines.iter().enumerate() {
-        for w in l.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()) {
+        for w in l
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+            .filter(|w| !w.is_empty())
+        {
             let v = seen.entry(w).or_default();
             if v.last() != Some(&k) {
                 v.push(k);
@@ -534,15 +827,31 @@ fn hoist_declarations(lines: &mut Vec<(usize, String)>) {
     }
     let mut hoisted: Vec<(usize, String, String)> = Vec::new();
     for (k, (d, l)) in lines.iter().enumerate() {
-        let Some((ty, rest)) = l.split_once(' ') else { continue };
-        let Some((name, _)) = rest.split_once(" = ") else { continue };
+        let Some((ty, rest)) = l.split_once(' ') else {
+            continue;
+        };
+        let Some((name, _)) = rest.split_once(" = ") else {
+            continue;
+        };
         // class types are still import markers (\u{1}a.b.C\u{2}) at this point
-        let typed = ty.chars().all(|c| c.is_alphanumeric() || "_$./[]\u{1}\u{2}".contains(c)) && ty.chars().next().is_some_and(|c| c.is_alphabetic() || c == '\u{1}');
-        if !typed || name.contains(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')) || ["return", "throw", "new", "else"].contains(&ty) {
+        let typed = ty
+            .chars()
+            .all(|c| c.is_alphanumeric() || "_$./[]\u{1}\u{2}".contains(c))
+            && ty
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '\u{1}');
+        if !typed
+            || name.contains(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+            || ["return", "throw", "new", "else"].contains(&ty)
+        {
             continue;
         }
         // the declaring block ends at the first later line that is less indented (labels don't close blocks)
-        let end = lines[k + 1..].iter().position(|(i, t)| i < d && !is_label(t)).map(|p| k + 1 + p);
+        let end = lines[k + 1..]
+            .iter()
+            .position(|(i, t)| i < d && !is_label(t))
+            .map(|p| k + 1 + p);
         if let Some(end) = end {
             if seen.get(name).is_some_and(|v| v.iter().any(|&u| u >= end)) {
                 hoisted.push((k, ty.to_string(), name.to_string()));
@@ -555,7 +864,10 @@ fn hoist_declarations(lines: &mut Vec<(usize, String)>) {
         let _ = name;
     }
     // a name declared in two arms is hoisted once
-    let mut top: Vec<(usize, String)> = hoisted.into_iter().map(|(_, ty, name)| (2, format!("{ty} {name};"))).collect();
+    let mut top: Vec<(usize, String)> = hoisted
+        .into_iter()
+        .map(|(_, ty, name)| (2, format!("{ty} {name};")))
+        .collect();
     let mut once = std::collections::HashSet::new();
     top.retain(|l| once.insert(l.1.clone()));
     lines.splice(0..0, top);
@@ -598,7 +910,13 @@ fn split_args(s: &str) -> Vec<String> {
 /// `new Enum("NAME", ordinal, ...)` (directly or through a temporary). Those lines leave the
 /// initializer; temporaries left in it are renamed to their constant. None unless the ordinals
 /// are exactly 0..n.
-fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &str, rendered: &mut Vec<(bool, String)>) -> Option<(Vec<String>, HashSet<u32>)> {
+fn enum_constants(
+    dex: &Dex,
+    data: &dex::ClassData,
+    def: &dex::ClassDef,
+    name: &str,
+    rendered: &mut Vec<(bool, String)>,
+) -> Option<(Vec<String>, HashSet<u32>)> {
     let k = rendered.iter().position(|r| r.0)?;
     // shown name -> field idx, for static fields typed as this enum
     let mut own: HashMap<String, u32> = HashMap::new();
@@ -617,7 +935,11 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
     let mut copy_of: HashMap<String, String> = HashMap::new(); // copy of a temp -> that temp
     // `T v = Other.FIELD;` / literals: the constant's arguments can't name a static-block local
     let mut locals: HashMap<String, String> = HashMap::new();
-    let simple = |e: &str| (e.len() > 1 && e.starts_with('"') && e.ends_with('"')) || e.chars().all(|c| c.is_alphanumeric() || "_$./-\u{1}\u{2}".contains(c));
+    let simple = |e: &str| {
+        (e.len() > 1 && e.starts_with('"') && e.ends_with('"'))
+            || e.chars()
+                .all(|c| c.is_alphanumeric() || "_$./-\u{1}\u{2}".contains(c))
+    };
     let mut keep = Vec::new();
     for line in rendered[k].1.lines() {
         let t = line.trim();
@@ -625,7 +947,15 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
         let mut consumed = false;
         if let Some((lhs, rhs)) = assign {
             let lhs_var = lhs.rsplit(' ').next().unwrap_or(lhs);
-            let ctor = rhs.strip_prefix(&prefix).and_then(|a| a.strip_suffix(')')).map(split_args).map(|a| a.into_iter().map(|x| locals.get(&x).cloned().unwrap_or(x)).collect::<Vec<_>>());
+            let ctor = rhs
+                .strip_prefix(&prefix)
+                .and_then(|a| a.strip_suffix(')'))
+                .map(split_args)
+                .map(|a| {
+                    a.into_iter()
+                        .map(|x| locals.get(&x).cloned().unwrap_or(x))
+                        .collect::<Vec<_>>()
+                });
             match (own.get(lhs), ctor) {
                 (Some(&f), Some(args)) => {
                     if let Some(c) = constant(lhs, &args) {
@@ -663,7 +993,10 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
                     consumed = true;
                 }
                 (None, None) if lhs.contains(' ') && simple(rhs) => {
-                    locals.insert(lhs_var.to_string(), locals.get(rhs).cloned().unwrap_or(rhs.to_string()));
+                    locals.insert(
+                        lhs_var.to_string(),
+                        locals.get(rhs).cloned().unwrap_or(rhs.to_string()),
+                    );
                 }
                 _ => {}
             }
@@ -673,15 +1006,27 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
         }
     }
     // R8 drops the fields of constants nobody reads: name those from their string
-    let mut unnamed: Vec<(&String, &Vec<String>)> = temps.iter().filter(|(t, _)| !alias.contains_key(*t)).collect();
+    let mut unnamed: Vec<(&String, &Vec<String>)> = temps
+        .iter()
+        .filter(|(t, _)| !alias.contains_key(*t))
+        .collect();
     unnamed.sort();
     for (tmp, args) in unnamed {
-        let name = args.first().map(|a| a.trim_matches('"').to_string()).unwrap_or_default();
-        let ident = name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let name = args
+            .first()
+            .map(|a| a.trim_matches('"').to_string())
+            .unwrap_or_default();
+        let ident = name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
         if !ident || own.contains_key(&name) || found.iter().any(|c| c.1 == name) {
             continue;
         }
-        let Some(c) = constant(&name, args) else { continue };
+        let Some(c) = constant(&name, args) else {
+            continue;
+        };
         found.push((c.0, name.clone(), c.1, u32::MAX));
         for (cp, _) in copy_of.iter().filter(|(_, t)| *t == tmp) {
             alias.insert(cp.clone(), name.clone());
@@ -689,7 +1034,13 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
         alias.insert(tmp.clone(), name);
     }
     found.sort();
-    if found.is_empty() || found.iter().enumerate().any(|(i, c)| c.0 != i as i64) || !temps.keys().chain(copy_of.keys()).all(|t| alias.contains_key(t)) {
+    if found.is_empty()
+        || found.iter().enumerate().any(|(i, c)| c.0 != i as i64)
+        || !temps
+            .keys()
+            .chain(copy_of.keys())
+            .all(|t| alias.contains_key(t))
+    {
         return None;
     }
     // temporaries still referenced (e.g. by the values array) now name their constant
@@ -703,13 +1054,20 @@ fn enum_constants(dex: &Dex, data: &dex::ClassData, def: &dex::ClassDef, name: &
             l
         })
         .collect();
-    let body: Vec<&String> = keep.iter().filter(|l| !matches!(l.trim(), "static {" | "}" | "")).collect();
+    let body: Vec<&String> = keep
+        .iter()
+        .filter(|l| !matches!(l.trim(), "static {" | "}" | ""))
+        .collect();
     if body.is_empty() {
         rendered.remove(k);
     } else {
         rendered[k].1 = keep.join("\n") + "\n";
     }
-    let idx = found.iter().map(|c| c.3).filter(|&f| f != u32::MAX).collect();
+    let idx = found
+        .iter()
+        .map(|c| c.3)
+        .filter(|&f| f != u32::MAX)
+        .collect();
     Some((found.into_iter().map(|c| c.2).collect(), idx))
 }
 
@@ -720,7 +1078,14 @@ fn constant(field: &str, args: &[String]) -> Option<(i64, String)> {
         return None;
     }
     let rest = args.get(2..).unwrap_or(&[]).join(", ");
-    Some((ord, if rest.is_empty() { field.to_string() } else { format!("{field}({rest})") }))
+    Some((
+        ord,
+        if rest.is_empty() {
+            field.to_string()
+        } else {
+            format!("{field}({rest})")
+        },
+    ))
 }
 
 fn replace_word(s: &str, from: &str, to: &str) -> String {
@@ -729,7 +1094,10 @@ fn replace_word(s: &str, from: &str, to: &str) -> String {
     let mut i = 0;
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
     while i < s.len() {
-        if s[i..].starts_with(from) && (i == 0 || !word(b[i - 1])) && b.get(i + from.len()).is_none_or(|&c| !word(c)) {
+        if s[i..].starts_with(from)
+            && (i == 0 || !word(b[i - 1]))
+            && b.get(i + from.len()).is_none_or(|&c| !word(c))
+        {
             out += to;
             i += from.len();
         } else {
@@ -752,8 +1120,15 @@ fn enum_ctor(text: &str) -> String {
             if let (Some(i), Some(j)) = (line.find('('), line.rfind(')')) {
                 let params = split_args(&line[i + 1..j]);
                 // enum constructors are implicitly private; any access modifier is an error
-                let head = line[..i].replacen("public ", "", 1).replacen("protected ", "", 1).replacen("private ", "", 1);
-                out.push(format!("{head}({}){}", params.get(2..).unwrap_or(&[]).join(", "), &line[j + 1..]));
+                let head = line[..i]
+                    .replacen("public ", "", 1)
+                    .replacen("protected ", "", 1)
+                    .replacen("private ", "", 1);
+                out.push(format!(
+                    "{head}({}){}",
+                    params.get(2..).unwrap_or(&[]).join(", "),
+                    &line[j + 1..]
+                ));
                 continue;
             }
         }
@@ -770,7 +1145,10 @@ pub fn warnings(body: &str) -> Vec<String> {
     let mut w = Vec::new();
     let gotos = body.matches("goto L").count();
     if gotos > 0 {
-        w.push(format!("{gotos} jump{} could not be structured", if gotos == 1 { "" } else { "s" }));
+        w.push(format!(
+            "{gotos} jump{} could not be structured",
+            if gotos == 1 { "" } else { "s" }
+        ));
     }
     if body.contains("// catch (") {
         w.push("exception handler shown outside its try block".into());
@@ -786,12 +1164,22 @@ pub fn warnings(body: &str) -> Vec<String> {
 
 /// The method's Dalvik bytecode as a comment: shown instead of Java when decompiling fails.
 pub fn smali_fallback(dex: &Dex, m: &dex::Method, why: &str) -> String {
-    let mut out = format!("    /* WARNING: {why}. Showing Dalvik bytecode instead.\n     * {}\n", dex.method_ref(m.method_idx).unwrap_or_default());
+    let mut out = format!(
+        "    /* WARNING: {why}. Showing Dalvik bytecode instead.\n     * {}\n",
+        dex.method_ref(m.method_idx).unwrap_or_default()
+    );
     if let Some(code) = &m.code {
         match bytecode::decode(code.insns) {
             Ok(insns) => {
                 for i in insns {
-                    let _ = writeln!(out, "     *   {:04x}: {}", i.off, crate::render(dex, &i).unwrap_or_else(|e| e).replace("*/", "* /"));
+                    let _ = writeln!(
+                        out,
+                        "     *   {:04x}: {}",
+                        i.off,
+                        crate::render(dex, &i)
+                            .unwrap_or_else(|e| e)
+                            .replace("*/", "* /")
+                    );
                 }
             }
             Err(e) => {
@@ -804,22 +1192,47 @@ pub fn smali_fallback(dex: &Dex, m: &dex::Method, why: &str) -> String {
 
 /// The user's comment from the project file, as `// NOTE:` lines.
 fn user_note(key: &str, indent: &str) -> String {
-    crate::deobf::comment(key).map_or(String::new(), |c| c.lines().map(|l| format!("{indent}// NOTE: {l}
-")).collect())
+    crate::deobf::comment(key).map_or(String::new(), |c| {
+        c.lines()
+            .map(|l| {
+                format!(
+                    "{indent}// NOTE: {l}
+"
+                )
+            })
+            .collect()
+    })
 }
 
 fn renamed_comment(from: &Option<String>) -> String {
-    from.as_ref().map_or(String::new(), |f| format!("    /* renamed from: {f} */
-"))
+    from.as_ref().map_or(String::new(), |f| {
+        format!(
+            "    /* renamed from: {f} */
+"
+        )
+    })
 }
 
 /// For each block: the closest (reverse-postorder) block it immediately dominates that has two or
 /// more forward predecessors. Used as an `if` join when no post-dominator exists.
 fn merge_points(cfg: &Cfg, header: &[bool]) -> Vec<Option<usize>> {
     let n = cfg.blocks.len();
-    let succ: Vec<Vec<usize>> = cfg.blocks.iter().map(|b| b.succs().into_iter().chain(b.handlers.iter().map(|h| h.1)).collect()).collect();
+    let succ: Vec<Vec<usize>> = cfg
+        .blocks
+        .iter()
+        .map(|b| {
+            b.succs()
+                .into_iter()
+                .chain(b.handlers.iter().map(|h| h.1))
+                .collect()
+        })
+        .collect();
     let mut rpo = vec![usize::MAX; n];
-    let (mut seen, mut order, mut stack) = (vec![false; n], Vec::with_capacity(n), vec![(0usize, 0usize)]);
+    let (mut seen, mut order, mut stack) = (
+        vec![false; n],
+        Vec::with_capacity(n),
+        vec![(0usize, 0usize)],
+    );
     seen[0] = true;
     while let Some((v, i)) = stack.pop() {
         if let Some(&c) = succ[v].get(i) {
@@ -914,20 +1327,42 @@ impl<'a> Emitter<'a> {
         let follow = (0..n)
             .map(|h| {
                 let inside = |x: usize| x == h || body[h].contains(&x);
-                body[h].iter().chain([&h]).flat_map(|&x| cfg.blocks[x].succs()).filter(|&s| !inside(s)).min()
+                body[h]
+                    .iter()
+                    .chain([&h])
+                    .flat_map(|&x| cfg.blocks[x].succs())
+                    .filter(|&s| !inside(s))
+                    .min()
             })
             .collect();
         let follow = Self::loop_follows(cfg, &body, follow);
         Emitter {
             merge: merge_points(cfg, &header),
-            ctx, insns, cfg, bir, visited: vec![false; n], header, follow, loops: vec![],
-            lines: vec![], starts: HashMap::new(), labels: BTreeSet::new(), trys: vec![], try_exit: None, dups: 0, skip: HashMap::new(),
+            ctx,
+            insns,
+            cfg,
+            bir,
+            visited: vec![false; n],
+            header,
+            follow,
+            loops: vec![],
+            lines: vec![],
+            starts: HashMap::new(),
+            labels: BTreeSet::new(),
+            trys: vec![],
+            try_exit: None,
+            dups: 0,
+            skip: HashMap::new(),
         }
     }
 
     /// A loop with several exits that merge again (`found -> x = 1`, `done -> x = 0`) follows at the
     /// merge, so each exit becomes `...; break;` instead of one exit running on inside the loop.
-    fn loop_follows(cfg: &Cfg, body: &[Vec<usize>], mut follow: Vec<Option<usize>>) -> Vec<Option<usize>> {
+    fn loop_follows(
+        cfg: &Cfg,
+        body: &[Vec<usize>],
+        mut follow: Vec<Option<usize>>,
+    ) -> Vec<Option<usize>> {
         let chain = |mut x: usize| {
             let mut c = vec![x];
             while let Some(p) = cfg.ipdom[x].filter(|&p| p != x && c.len() < 64) {
@@ -939,11 +1374,20 @@ impl<'a> Emitter<'a> {
         for h in 0..body.len() {
             let Some(first) = follow[h] else { continue };
             let inside = |x: usize| x == h || body[h].contains(&x);
-            let mut exits: Vec<usize> = body[h].iter().chain([&h]).flat_map(|&x| cfg.blocks[x].succs()).filter(|&s| !inside(s)).collect();
+            let mut exits: Vec<usize> = body[h]
+                .iter()
+                .chain([&h])
+                .flat_map(|&x| cfg.blocks[x].succs())
+                .filter(|&s| !inside(s))
+                .collect();
             exits.sort_unstable();
             exits.dedup();
             // exits that leave the method (return/throw) don't need to meet the others
-            let chains: Vec<Vec<usize>> = exits.iter().map(|&e| chain(e)).filter(|c| c.len() > 1 || cfg.blocks[c[0]].term != Term::Exit).collect();
+            let chains: Vec<Vec<usize>> = exits
+                .iter()
+                .map(|&e| chain(e))
+                .filter(|c| c.len() > 1 || cfg.blocks[c[0]].term != Term::Exit)
+                .collect();
             if chains.len() < 2 {
                 continue;
             }
@@ -951,9 +1395,13 @@ impl<'a> Emitter<'a> {
             let ok = |m: usize| {
                 !inside(m)
                     && cfg.blocks[m].handlers == cfg.blocks[h].handlers
-                    && (0..body.len()).all(|h2| h2 == h || !body[h2].contains(&h) || body[h2].contains(&m))
+                    && (0..body.len())
+                        .all(|h2| h2 == h || !body[h2].contains(&h) || body[h2].contains(&m))
             };
-            if let Some(m) = chain(first).into_iter().find(|&m| ok(m) && chains.iter().all(|c| c.contains(&m))) {
+            if let Some(m) = chain(first)
+                .into_iter()
+                .find(|&m| ok(m) && chains.iter().all(|c| c.contains(&m)))
+            {
                 follow[h] = Some(m);
             }
         }
@@ -987,7 +1435,17 @@ impl<'a> Emitter<'a> {
             }
         }
         // implicit `return;` at the end of a void method
-        if self.lines.last().is_some_and(|l| l.0 == 2 && l.1 == "return;") && !self.lines.iter().rev().nth(1).is_some_and(|l| l.1.ends_with(':')) {
+        if self
+            .lines
+            .last()
+            .is_some_and(|l| l.0 == 2 && l.1 == "return;")
+            && !self
+                .lines
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|l| l.1.ends_with(':'))
+        {
             self.lines.pop();
         }
         hoist_declarations(&mut self.lines);
@@ -1006,7 +1464,13 @@ impl<'a> Emitter<'a> {
         let depth = self.loops.len();
         for (k, &(h, f)) in self.loops.iter().enumerate().rev() {
             let inner = k + 1 == depth;
-            let kw = if t == h { "continue" } else if f == Some(t) { "break" } else { continue };
+            let kw = if t == h {
+                "continue"
+            } else if f == Some(t) {
+                "break"
+            } else {
+                continue;
+            };
             if inner {
                 return Some(format!("{kw};"));
             }
@@ -1017,7 +1481,10 @@ impl<'a> Emitter<'a> {
     }
 
     fn jump_target(&self, t: usize) -> Option<()> {
-        self.loops.iter().any(|&(h, f)| t == h || f == Some(t)).then_some(())
+        self.loops
+            .iter()
+            .any(|&(h, f)| t == h || f == Some(t))
+            .then_some(())
     }
 
     /// `try { ... } catch (T e) { ... }` starting at `b`; returns where flow continues.
@@ -1040,7 +1507,11 @@ impl<'a> Emitter<'a> {
         let own = &hs[..hs.len() - outer];
         if let (Some(fin), Some(x)) = (self.finally_body(own, exit), exit) {
             // `monitorEnter(o); try { S } finally { monitorExit(o); }` is how d8 writes `synchronized (o) { S }`
-            let lock = fin.first().and_then(|l| l.strip_prefix("monitorExit(")).and_then(|l| l.strip_suffix(");")).map(str::to_string);
+            let lock = fin
+                .first()
+                .and_then(|l| l.strip_prefix("monitorExit("))
+                .and_then(|l| l.strip_suffix(");"))
+                .map(str::to_string);
             if let (Some(o), 1, 1) = (lock, fin.len(), own.len()) {
                 let enter = format!("monitorEnter({o});");
                 if try_at > 0 && self.lines[try_at - 1] == (ind, enter) {
@@ -1049,7 +1520,11 @@ impl<'a> Emitter<'a> {
                     let unlock = format!("monitorExit({o});");
                     let mut k = try_at;
                     while k < self.lines.len() {
-                        if self.lines[k].1 == unlock { self.remove_line(k) } else { k += 1 }
+                        if self.lines[k].1 == unlock {
+                            self.remove_line(k)
+                        } else {
+                            k += 1
+                        }
                     }
                     self.visited[own[0].1] = true;
                     *self.skip.entry(x).or_default() += 1;
@@ -1079,17 +1554,36 @@ impl<'a> Emitter<'a> {
 
     /// `monitorEnter(x); try { S } catch-all { monitorExit(x); throw }` -> `synchronized (x) { S }`.
     /// Returns None when the pattern does not match (nothing emitted then).
-    fn synchronized(&mut self, b: usize, hs: &[(Option<u32>, usize)], ind: usize) -> Option<Option<usize>> {
+    fn synchronized(
+        &mut self,
+        b: usize,
+        hs: &[(Option<u32>, usize)],
+        ind: usize,
+    ) -> Option<Option<usize>> {
         let &[(None, h)] = hs else { return None };
         let blk = &self.cfg.blocks[h];
         // javac: `e = caught; monitorExit(x)` in one block covered by its own catch-all;
         // d8 splits it: `e = caught` -> `monitorExit(x)` (covered by the catch-all) -> `throw e`
         let (e, x, m, t) = match (self.bir[h].0.as_slice(), &blk.term) {
-            ([ir::Stmt::Assign(Expr::Var(e), Expr::Caught), ir::Stmt::Monitor(false, x)], &Term::Goto(t)) if blk.handlers.iter().any(|&(ty, hh)| ty.is_none() && hh == h) => (e, x, h, t),
+            (
+                [
+                    ir::Stmt::Assign(Expr::Var(e), Expr::Caught),
+                    ir::Stmt::Monitor(false, x),
+                ],
+                &Term::Goto(t),
+            ) if blk.handlers.iter().any(|&(ty, hh)| ty.is_none() && hh == h) => (e, x, h, t),
             ([ir::Stmt::Assign(Expr::Var(e), Expr::Caught)], &Term::Goto(m)) => {
                 let mb = &self.cfg.blocks[m];
-                let ([ir::Stmt::Monitor(false, x)], Term::Goto(t)) = (self.bir[m].0.as_slice(), &mb.term) else { return None };
-                if !mb.handlers.iter().any(|&(ty, hh)| ty.is_none() && (hh == h || hh == m)) {
+                let ([ir::Stmt::Monitor(false, x)], Term::Goto(t)) =
+                    (self.bir[m].0.as_slice(), &mb.term)
+                else {
+                    return None;
+                };
+                if !mb
+                    .handlers
+                    .iter()
+                    .any(|&(ty, hh)| ty.is_none() && (hh == h || hh == m))
+                {
                     return None;
                 }
                 (e, x, m, *t)
@@ -1097,7 +1591,9 @@ impl<'a> Emitter<'a> {
             _ => return None,
         };
         let v = self.ctx.vars.as_ref()?;
-        let [ir::Stmt::Throw(Expr::Var(e2))] = self.bir[t].0.as_slice() else { return None };
+        let [ir::Stmt::Throw(Expr::Var(e2))] = self.bir[t].0.as_slice() else {
+            return None;
+        };
         if v.root[*e] != v.root[*e2] {
             return None;
         }
@@ -1134,7 +1630,11 @@ impl<'a> Emitter<'a> {
         }
         self.line(ind, "}".into());
         if let Some(x2) = exit {
-            if self.bir[x2].0.first().is_some_and(|s| self.ctx.stmt(s) == exit_line) {
+            if self.bir[x2]
+                .0
+                .first()
+                .is_some_and(|s| self.ctx.stmt(s) == exit_line)
+            {
                 *self.skip.entry(x2).or_default() += 1;
             }
         }
@@ -1143,25 +1643,48 @@ impl<'a> Emitter<'a> {
 
     /// Rendered statements of a `finally`: the last handler is a catch-all block
     /// `e = caught; S...; throw e;` and the try's exit starts with the same `S...`.
-    fn finally_body(&self, own: &[(Option<u32>, usize)], exit: Option<usize>) -> Option<Vec<String>> {
+    fn finally_body(
+        &self,
+        own: &[(Option<u32>, usize)],
+        exit: Option<usize>,
+    ) -> Option<Vec<String>> {
         let &(None, h) = own.last()? else { return None };
         let x = exit?;
         let stmts = &self.bir[h].0;
-        let (Some(ir::Stmt::Assign(Expr::Var(d), Expr::Caught)), Some(ir::Stmt::Throw(Expr::Var(t)))) = (stmts.first(), stmts.last()) else { return None };
+        let (
+            Some(ir::Stmt::Assign(Expr::Var(d), Expr::Caught)),
+            Some(ir::Stmt::Throw(Expr::Var(t))),
+        ) = (stmts.first(), stmts.last())
+        else {
+            return None;
+        };
         let v = self.ctx.vars.as_ref()?;
-        if self.visited[h] || v.root[*d] != v.root[*t] || stmts.len() < 3 || self.cfg.blocks[h].term != Term::Exit {
+        if self.visited[h]
+            || v.root[*d] != v.root[*t]
+            || stmts.len() < 3
+            || self.cfg.blocks[h].term != Term::Exit
+        {
             return None;
         }
-        let body: Vec<String> = stmts[1..stmts.len() - 1].iter().map(|s| self.ctx.stmt(s)).collect();
+        let body: Vec<String> = stmts[1..stmts.len() - 1]
+            .iter()
+            .map(|s| self.ctx.stmt(s))
+            .collect();
         let after = &self.bir[x].0;
         let have = self.skip.get(&x).copied().unwrap_or(0);
-        let same = after.len() >= have + body.len() && after[have..have + body.len()].iter().map(|s| self.ctx.stmt(s)).eq(body.iter().cloned());
+        let same = after.len() >= have + body.len()
+            && after[have..have + body.len()]
+                .iter()
+                .map(|s| self.ctx.stmt(s))
+                .eq(body.iter().cloned());
         same.then_some(body)
     }
 
     fn catch_clause(&mut self, ty: Option<u32>, h: usize, exit: Option<usize>, ind: usize) {
         {
-            let t = ty.and_then(|t| self.ctx.dex.type_name(t).ok()).map_or("Throwable".into(), |t| type_ref(&t));
+            let t = ty
+                .and_then(|t| self.ctx.dex.type_name(t).ok())
+                .map_or("Throwable".into(), |t| type_ref(&t));
             let var = match self.bir[h].0.first() {
                 Some(ir::Stmt::Assign(Expr::Var(d), Expr::Caught)) if !self.visited[h] => {
                     self.skip.insert(h, 1);
@@ -1182,14 +1705,19 @@ impl<'a> Emitter<'a> {
             }
             let hs = &self.cfg.blocks[b].handlers;
             // nested try: inner handlers come first, then the enclosing ones
-            let nested = |top: &Vec<(Option<u32>, usize)>| hs.len() > top.len() && hs.ends_with(top);
+            let nested =
+                |top: &Vec<(Option<u32>, usize)>| hs.len() > top.len() && hs.ends_with(top);
             if let Some(top) = self.trys.last() {
                 if hs != top && !nested(top) {
                     self.try_exit.get_or_insert(b);
                     return;
                 }
             }
-            if !hs.is_empty() && self.trys.last() != Some(hs) && !self.visited[b] && self.jump_target(b).is_none() {
+            if !hs.is_empty()
+                && self.trys.last() != Some(hs)
+                && !self.visited[b]
+                && self.jump_target(b).is_none()
+            {
                 match self.try_block(b, ind) {
                     Some(n) => {
                         b = n;
@@ -1213,7 +1741,10 @@ impl<'a> Emitter<'a> {
             // a short region that only continues where this construct ends: `if (A) { if (B) X else Y } else Y`
             if self.visited[b] && ind <= MAX_DEPTH && self.dups < 4 {
                 if let Some(region) = self.small_region(b, stop) {
-                    let saved: Vec<bool> = region.iter().map(|&r| std::mem::replace(&mut self.visited[r], false)).collect();
+                    let saved: Vec<bool> = region
+                        .iter()
+                        .map(|&r| std::mem::replace(&mut self.visited[r], false))
+                        .collect();
                     self.dups += 1;
                     self.seq(b, stop, ind);
                     self.dups -= 1;
@@ -1233,9 +1764,17 @@ impl<'a> Emitter<'a> {
                 self.loops.push((b, follow));
                 // header that only tests the loop condition -> `while (cond)`
                 let simple_head = match self.cfg.blocks[b].term {
-                    Term::If { taken, fall } if self.bir[b].0.is_empty() && self.cfg.blocks[b].handlers.is_empty() => {
+                    Term::If { taken, fall }
+                        if self.bir[b].0.is_empty() && self.cfg.blocks[b].handlers.is_empty() =>
+                    {
                         let c = self.bir[b].1.clone().unwrap_or(Expr::Raw("?".into()));
-                        if Some(taken) == follow { Some((c.negate(), fall)) } else if Some(fall) == follow { Some((c, taken)) } else { None }
+                        if Some(taken) == follow {
+                            Some((c.negate(), fall))
+                        } else if Some(fall) == follow {
+                            Some((c, taken))
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };
@@ -1292,7 +1831,10 @@ impl<'a> Emitter<'a> {
                     self.seq(taken, arm_stop, ind + 1);
                 } else {
                     let if_at = self.lines.len();
-                    self.line(ind, format!("if ({}) {{", self.ctx.expr(&cond.clone().negate(), None)));
+                    self.line(
+                        ind,
+                        format!("if ({}) {{", self.ctx.expr(&cond.clone().negate(), None)),
+                    );
                     self.seq(fall, arm_stop, ind + 1);
                     // empty then-arm (it just left the enclosing try): flip to `if (cond) { else-arm }`
                     if self.lines.len() == if_at + 1 && Some(taken) != arm_stop {
@@ -1308,7 +1850,9 @@ impl<'a> Emitter<'a> {
             }
             Term::Switch { cases, default } => {
                 let (cases, default) = (cases.clone(), *default);
-                let key = cond.as_ref().map_or("?".into(), |c| self.ctx.expr(c, Some("I")));
+                let key = cond
+                    .as_ref()
+                    .map_or("?".into(), |c| self.ctx.expr(c, Some("I")));
                 self.line(ind, format!("switch ({key}) {{"));
                 let mut k = 0;
                 while k < cases.len() {
@@ -1340,7 +1884,12 @@ impl<'a> Emitter<'a> {
             let blk = &self.cfg.blocks[x];
             stmts += self.bir[x].0.len();
             let same_try = blk.handlers.is_empty() || self.trys.last() == Some(&blk.handlers);
-            if self.header[x] || !same_try || matches!(blk.term, Term::Switch { .. }) || region.len() >= 4 || stmts > 6 {
+            if self.header[x]
+                || !same_try
+                || matches!(blk.term, Term::Switch { .. })
+                || region.len() >= 4
+                || stmts > 6
+            {
                 return None;
             }
             region.push(x);
@@ -1351,7 +1900,9 @@ impl<'a> Emitter<'a> {
 
     fn small_exit(&self, b: usize) -> bool {
         let blk = &self.cfg.blocks[b];
-        blk.term == Term::Exit && self.bir[b].0.len() <= 3 && (blk.handlers.is_empty() || self.trys.last() == Some(&blk.handlers))
+        blk.term == Term::Exit
+            && self.bir[b].0.len() <= 3
+            && (blk.handlers.is_empty() || self.trys.last() == Some(&blk.handlers))
     }
 
     fn case_body(&mut self, t: usize, join: Option<usize>, ind: usize) {
@@ -1386,11 +1937,23 @@ mod tests {
 
     #[test]
     fn enum_rewrites() {
-        assert_eq!(split_args("a, f(b, c), \"x, y\""), vec!["a", "f(b, c)", "\"x, y\""]);
+        assert_eq!(
+            split_args("a, f(b, c), \"x, y\""),
+            vec!["a", "f(b, c)", "\"x, y\""]
+        );
         let ctor = "    private Color(String str, int i, int i2) {\n        super(str, i);\n        this.rgb = i2;\n    }\n";
-        assert_eq!(enum_ctor(ctor), "    Color(int i2) {\n        this.rgb = i2;\n    }\n");
-        assert_eq!(replace_word("a[i] = c; cc = c2;", "c", "RED"), "a[i] = RED; cc = c2;");
-        assert_eq!(constant("RED", &["\"RED\"".into(), "0".into(), "255".into()]), Some((0, "RED(255)".into())));
+        assert_eq!(
+            enum_ctor(ctor),
+            "    Color(int i2) {\n        this.rgb = i2;\n    }\n"
+        );
+        assert_eq!(
+            replace_word("a[i] = c; cc = c2;", "c", "RED"),
+            "a[i] = RED; cc = c2;"
+        );
+        assert_eq!(
+            constant("RED", &["\"RED\"".into(), "0".into(), "255".into()]),
+            Some((0, "RED(255)".into()))
+        );
     }
 
     #[test]
@@ -1405,21 +1968,38 @@ mod tests {
         let d = crate::dex::tests::tiny_dex();
         let dex = Dex::parse(&d).unwrap();
         // 0: if-eqz v0, 5 ; 2: add-int/lit8 v1, v1, 1 ; 4: goto 0 ; 5: return-void
-        let units: Vec<u8> = [0x0038u16, 0x0005, 0x01d8, 0x0101, 0xfc28, 0x000e].iter().flat_map(|u| u.to_le_bytes()).collect();
+        let units: Vec<u8> = [0x0038u16, 0x0005, 0x01d8, 0x0101, 0xfc28, 0x000e]
+            .iter()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
         let insns = bytecode::decode(&units).unwrap();
         let mut cfg = cfg::build(&insns, &units, &[]).unwrap();
-        let mut bir: Bir = cfg.blocks.iter().map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap()).collect();
+        let mut bir: Bir = cfg
+            .blocks
+            .iter()
+            .map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap())
+            .collect();
         opt::inline(&cfg, &mut bir, 2);
         if opt::merge_conditions(&mut cfg, &mut bir) {
             cfg.recompute();
         }
-        let ctx = Ctx { dex: &dex, class: "La/b/Cls;", ret: "V".into(), vars: None };
+        let ctx = Ctx {
+            dex: &dex,
+            class: "La/b/Cls;",
+            ret: "V".into(),
+            vars: None,
+        };
         let mut e = Emitter::new(&ctx, &insns, &cfg, &bir);
         e.seq(0, None, 2);
         let out = e.finish();
-        assert!(out.contains("while (v0 != 0) {
+        assert!(
+            out.contains(
+                "while (v0 != 0) {
             v1 = v1 + 1;
-        }"), "{out}");
+        }"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1428,16 +2008,33 @@ mod tests {
         let dex = Dex::parse(&d).unwrap();
         // 0: if-eqz v0, 7 ; 2: if-nez v1, 9 ; 4: add-int/lit8 v2, v2, 1 ; 6: goto 0
         // 7: const/4 v3, 0 ; 8: goto 10 ; 9: const/4 v3, 1 ; 10: return-void
-        let units: Vec<u8> = [0x0038u16, 0x0007, 0x0139, 0x0007, 0x02d8, 0x0102, 0xfa28, 0x0312, 0x0228, 0x1312, 0x000e]
-            .iter().flat_map(|u| u.to_le_bytes()).collect();
+        let units: Vec<u8> = [
+            0x0038u16, 0x0007, 0x0139, 0x0007, 0x02d8, 0x0102, 0xfa28, 0x0312, 0x0228, 0x1312,
+            0x000e,
+        ]
+        .iter()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
         let insns = bytecode::decode(&units).unwrap();
         let cfg = cfg::build(&insns, &units, &[]).unwrap();
-        let bir: Bir = cfg.blocks.iter().map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap()).collect();
-        let ctx = Ctx { dex: &dex, class: "La/b/Cls;", ret: "V".into(), vars: None };
+        let bir: Bir = cfg
+            .blocks
+            .iter()
+            .map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap())
+            .collect();
+        let ctx = Ctx {
+            dex: &dex,
+            class: "La/b/Cls;",
+            ret: "V".into(),
+            vars: None,
+        };
         let mut e = Emitter::new(&ctx, &insns, &cfg, &bir);
         e.seq(0, None, 2);
         let out = e.finish();
-        assert!(!out.contains("goto") && out.contains("v3 = 0;") && out.contains("v3 = 1;"), "{out}");
+        assert!(
+            !out.contains("goto") && out.contains("v3 = 0;") && out.contains("v3 = 1;"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1445,17 +2042,38 @@ mod tests {
         let d = crate::dex::tests::tiny_dex();
         let dex = Dex::parse(&d).unwrap();
         // 0: throw v1  [try 0..1, catch-all -> 1] ; 1: move-exception v0 ; 2: return-void
-        let units: Vec<u8> = [0x0127u16, 0x000d, 0x000e].iter().flat_map(|u| u.to_le_bytes()).collect();
-        let tries = [crate::dex::Try { start: 0, count: 1, handlers: vec![(None, 1)] }];
+        let units: Vec<u8> = [0x0127u16, 0x000d, 0x000e]
+            .iter()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let tries = [crate::dex::Try {
+            start: 0,
+            count: 1,
+            handlers: vec![(None, 1)],
+        }];
         let insns = bytecode::decode(&units).unwrap();
         let cfg = cfg::build(&insns, &units, &tries).unwrap();
-        let bir: Bir = cfg.blocks.iter().map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap()).collect();
-        let ctx = Ctx { dex: &dex, class: "La/b/Cls;", ret: "V".into(), vars: None };
+        let bir: Bir = cfg
+            .blocks
+            .iter()
+            .map(|b| ir::lower(&dex, &insns, &units, b.first, b.last, &b.term).unwrap())
+            .collect();
+        let ctx = Ctx {
+            dex: &dex,
+            class: "La/b/Cls;",
+            ret: "V".into(),
+            vars: None,
+        };
         let mut e = Emitter::new(&ctx, &insns, &cfg, &bir);
         e.seq(0, None, 2);
         let out = e.finish();
-        assert!(out.contains("try {
+        assert!(
+            out.contains(
+                "try {
             throw v1;
-        } catch (Throwable th) {"), "{out}");
+        } catch (Throwable th) {"
+            ),
+            "{out}"
+        );
     }
 }

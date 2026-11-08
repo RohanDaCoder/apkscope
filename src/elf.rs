@@ -46,9 +46,19 @@ pub fn parse(d: &[u8]) -> Result<Elf, String> {
             let o = shoff + i * shentsize;
             let ty = rd(d, o + 4, 4)? as u32;
             let (off, size, link, ent) = if wide {
-                (rd(d, o + 0x18, 8)?, rd(d, o + 0x20, 8)?, rd(d, o + 0x28, 4)?, rd(d, o + 0x38, 8)?)
+                (
+                    rd(d, o + 0x18, 8)?,
+                    rd(d, o + 0x20, 8)?,
+                    rd(d, o + 0x28, 4)?,
+                    rd(d, o + 0x38, 8)?,
+                )
             } else {
-                (rd(d, o + 0x10, 4)?, rd(d, o + 0x14, 4)?, rd(d, o + 0x18, 4)?, rd(d, o + 0x24, 4)?)
+                (
+                    rd(d, o + 0x10, 4)?,
+                    rd(d, o + 0x14, 4)?,
+                    rd(d, o + 0x18, 4)?,
+                    rd(d, o + 0x24, 4)?,
+                )
             };
             Some((ty, off as usize, size as usize, link as usize, ent as usize))
         })
@@ -67,7 +77,9 @@ pub fn parse(d: &[u8]) -> Result<Elf, String> {
                     } else {
                         (rd(d, o, 4), d.get(o + 12).copied(), rd(d, o + 14, 2))
                     };
-                    let (Some(name), Some(info), Some(shndx)) = (name, info, shndx) else { continue };
+                    let (Some(name), Some(info), Some(shndx)) = (name, info, shndx) else {
+                        continue;
+                    };
                     let (bind, kind) = (info >> 4, info & 0xf);
                     // defined (not imported), global or weak, function or object
                     if shndx != 0 && (bind == 1 || bind == 2) && (kind == 1 || kind == 2) {
@@ -94,7 +106,12 @@ pub fn parse(d: &[u8]) -> Result<Elf, String> {
     }
     exports.sort();
     exports.dedup();
-    Ok(Elf { machine, bits: if wide { 64 } else { 32 }, needed, exports })
+    Ok(Elf {
+        machine,
+        bits: if wide { 64 } else { 32 },
+        needed,
+        exports,
+    })
 }
 
 /// `Java_com_example_Foo_bar__I` -> ("com.example.Foo", "bar"), per the JNI name mangling rules.
@@ -122,7 +139,9 @@ pub fn jni_target(sym: &str) -> Option<(String, String)> {
                 }
                 Some('0') => {
                     let hex: String = b.get(i + 2..i + 6)?.iter().collect();
-                    parts.last_mut()?.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                    parts
+                        .last_mut()?
+                        .push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
                     i += 5;
                 }
                 _ => parts.push(String::new()),
@@ -164,19 +183,31 @@ mod tests {
 
     #[test]
     fn jni_names() {
-        assert_eq!(jni_target("Java_com_example_Foo_bar"), Some(("com.example.Foo".into(), "bar".into())));
+        assert_eq!(
+            jni_target("Java_com_example_Foo_bar"),
+            Some(("com.example.Foo".into(), "bar".into()))
+        );
         // _1 is a literal underscore, __ starts the overload signature
-        assert_eq!(jni_target("Java_com_my_1app_Native_init__ILjava_lang_String_2"), Some(("com.my_app.Native".into(), "init".into())));
+        assert_eq!(
+            jni_target("Java_com_my_1app_Native_init__ILjava_lang_String_2"),
+            Some(("com.my_app.Native".into(), "init".into()))
+        );
         assert_eq!(jni_target("JNI_OnLoad"), None);
     }
 
     #[test]
     fn string_runs() {
-        assert_eq!(strings(b"\x00\x01https://a.b/c\x00ab\x00token=xyz", 6), vec!["https://a.b/c".to_string(), "token=xyz".to_string()]);
+        assert_eq!(
+            strings(b"\x00\x01https://a.b/c\x00ab\x00token=xyz", 6),
+            vec!["https://a.b/c".to_string(), "token=xyz".to_string()]
+        );
     }
 
     #[test]
     fn rejects_non_elf() {
-        assert!(parse(b"not an elf at all, just some bytes here.....................................").is_err());
+        assert!(
+            parse(b"not an elf at all, just some bytes here.....................................")
+                .is_err()
+        );
     }
 }

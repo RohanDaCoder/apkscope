@@ -7,13 +7,19 @@ use std::fmt::Write;
 type R<T> = Result<T, String>;
 
 fn u8_at(d: &[u8], o: usize) -> R<u8> {
-    d.get(o).copied().ok_or_else(|| format!("read past end at {o:#x}"))
+    d.get(o)
+        .copied()
+        .ok_or_else(|| format!("read past end at {o:#x}"))
 }
 fn u16_at(d: &[u8], o: usize) -> R<u16> {
-    d.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]])).ok_or_else(|| format!("read past end at {o:#x}"))
+    d.get(o..o + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .ok_or_else(|| format!("read past end at {o:#x}"))
 }
 fn u32_at(d: &[u8], o: usize) -> R<u32> {
-    d.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or_else(|| format!("read past end at {o:#x}"))
+    d.get(o..o + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .ok_or_else(|| format!("read past end at {o:#x}"))
 }
 
 /// ResStringPool -> all strings (style spans are ignored)
@@ -80,7 +86,14 @@ pub fn parse_table(d: &[u8]) -> R<Table> {
     if u16_at(d, 0)? != 0x0002 {
         return Err("not a resource table".into());
     }
-    let mut t = Table { package: String::new(), id: 0x7f, values: vec![], types: vec![], keys: vec![], configs: BTreeMap::new() };
+    let mut t = Table {
+        package: String::new(),
+        id: 0x7f,
+        values: vec![],
+        types: vec![],
+        keys: vec![],
+        configs: BTreeMap::new(),
+    };
     let mut at = u16_at(d, 2)? as usize;
     let mut pkgs = vec![];
     while at + 8 <= d.len() {
@@ -105,8 +118,12 @@ pub fn parse_table(d: &[u8]) -> R<Table> {
 
 fn package(d: &[u8], at: usize, t: &mut Table) -> R<()> {
     t.id = u32_at(d, at + 8)? as u8;
-    let name: Vec<u16> = (0..128).map(|k| u16_at(d, at + 12 + k * 2)).collect::<R<_>>()?;
-    t.package = String::from_utf16_lossy(&name).trim_end_matches('\0').to_string();
+    let name: Vec<u16> = (0..128)
+        .map(|k| u16_at(d, at + 12 + k * 2))
+        .collect::<R<_>>()?;
+    t.package = String::from_utf16_lossy(&name)
+        .trim_end_matches('\0')
+        .to_string();
     t.types = string_pool(d, at + u32_at(d, at + 268)? as usize)?;
     t.keys = string_pool(d, at + u32_at(d, at + 276)? as usize)?;
     let end = at + u32_at(d, at + 4)? as usize;
@@ -135,7 +152,10 @@ fn type_chunk(d: &[u8], c: usize, t: &mut Table) -> R<()> {
     if flags & 0x01 != 0 {
         // sparse: (entry index, offset / 4)
         for k in 0..count {
-            list.push((u16_at(d, offsets + k * 4)?, u16_at(d, offsets + k * 4 + 2)? as usize * 4));
+            list.push((
+                u16_at(d, offsets + k * 4)?,
+                u16_at(d, offsets + k * 4 + 2)? as usize * 4,
+            ));
         }
     } else if flags & 0x02 != 0 {
         for k in 0..count {
@@ -158,7 +178,10 @@ fn type_chunk(d: &[u8], c: usize, t: &mut Table) -> R<()> {
         let eflags = u16_at(d, e + 2)?;
         let (key, entry) = if eflags & 0x08 != 0 {
             // compact entry: key in the size slot, value type in the flags' high byte
-            (u16_at(d, e)? as u32, Entry::Simple(Value((eflags >> 8) as u8, u32_at(d, e + 4)?)))
+            (
+                u16_at(d, e)? as u32,
+                Entry::Simple(Value((eflags >> 8) as u8, u32_at(d, e + 4)?)),
+            )
         } else if eflags & 0x01 != 0 {
             let n = u32_at(d, e + 12)? as usize;
             let mut items = Vec::with_capacity(n);
@@ -170,7 +193,10 @@ fn type_chunk(d: &[u8], c: usize, t: &mut Table) -> R<()> {
             (u32_at(d, e + 4)?, Entry::Bag(u32_at(d, e + 8)?, items))
         } else {
             let v = e + u16_at(d, e)? as usize;
-            (u32_at(d, e + 4)?, Entry::Simple(Value(u8_at(d, v + 3)?, u32_at(d, v + 4)?)))
+            (
+                u32_at(d, e + 4)?,
+                Entry::Simple(Value(u8_at(d, v + 3)?, u32_at(d, v + 4)?)),
+            )
         };
         map.insert(k, (key, entry));
     }
@@ -181,11 +207,21 @@ fn type_chunk(d: &[u8], c: usize, t: &mut Table) -> R<()> {
 pub(crate) fn qualifier(d: &[u8], c: usize) -> R<String> {
     let size = u32_at(d, c)? as usize;
     let get8 = |o: usize| if o < size { u8_at(d, c + o) } else { Ok(0) };
-    let get16 = |o: usize| if o + 1 < size { u16_at(d, c + o) } else { Ok(0) };
+    let get16 = |o: usize| {
+        if o + 1 < size {
+            u16_at(d, c + o)
+        } else {
+            Ok(0)
+        }
+    };
     let mut q = Vec::new();
     let (mcc, mnc) = (get16(4)?, get16(6)?);
-    if mcc != 0 { q.push(format!("mcc{mcc}")) }
-    if mnc != 0 { q.push(format!("mnc{mnc:02}")) }
+    if mcc != 0 {
+        q.push(format!("mcc{mcc}"))
+    }
+    if mnc != 0 {
+        q.push(format!("mnc{mnc:02}"))
+    }
     let lang = [get8(8)?, get8(9)?];
     if lang[0] != 0 && lang[0] < 0x80 {
         q.push(String::from_utf8_lossy(&lang).into_owned());
@@ -195,32 +231,77 @@ pub(crate) fn qualifier(d: &[u8], c: usize) -> R<String> {
         }
     }
     let layout = get8(28)?;
-    match layout & 0xc0 { 0x40 => q.push("ldltr".into()), 0x80 => q.push("ldrtl".into()), _ => {} }
+    match layout & 0xc0 {
+        0x40 => q.push("ldltr".into()),
+        0x80 => q.push("ldrtl".into()),
+        _ => {}
+    }
     let (sw, w, h) = (get16(30)?, get16(32)?, get16(34)?);
-    if sw != 0 { q.push(format!("sw{sw}dp")) }
-    if w != 0 { q.push(format!("w{w}dp")) }
-    if h != 0 { q.push(format!("h{h}dp")) }
-    match layout & 0x0f { 1 => q.push("small".into()), 2 => q.push("normal".into()), 3 => q.push("large".into()), 4 => q.push("xlarge".into()), _ => {} }
-    match layout & 0x30 { 0x10 => q.push("notlong".into()), 0x20 => q.push("long".into()), _ => {} }
-    match get8(12)? { 1 => q.push("port".into()), 2 => q.push("land".into()), _ => {} }
+    if sw != 0 {
+        q.push(format!("sw{sw}dp"))
+    }
+    if w != 0 {
+        q.push(format!("w{w}dp"))
+    }
+    if h != 0 {
+        q.push(format!("h{h}dp"))
+    }
+    match layout & 0x0f {
+        1 => q.push("small".into()),
+        2 => q.push("normal".into()),
+        3 => q.push("large".into()),
+        4 => q.push("xlarge".into()),
+        _ => {}
+    }
+    match layout & 0x30 {
+        0x10 => q.push("notlong".into()),
+        0x20 => q.push("long".into()),
+        _ => {}
+    }
+    match get8(12)? {
+        1 => q.push("port".into()),
+        2 => q.push("land".into()),
+        _ => {}
+    }
     let ui = get8(29)?;
-    match ui & 0x0f { 2 => q.push("desk".into()), 3 => q.push("car".into()), 4 => q.push("television".into()), 5 => q.push("appliance".into()), 6 => q.push("watch".into()), 7 => q.push("vrheadset".into()), _ => {} }
-    match ui & 0x30 { 0x10 => q.push("notnight".into()), 0x20 => q.push("night".into()), _ => {} }
+    match ui & 0x0f {
+        2 => q.push("desk".into()),
+        3 => q.push("car".into()),
+        4 => q.push("television".into()),
+        5 => q.push("appliance".into()),
+        6 => q.push("watch".into()),
+        7 => q.push("vrheadset".into()),
+        _ => {}
+    }
+    match ui & 0x30 {
+        0x10 => q.push("notnight".into()),
+        0x20 => q.push("night".into()),
+        _ => {}
+    }
     match get16(14)? {
         0 => {}
-        120 => q.push("ldpi".into()), 160 => q.push("mdpi".into()), 213 => q.push("tvdpi".into()), 240 => q.push("hdpi".into()),
-        320 => q.push("xhdpi".into()), 480 => q.push("xxhdpi".into()), 640 => q.push("xxxhdpi".into()),
-        0xfffe => q.push("anydpi".into()), 0xffff => q.push("nodpi".into()),
+        120 => q.push("ldpi".into()),
+        160 => q.push("mdpi".into()),
+        213 => q.push("tvdpi".into()),
+        240 => q.push("hdpi".into()),
+        320 => q.push("xhdpi".into()),
+        480 => q.push("xxhdpi".into()),
+        640 => q.push("xxxhdpi".into()),
+        0xfffe => q.push("anydpi".into()),
+        0xffff => q.push("nodpi".into()),
         x => q.push(format!("{x}dpi")),
     }
     let sdk = get16(24)?;
-    if sdk != 0 { q.push(format!("v{sdk}")) }
+    if sdk != 0 {
+        q.push(format!("v{sdk}"))
+    }
     Ok(q.iter().map(|s| format!("-{s}")).collect())
 }
 
 /// Android's public framework resources (`0x01010054` -> attr `windowBackground`), from AOSP.
 fn framework(id: u32) -> Option<(&'static str, &'static str)> {
-    static TABLE: std::sync::OnceLock<HashMap<u32, (&'static str, &'static str)>> = std::sync::OnceLock::new();
+    static TABLE: std::sync::OnceLock<HashMap<u32, (&'static str, &'static str)>> =
+        std::sync::OnceLock::new();
     TABLE
         .get_or_init(|| {
             include_str!("data/android_public.txt")
@@ -228,7 +309,10 @@ fn framework(id: u32) -> Option<(&'static str, &'static str)> {
                 .filter(|l| !l.starts_with('#'))
                 .filter_map(|l| {
                     let mut p = l.split(' ');
-                    Some((u32::from_str_radix(p.next()?, 16).ok()?, (p.next()?, p.next()?)))
+                    Some((
+                        u32::from_str_radix(p.next()?, 16).ok()?,
+                        (p.next()?, p.next()?),
+                    ))
                 })
                 .collect()
         })
@@ -238,7 +322,8 @@ fn framework(id: u32) -> Option<(&'static str, &'static str)> {
 
 /// The reverse: (`attr`, `windowBackground`) -> `0x01010054`.
 pub fn framework_id(ty: &str, name: &str) -> Option<u32> {
-    static TABLE: std::sync::OnceLock<HashMap<(&'static str, &'static str), u32>> = std::sync::OnceLock::new();
+    static TABLE: std::sync::OnceLock<HashMap<(&'static str, &'static str), u32>> =
+        std::sync::OnceLock::new();
     TABLE
         .get_or_init(|| {
             include_str!("data/android_public.txt")
@@ -290,8 +375,15 @@ impl Names {
                         break;
                     }
                     if cty == 0x0201 {
-                        let (id, flags, count) = (u8_at(d, c + 8)?, u8_at(d, c + 9)?, u32_at(d, c + 12)? as usize);
-                        let (entries, offsets) = (c + u32_at(d, c + 16)? as usize, c + u16_at(d, c + 2)? as usize);
+                        let (id, flags, count) = (
+                            u8_at(d, c + 8)?,
+                            u8_at(d, c + 9)?,
+                            u32_at(d, c + 12)? as usize,
+                        );
+                        let (entries, offsets) = (
+                            c + u32_at(d, c + 16)? as usize,
+                            c + u16_at(d, c + 2)? as usize,
+                        );
                         let (got, left) = seen.entry(id).or_insert_with(|| (Vec::new(), 0));
                         if count > got.len() {
                             *left += count - got.len();
@@ -301,11 +393,17 @@ impl Names {
                             c += csize;
                             continue;
                         }
-                        let tn = types.get(id as usize - 1).cloned().unwrap_or_else(|| format!("type{id}"));
+                        let tn = types
+                            .get(id as usize - 1)
+                            .cloned()
+                            .unwrap_or_else(|| format!("type{id}"));
                         for k in 0..count {
                             // same three offset layouts as `type_chunk`
                             let (e, o) = if flags & 0x01 != 0 {
-                                (u16_at(d, offsets + k * 4)?, u16_at(d, offsets + k * 4 + 2)? as usize * 4)
+                                (
+                                    u16_at(d, offsets + k * 4)?,
+                                    u16_at(d, offsets + k * 4 + 2)? as usize * 4,
+                                )
                             } else if flags & 0x02 != 0 {
                                 match u16_at(d, offsets + k * 2)? {
                                     0xffff => continue,
@@ -329,8 +427,15 @@ impl Names {
                                 None => {}
                             }
                             let p = entries + o;
-                            let key = if u16_at(d, p + 2)? & 0x08 != 0 { u16_at(d, p)? as u32 } else { u32_at(d, p + 4)? };
-                            let kn = keys.get(key as usize).cloned().unwrap_or_else(|| format!("res_{rid:08x}"));
+                            let key = if u16_at(d, p + 2)? & 0x08 != 0 {
+                                u16_at(d, p)? as u32
+                            } else {
+                                u32_at(d, p + 4)?
+                            };
+                            let kn = keys
+                                .get(key as usize)
+                                .cloned()
+                                .unwrap_or_else(|| format!("res_{rid:08x}"));
                             map.insert(rid, (tn.clone(), kn));
                         }
                     }
@@ -347,8 +452,16 @@ impl Names {
         for ((ty, _), entries) in &t.configs {
             for (&e, (key, _)) in entries {
                 let id = (t.id as u32) << 24 | (*ty as u32) << 16 | e as u32;
-                let tn = t.types.get(*ty as usize - 1).cloned().unwrap_or_else(|| format!("type{ty}"));
-                let kn = t.keys.get(*key as usize).cloned().unwrap_or_else(|| format!("res_{id:08x}"));
+                let tn = t
+                    .types
+                    .get(*ty as usize - 1)
+                    .cloned()
+                    .unwrap_or_else(|| format!("type{ty}"));
+                let kn = t
+                    .keys
+                    .get(*key as usize)
+                    .cloned()
+                    .unwrap_or_else(|| format!("res_{id:08x}"));
                 map.entry(id).or_insert((tn, kn));
             }
         }
@@ -371,11 +484,17 @@ impl Names {
 
     /// `type/name` -> id, for the app's own resources.
     pub fn id_of(&self, ty: &str, name: &str) -> Option<u32> {
-        self.map.iter().find(|(_, v)| v.0 == ty && v.1 == name).map(|(k, _)| *k)
+        self.map
+            .iter()
+            .find(|(_, v)| v.0 == ty && v.1 == name)
+            .map(|(k, _)| *k)
     }
 
     pub fn name(&self, id: u32) -> Option<&str> {
-        self.map.get(&id).map(|x| x.1.as_str()).or_else(|| framework(id).map(|x| x.1))
+        self.map
+            .get(&id)
+            .map(|x| x.1.as_str())
+            .or_else(|| framework(id).map(|x| x.1))
     }
 }
 
@@ -390,14 +509,24 @@ fn complex(data: u32, units: &[&str]) -> String {
 fn trim_float(v: f64) -> String {
     let s = format!("{v:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() || s == "-" { "0".into() } else { s.to_string() }
+    if s.is_empty() || s == "-" {
+        "0".into()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Text form of a typed value as it would appear in resource XML.
 pub fn format_value(v: Value, strings: &[String], names: &Names) -> String {
     let Value(ty, data) = v;
     match ty {
-        0x00 => if data == 1 { "@empty".into() } else { "@null".into() },
+        0x00 => {
+            if data == 1 {
+                "@empty".into()
+            } else {
+                "@null".into()
+            }
+        }
         0x01 | 0x07 => names.reference(data, '@'),
         0x02 | 0x08 => names.reference(data, '?'),
         0x03 => strings.get(data as usize).cloned().unwrap_or_default(),
@@ -407,7 +536,10 @@ pub fn format_value(v: Value, strings: &[String], names: &Names) -> String {
             let s = complex(data, &["%", "%p"]);
             // fractions are stored as 0..1
             let (num, unit) = s.split_at(s.find('%').unwrap_or(s.len()));
-            format!("{}{unit}", trim_float(num.parse::<f64>().unwrap_or(0.0) * 100.0))
+            format!(
+                "{}{unit}",
+                trim_float(num.parse::<f64>().unwrap_or(0.0) * 100.0)
+            )
         }
         0x10 => (data as i32).to_string(),
         0x11 => format!("0x{data:08x}"),
@@ -421,7 +553,10 @@ pub fn format_value(v: Value, strings: &[String], names: &Names) -> String {
 }
 
 pub fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Escape for a resource string body (apostrophes and leading @/? have meaning there).
@@ -438,7 +573,9 @@ pub fn decode_xml(d: &[u8], names: Option<&Names>) -> R<String> {
     if u16_at(d, 0)? != 0x0003 {
         return Err("not binary XML".into());
     }
-    let empty = Names { map: HashMap::new() };
+    let empty = Names {
+        map: HashMap::new(),
+    };
     let names = names.unwrap_or(&empty);
     let mut strings: Vec<String> = Vec::new();
     let mut res_ids: Vec<u32> = Vec::new();
@@ -450,16 +587,27 @@ pub fn decode_xml(d: &[u8], names: Option<&Names>) -> R<String> {
     let s = |strings: &Vec<String>, i: u32| strings.get(i as usize).cloned().unwrap_or_default();
     let mut at = u16_at(d, 2)? as usize;
     while at + 8 <= d.len() {
-        let (ty, hsize, size) = (u16_at(d, at)?, u16_at(d, at + 2)? as usize, u32_at(d, at + 4)? as usize);
+        let (ty, hsize, size) = (
+            u16_at(d, at)?,
+            u16_at(d, at + 2)? as usize,
+            u32_at(d, at + 4)? as usize,
+        );
         if size < 8 {
             break;
         }
         let body = at + hsize;
         match ty {
             0x0001 => strings = string_pool(d, at)?,
-            0x0180 => res_ids = (0..(size - hsize) / 4).map(|k| u32_at(d, body + k * 4)).collect::<R<_>>()?,
+            0x0180 => {
+                res_ids = (0..(size - hsize) / 4)
+                    .map(|k| u32_at(d, body + k * 4))
+                    .collect::<R<_>>()?
+            }
             0x0100 => {
-                let (prefix, uri) = (s(&strings, u32_at(d, body)?), s(&strings, u32_at(d, body + 4)?));
+                let (prefix, uri) = (
+                    s(&strings, u32_at(d, body)?),
+                    s(&strings, u32_at(d, body + 4)?),
+                );
                 ns.insert(uri.clone(), prefix.clone());
                 pending_ns.push((prefix, uri));
             }
@@ -468,7 +616,11 @@ pub fn decode_xml(d: &[u8], names: Option<&Names>) -> R<String> {
                     out += ">\n";
                 }
                 let name = s(&strings, u32_at(d, body + 4)?);
-                let (astart, asize, acount) = (u16_at(d, body + 8)? as usize, u16_at(d, body + 10)? as usize, u16_at(d, body + 12)? as usize);
+                let (astart, asize, acount) = (
+                    u16_at(d, body + 8)? as usize,
+                    u16_at(d, body + 10)? as usize,
+                    u16_at(d, body + 12)? as usize,
+                );
                 let pad = "    ".repeat(depth);
                 let _ = write!(out, "{pad}<{name}");
                 let attr_pad = format!("\n{pad}    ");
@@ -482,20 +634,37 @@ pub fn decode_xml(d: &[u8], names: Option<&Names>) -> R<String> {
                     let mut an = s(&strings, aname);
                     if an.is_empty() {
                         // obfuscated attribute names: fall back to the resource id
-                        an = res_ids.get(aname as usize).map_or(format!("attr{aname}"), |id| names.name(*id).map_or(format!("attr_{id:08x}"), str::to_string));
+                        an = res_ids
+                            .get(aname as usize)
+                            .map_or(format!("attr{aname}"), |id| {
+                                names
+                                    .name(*id)
+                                    .map_or(format!("attr_{id:08x}"), str::to_string)
+                            });
                     }
-                    let mut prefix = if ans == u32::MAX { None } else { ns.get(&s(&strings, ans)).cloned() };
+                    let mut prefix = if ans == u32::MAX {
+                        None
+                    } else {
+                        ns.get(&s(&strings, ans)).cloned()
+                    };
                     // Android reads framework attributes by id alone; packers blank or fake their
                     // name and namespace strings, so the id decides both
-                    if let Some(("attr", fw)) = res_ids.get(aname as usize).and_then(|&id| framework(id)) {
+                    if let Some(("attr", fw)) =
+                        res_ids.get(aname as usize).and_then(|&id| framework(id))
+                    {
                         an = fw.to_string();
-                        prefix = Some(ns.get("http://schemas.android.com/apk/res/android").cloned().unwrap_or_else(|| "android".into()));
+                        prefix = Some(
+                            ns.get("http://schemas.android.com/apk/res/android")
+                                .cloned()
+                                .unwrap_or_else(|| "android".into()),
+                        );
                     }
                     let full = prefix.map_or(an.clone(), |p| format!("{p}:{an}"));
                     let text = if raw != u32::MAX {
                         s(&strings, raw)
                     } else {
-                        framework_constant(&an, value).unwrap_or_else(|| format_value(value, &strings, names))
+                        framework_constant(&an, value)
+                            .unwrap_or_else(|| format_value(value, &strings, names))
                     };
                     let _ = write!(out, "{attr_pad}{full}=\"{}\"", xml_escape(&text));
                 }
@@ -533,11 +702,27 @@ fn framework_constant(attr: &str, Value(ty, data): Value) -> Option<String> {
         return None;
     }
     let enums: &[(u32, &str)] = match attr {
-        "layout_width" | "layout_height" => &[(0xffffffff, "match_parent"), (0xfffffffe, "wrap_content")],
+        "layout_width" | "layout_height" => {
+            &[(0xffffffff, "match_parent"), (0xfffffffe, "wrap_content")]
+        }
         "orientation" => &[(0, "horizontal"), (1, "vertical")],
         "visibility" => &[(0, "visible"), (1, "invisible"), (2, "gone")],
-        "textStyle" => &[(0, "normal"), (1, "bold"), (2, "italic"), (3, "bold|italic")],
-        "scaleType" => &[(0, "matrix"), (1, "fitXY"), (2, "fitStart"), (3, "fitCenter"), (4, "fitEnd"), (5, "center"), (6, "centerCrop"), (7, "centerInside")],
+        "textStyle" => &[
+            (0, "normal"),
+            (1, "bold"),
+            (2, "italic"),
+            (3, "bold|italic"),
+        ],
+        "scaleType" => &[
+            (0, "matrix"),
+            (1, "fitXY"),
+            (2, "fitStart"),
+            (3, "fitCenter"),
+            (4, "fitEnd"),
+            (5, "center"),
+            (6, "centerCrop"),
+            (7, "centerInside"),
+        ],
         "ellipsize" => &[(1, "start"), (2, "middle"), (3, "end"), (4, "marquee")],
         "gravity" | "layout_gravity" | "foregroundGravity" => return Some(gravity(data)),
         _ => return None,
@@ -569,9 +754,17 @@ fn gravity(g: u32) -> String {
             }
         }
     }
-    if g & 0x80 != 0 { out.push("clip_vertical") }
-    if g & 0x08 != 0 { out.push("clip_horizontal") }
-    if out.is_empty() { format!("0x{g:x}") } else { out.join("|") }
+    if g & 0x80 != 0 {
+        out.push("clip_vertical")
+    }
+    if g & 0x08 != 0 {
+        out.push("clip_horizontal")
+    }
+    if out.is_empty() {
+        format!("0x{g:x}")
+    } else {
+        out.join("|")
+    }
 }
 
 /// `values*/` XML files and file-backed resources of a table.
@@ -582,75 +775,157 @@ pub struct Decoded {
     pub files: Vec<(String, String)>,
 }
 
-const PLURALS: [(u32, &str); 6] = [(0x01000004, "other"), (0x01000005, "zero"), (0x01000006, "one"), (0x01000007, "two"), (0x01000008, "few"), (0x01000009, "many")];
+const PLURALS: [(u32, &str); 6] = [
+    (0x01000004, "other"),
+    (0x01000005, "zero"),
+    (0x01000006, "one"),
+    (0x01000007, "two"),
+    (0x01000008, "few"),
+    (0x01000009, "many"),
+];
 
 pub fn decode_table(t: &Table, names: &Names) -> Decoded {
     let mut values: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut files = Vec::new();
     for ((ty, qual), entries) in &t.configs {
-        let tname = t.types.get(*ty as usize - 1).cloned().unwrap_or_else(|| format!("type{ty}"));
+        let tname = t
+            .types
+            .get(*ty as usize - 1)
+            .cloned()
+            .unwrap_or_else(|| format!("type{ty}"));
         for (key, entry) in entries.values() {
             let name = xml_escape(t.keys.get(*key as usize).map_or("unnamed", |s| s.as_str()));
             let fmt = |v: Value| format_value(v, &t.values, names);
             match entry {
                 // a string value pointing into res/ is a file resource
-                Entry::Simple(v @ Value(0x03, i)) if t.values.get(*i as usize).is_some_and(|p| p.starts_with("res/")) && tname != "string" => {
+                Entry::Simple(v @ Value(0x03, i))
+                    if t.values
+                        .get(*i as usize)
+                        .is_some_and(|p| p.starts_with("res/"))
+                        && tname != "string" =>
+                {
                     let src = t.values[*i as usize].clone();
-                    let ext = if src.ends_with(".9.png") { ".9.png" } else { src.rfind('.').map_or("", |k| &src[k..]) };
+                    let ext = if src.ends_with(".9.png") {
+                        ".9.png"
+                    } else {
+                        src.rfind('.').map_or("", |k| &src[k..])
+                    };
                     let _ = v;
                     files.push((format!("{tname}{qual}/{name}{ext}"), src));
                 }
                 Entry::Simple(v) => {
                     let line = match tname.as_str() {
-                        "string" => format!("    <string name=\"{name}\">{}</string>", res_string(&fmt(*v))),
+                        "string" => format!(
+                            "    <string name=\"{name}\">{}</string>",
+                            res_string(&fmt(*v))
+                        ),
                         "id" => format!("    <item type=\"id\" name=\"{name}\" />"),
-                        "color" | "dimen" | "bool" | "integer" | "fraction" => format!("    <{tname} name=\"{name}\">{}</{tname}>", xml_escape(&fmt(*v))),
-                        _ => format!("    <item type=\"{tname}\" name=\"{name}\">{}</item>", xml_escape(&fmt(*v))),
+                        "color" | "dimen" | "bool" | "integer" | "fraction" => format!(
+                            "    <{tname} name=\"{name}\">{}</{tname}>",
+                            xml_escape(&fmt(*v))
+                        ),
+                        _ => format!(
+                            "    <item type=\"{tname}\" name=\"{name}\">{}</item>",
+                            xml_escape(&fmt(*v))
+                        ),
                     };
-                    values.entry(format!("values{qual}/{}.xml", file_for(&tname))).or_default().push(line);
+                    values
+                        .entry(format!("values{qual}/{}.xml", file_for(&tname)))
+                        .or_default()
+                        .push(line);
                 }
                 Entry::Bag(parent, items) => {
                     let mut s = String::new();
                     match tname.as_str() {
                         "style" => {
-                            let p = if *parent != 0 { format!(" parent=\"{}\"", xml_escape(&names.reference(*parent, '@').trim_start_matches("@style/").to_string())) } else { String::new() };
+                            let p = if *parent != 0 {
+                                format!(
+                                    " parent=\"{}\"",
+                                    xml_escape(
+                                        names.reference(*parent, '@').trim_start_matches("@style/")
+                                    )
+                                )
+                            } else {
+                                String::new()
+                            };
                             let _ = writeln!(s, "    <style name=\"{name}\"{p}>");
                             for (attr, v) in items {
                                 let an = names.reference(*attr, '?');
                                 // style items name the attribute bare: `colorPrimary`, `android:windowBackground`
                                 let an = an.replacen("?android:attr/", "android:", 1);
                                 let an = an.trim_start_matches("?attr/").trim_start_matches('?');
-                                let _ = writeln!(s, "        <item name=\"{}\">{}</item>", xml_escape(an), xml_escape(&fmt(*v)));
+                                let _ = writeln!(
+                                    s,
+                                    "        <item name=\"{}\">{}</item>",
+                                    xml_escape(an),
+                                    xml_escape(&fmt(*v))
+                                );
                             }
                             s += "    </style>";
                         }
                         "plurals" => {
                             let _ = writeln!(s, "    <plurals name=\"{name}\">");
                             for (q, v) in items {
-                                let qn = PLURALS.iter().find(|p| p.0 == *q).map_or("other", |p| p.1);
-                                let _ = writeln!(s, "        <item quantity=\"{qn}\">{}</item>", res_string(&fmt(*v)));
+                                let qn =
+                                    PLURALS.iter().find(|p| p.0 == *q).map_or("other", |p| p.1);
+                                let _ = writeln!(
+                                    s,
+                                    "        <item quantity=\"{qn}\">{}</item>",
+                                    res_string(&fmt(*v))
+                                );
                             }
                             s += "    </plurals>";
                         }
                         "array" => {
-                            let tag = if items.iter().all(|(_, v)| v.0 == 0x03) { "string-array" } else if items.iter().all(|(_, v)| v.0 == 0x10) { "integer-array" } else { "array" };
+                            let tag = if items.iter().all(|(_, v)| v.0 == 0x03) {
+                                "string-array"
+                            } else if items.iter().all(|(_, v)| v.0 == 0x10) {
+                                "integer-array"
+                            } else {
+                                "array"
+                            };
                             let _ = writeln!(s, "    <{tag} name=\"{name}\">");
                             for (_, v) in items {
-                                let _ = writeln!(s, "        <item>{}</item>", if v.0 == 0x03 { res_string(&fmt(*v)) } else { xml_escape(&fmt(*v)) });
+                                let _ = writeln!(
+                                    s,
+                                    "        <item>{}</item>",
+                                    if v.0 == 0x03 {
+                                        res_string(&fmt(*v))
+                                    } else {
+                                        xml_escape(&fmt(*v))
+                                    }
+                                );
                             }
                             let _ = write!(s, "    </{tag}>");
                         }
                         "attr" => {
-                            let format = items.iter().find(|(k, _)| *k == 0x01000000).map_or(0xffff, |(_, v)| v.1);
-                            let kids: Vec<_> = items.iter().filter(|(k, _)| k >> 24 != 0x01).collect();
-                            let kind = if format & 0x20000 != 0 { "flag" } else { "enum" };
+                            let format = items
+                                .iter()
+                                .find(|(k, _)| *k == 0x01000000)
+                                .map_or(0xffff, |(_, v)| v.1);
+                            let kids: Vec<_> =
+                                items.iter().filter(|(k, _)| k >> 24 != 0x01).collect();
+                            let kind = if format & 0x20000 != 0 {
+                                "flag"
+                            } else {
+                                "enum"
+                            };
                             if kids.is_empty() {
-                                let _ = write!(s, "    <attr name=\"{name}\" format=\"{}\" />", attr_format(format));
+                                let _ = write!(
+                                    s,
+                                    "    <attr name=\"{name}\" format=\"{}\" />",
+                                    attr_format(format)
+                                );
                             } else {
                                 let _ = writeln!(s, "    <attr name=\"{name}\">");
                                 for (k, v) in kids {
                                     let kn = names.name(*k).unwrap_or("unknown");
-                                    let _ = writeln!(s, "        <{kind} name=\"{}\" value=\"{}\" />", xml_escape(kn), fmt(*v));
+                                    let _ = writeln!(
+                                        s,
+                                        "        <{kind} name=\"{}\" value=\"{}\" />",
+                                        xml_escape(kn),
+                                        fmt(*v)
+                                    );
                                 }
                                 s += "    </attr>";
                             }
@@ -658,38 +933,72 @@ pub fn decode_table(t: &Table, names: &Names) -> Decoded {
                         _ => {
                             let _ = writeln!(s, "    <item type=\"{tname}\" name=\"{name}\">");
                             for (k, v) in items {
-                                let _ = writeln!(s, "        <item name=\"{}\">{}</item>", xml_escape(&names.reference(*k, '@')), xml_escape(&fmt(*v)));
+                                let _ = writeln!(
+                                    s,
+                                    "        <item name=\"{}\">{}</item>",
+                                    xml_escape(&names.reference(*k, '@')),
+                                    xml_escape(&fmt(*v))
+                                );
                             }
                             s += "    </item>";
                         }
                     }
-                    values.entry(format!("values{qual}/{}.xml", file_for(&tname))).or_default().push(s);
+                    values
+                        .entry(format!("values{qual}/{}.xml", file_for(&tname)))
+                        .or_default()
+                        .push(s);
                 }
             }
         }
     }
     let values = values
         .into_iter()
-        .map(|(path, lines)| (path, format!("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n{}\n</resources>\n", lines.join("\n"))))
+        .map(|(path, lines)| {
+            (
+                path,
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n{}\n</resources>\n",
+                    lines.join("\n")
+                ),
+            )
+        })
         .collect();
     Decoded { values, files }
 }
 
 fn file_for(tname: &str) -> String {
     match tname {
-        "string" | "color" | "dimen" | "bool" | "integer" | "style" | "attr" | "fraction" | "array" | "id" => format!("{tname}s"),
+        "string" | "color" | "dimen" | "bool" | "integer" | "style" | "attr" | "fraction"
+        | "array" | "id" => format!("{tname}s"),
         "plurals" => "plurals".into(),
         t => format!("{t}s"),
     }
 }
 
 fn attr_format(f: u32) -> String {
-    let names = [(1, "reference"), (2, "string"), (4, "integer"), (8, "boolean"), (0x10, "color"), (0x20, "float"), (0x40, "dimension"), (0x80, "fraction")];
+    let names = [
+        (1, "reference"),
+        (2, "string"),
+        (4, "integer"),
+        (8, "boolean"),
+        (0x10, "color"),
+        (0x20, "float"),
+        (0x40, "dimension"),
+        (0x80, "fraction"),
+    ];
     if f & 0xffff == 0xffff {
         return "reference|string|integer|boolean|color|float|dimension|fraction".into();
     }
-    let v: Vec<&str> = names.iter().filter(|(b, _)| f & b != 0).map(|x| x.1).collect();
-    if v.is_empty() { "string".into() } else { v.join("|") }
+    let v: Vec<&str> = names
+        .iter()
+        .filter(|(b, _)| f & b != 0)
+        .map(|x| x.1)
+        .collect();
+    if v.is_empty() {
+        "string".into()
+    } else {
+        v.join("|")
+    }
 }
 
 #[cfg(test)]
@@ -698,22 +1007,41 @@ mod tests {
 
     #[test]
     fn values_format() {
-        let names = Names { map: HashMap::new() };
+        let names = Names {
+            map: HashMap::new(),
+        };
         assert_eq!(format_value(Value(0x12, 1), &[], &names), "true");
-        assert_eq!(format_value(Value(0x1c, 0xff112233), &[], &names), "#ff112233");
+        assert_eq!(
+            format_value(Value(0x1c, 0xff112233), &[], &names),
+            "#ff112233"
+        );
         // 16dp: mantissa 16, radix 0, unit dp
-        assert_eq!(format_value(Value(0x05, (16 << 8) | 1), &[], &names), "16dp");
+        assert_eq!(
+            format_value(Value(0x05, (16 << 8) | 1), &[], &names),
+            "16dp"
+        );
         // 1.5sp: mantissa 1.5 * 2^7 = 192, radix 1
-        assert_eq!(format_value(Value(0x05, (192 << 8) | (1 << 4) | 2), &[], &names), "1.5sp");
+        assert_eq!(
+            format_value(Value(0x05, (192 << 8) | (1 << 4) | 2), &[], &names),
+            "1.5sp"
+        );
         assert_eq!(res_string("it's @home"), "it\\'s @home");
         assert_eq!(res_string("@x"), "\\@x");
     }
 
     #[test]
     fn framework_names() {
-        let names = Names { map: HashMap::new() };
-        assert_eq!(names.reference(0x01010054, '?'), "?android:attr/windowBackground");
-        assert_eq!(names.reference(0x0106000d, '@'), "@android:color/transparent");
+        let names = Names {
+            map: HashMap::new(),
+        };
+        assert_eq!(
+            names.reference(0x01010054, '?'),
+            "?android:attr/windowBackground"
+        );
+        assert_eq!(
+            names.reference(0x0106000d, '@'),
+            "@android:color/transparent"
+        );
         assert_eq!(names.name(0x01010000), Some("theme"));
     }
 
@@ -721,7 +1049,10 @@ mod tests {
     fn framework_constants() {
         assert_eq!(gravity(0x11), "center");
         assert_eq!(gravity(0x00800003 | 0x10), "start|center_vertical");
-        assert_eq!(framework_constant("layout_width", Value(0x10, 0xfffffffe)).as_deref(), Some("wrap_content"));
+        assert_eq!(
+            framework_constant("layout_width", Value(0x10, 0xfffffffe)).as_deref(),
+            Some("wrap_content")
+        );
     }
 
     #[test]

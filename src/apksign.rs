@@ -27,7 +27,11 @@ fn tlv(tag: u8, c: &[u8]) -> Vec<u8> {
     match c.len() {
         n @ 0..0x80 => o.push(n as u8),
         n => {
-            let bytes: Vec<u8> = n.to_be_bytes().into_iter().skip_while(|&b| b == 0).collect();
+            let bytes: Vec<u8> = n
+                .to_be_bytes()
+                .into_iter()
+                .skip_while(|&b| b == 0)
+                .collect();
             o.push(0x80 | bytes.len() as u8);
             o.extend(bytes);
         }
@@ -74,7 +78,11 @@ fn der_time(unix: i64) -> Vec<u8> {
     let (y, m, d) = civil(unix.div_euclid(86_400));
     let s = unix.rem_euclid(86_400);
     let hms = format!("{:02}{:02}{:02}Z", s / 3600, s / 60 % 60, s % 60);
-    if y < 2050 { tlv(0x17, format!("{:02}{m:02}{d:02}{hms}", y % 100).as_bytes()) } else { tlv(0x18, format!("{y:04}{m:02}{d:02}{hms}").as_bytes()) }
+    if y < 2050 {
+        tlv(0x17, format!("{:02}{m:02}{d:02}{hms}", y % 100).as_bytes())
+    } else {
+        tlv(0x18, format!("{y:04}{m:02}{d:02}{hms}").as_bytes())
+    }
 }
 
 fn sha256_rsa_alg() -> Vec<u8> {
@@ -93,11 +101,21 @@ pub struct Key {
 pub fn generate(name: &str) -> Result<Key, String> {
     let mut rng = rand::thread_rng();
     let private = RsaPrivateKey::new(&mut rng, 2048).map_err(|e| e.to_string())?;
-    let spki = private.to_public_key().to_public_key_der().map_err(|e| e.to_string())?.as_bytes().to_vec();
+    let spki = private
+        .to_public_key()
+        .to_public_key_der()
+        .map_err(|e| e.to_string())?
+        .as_bytes()
+        .to_vec();
     let mut serial: [u8; 16] = rand::random();
     serial[0] &= 0x7f;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    let dn = seq(&[tlv(0x31, &seq(&[der_oid("2.5.4.3"), tlv(0x0c, name.as_bytes())]))]);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let dn = seq(&[tlv(
+        0x31,
+        &seq(&[der_oid("2.5.4.3"), tlv(0x0c, name.as_bytes())]),
+    )]);
     let tbs = seq(&[
         tlv(0xa0, &tlv(0x02, &[2])),
         tlv(0x02, &serial),
@@ -107,18 +125,32 @@ pub fn generate(name: &str) -> Result<Key, String> {
         dn,
         spki,
     ]);
-    let sig = SigningKey::<Sha256>::new(private.clone()).sign(&tbs).to_vec();
-    let cert = seq(&[tbs, sha256_rsa_alg(), tlv(0x03, &[&[0u8][..], &sig].concat())]);
+    let sig = SigningKey::<Sha256>::new(private.clone())
+        .sign(&tbs)
+        .to_vec();
+    let cert = seq(&[
+        tbs,
+        sha256_rsa_alg(),
+        tlv(0x03, &[&[0u8][..], &sig].concat()),
+    ]);
     Ok(Key { private, cert })
 }
 
 /// `-----BEGIN ...-----` base64 body, or the bytes as they are (DER).
 fn pem_or_der(d: &[u8]) -> Vec<u8> {
-    let Ok(t) = std::str::from_utf8(d) else { return d.to_vec() };
+    let Ok(t) = std::str::from_utf8(d) else {
+        return d.to_vec();
+    };
     if !t.contains("-----BEGIN") {
         return d.to_vec();
     }
-    let body: String = t.lines().filter(|l| !l.starts_with("-----")).collect::<String>().chars().filter(|c| !c.is_whitespace()).collect();
+    let body: String = t
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     let mut out = Vec::with_capacity(body.len() * 3 / 4);
     let (mut acc, mut bits) = (0u32, 0);
     for c in body.bytes() {
@@ -142,10 +174,18 @@ fn pem_or_der(d: &[u8]) -> Vec<u8> {
 
 /// Load a PKCS#8 private key and its certificate (PEM or DER).
 pub fn load(key_file: &Path, cert_file: &Path) -> Result<Key, String> {
-    let k = pem_or_der(&std::fs::read(key_file).map_err(|e| format!("{}: {e}", key_file.display()))?);
-    let private = RsaPrivateKey::from_pkcs8_der(&k).map_err(|e| format!("{}: not an unencrypted PKCS#8 RSA key ({e})", key_file.display()))?;
-    let cert = pem_or_der(&std::fs::read(cert_file).map_err(|e| format!("{}: {e}", cert_file.display()))?);
-    crate::sign::parse_cert(&cert).ok_or_else(|| format!("{}: not an X.509 certificate", cert_file.display()))?;
+    let k =
+        pem_or_der(&std::fs::read(key_file).map_err(|e| format!("{}: {e}", key_file.display()))?);
+    let private = RsaPrivateKey::from_pkcs8_der(&k).map_err(|e| {
+        format!(
+            "{}: not an unencrypted PKCS#8 RSA key ({e})",
+            key_file.display()
+        )
+    })?;
+    let cert =
+        pem_or_der(&std::fs::read(cert_file).map_err(|e| format!("{}: {e}", cert_file.display()))?);
+    crate::sign::parse_cert(&cert)
+        .ok_or_else(|| format!("{}: not an X.509 certificate", cert_file.display()))?;
     Ok(Key { private, cert })
 }
 
@@ -200,29 +240,63 @@ fn content_digest(sections: &[&[u8]]) -> Vec<u8> {
 
 /// End-of-central-directory start (no comment support beyond what the scan finds).
 fn eocd_at(apk: &[u8]) -> Result<usize, String> {
-    (0..apk.len().saturating_sub(21)).rev().take(65_557).find(|&i| apk[i..i + 4] == [0x50, 0x4b, 0x05, 0x06]).ok_or_else(|| "no end of central directory".into())
+    (0..apk.len().saturating_sub(21))
+        .rev()
+        .take(65_557)
+        .find(|&i| apk[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])
+        .ok_or_else(|| "no end of central directory".into())
 }
 
 /// Sign an unsigned APK (as built by `rebuild`) with v2 + v3.
 pub fn sign(apk: Vec<u8>, cd: usize, key: &Key) -> Result<Vec<u8>, String> {
     let eocd = eocd_at(&apk)?;
     let digest = content_digest(&[&apk[..cd], &apk[cd..eocd], &apk[eocd..]]);
-    let pubkey = key.private.to_public_key().to_public_key_der().map_err(|e| e.to_string())?.as_bytes().to_vec();
+    let pubkey = key
+        .private
+        .to_public_key()
+        .to_public_key_der()
+        .map_err(|e| e.to_string())?
+        .as_bytes()
+        .to_vec();
     let signer = SigningKey::<Sha256>::new(key.private.clone());
     let digests = lp(&lp(&[&RSA_SHA256.to_le_bytes()[..], &lp(&digest)].concat()));
     let certs = lp(&lp(&key.cert));
-    let sigs = |data: &[u8]| lp(&lp(&[&RSA_SHA256.to_le_bytes()[..], &lp(&signer.sign(data).to_vec())].concat()));
+    let sigs = |data: &[u8]| {
+        lp(&lp(&[
+            &RSA_SHA256.to_le_bytes()[..],
+            &lp(&signer.sign(data).to_vec()),
+        ]
+        .concat()))
+    };
     // v2: digests, certificates, attributes (stripping protection: a v3 signature exists)
-    let v2_attrs = lp(&lp(&[STRIPPING_PROTECTION.to_le_bytes(), 3u32.to_le_bytes()].concat()));
+    let v2_attrs = lp(&lp(&[
+        STRIPPING_PROTECTION.to_le_bytes(),
+        3u32.to_le_bytes(),
+    ]
+    .concat()));
     let v2_signed = [&digests[..], &certs, &v2_attrs].concat();
     let v2_signer = [lp(&v2_signed), sigs(&v2_signed), lp(&pubkey)].concat();
     let v2 = lp(&lp(&v2_signer));
     // v3: digests, certificates, min/max SDK, attributes
     let (min, max) = (V3_MIN_SDK.to_le_bytes(), i32::MAX.to_le_bytes());
     let v3_signed = [&digests[..], &certs, &min, &max, &lp(&[])].concat();
-    let v3_signer = [lp(&v3_signed), min.to_vec(), max.to_vec(), sigs(&v3_signed), lp(&pubkey)].concat();
+    let v3_signer = [
+        lp(&v3_signed),
+        min.to_vec(),
+        max.to_vec(),
+        sigs(&v3_signed),
+        lp(&pubkey),
+    ]
+    .concat();
     let v3 = lp(&lp(&v3_signer));
-    let pair = |id: u32, v: &[u8]| [&((v.len() + 4) as u64).to_le_bytes()[..], &id.to_le_bytes(), v].concat();
+    let pair = |id: u32, v: &[u8]| {
+        [
+            &((v.len() + 4) as u64).to_le_bytes()[..],
+            &id.to_le_bytes(),
+            v,
+        ]
+        .concat()
+    };
     let mut pairs = [pair(V2_ID, &v2), pair(V3_ID, &v3)].concat();
     // pad the whole block to 4096 bytes, like apksigner
     let unpadded = 8 + pairs.len() + 8 + 16;
@@ -235,7 +309,13 @@ pub fn sign(apk: Vec<u8>, cd: usize, key: &Key) -> Result<Vec<u8>, String> {
         pairs.extend(pair(PADDING_ID, &vec![0; gap - 12]));
     }
     let size = (pairs.len() + 8 + 16) as u64;
-    let block = [&size.to_le_bytes()[..], &pairs, &size.to_le_bytes(), b"APK Sig Block 42"].concat();
+    let block = [
+        &size.to_le_bytes()[..],
+        &pairs,
+        &size.to_le_bytes(),
+        b"APK Sig Block 42",
+    ]
+    .concat();
     let mut out = Vec::with_capacity(apk.len() + block.len());
     out.extend_from_slice(&apk[..cd]);
     out.extend_from_slice(&block);
@@ -286,7 +366,9 @@ fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<Option<u32>, S
     let sig_bytes = take_lp(&mut x).ok_or("bad signature")?;
     let key = RsaPublicKey::from_public_key_der(&pubkey).map_err(|e| format!("public key: {e}"))?;
     let sig = Signature::try_from(&sig_bytes[..]).map_err(|e| e.to_string())?;
-    VerifyingKey::<Sha256>::new(key).verify(&signed, &sig).map_err(|_| "signature does not match the signed data")?;
+    VerifyingKey::<Sha256>::new(key)
+        .verify(&signed, &sig)
+        .map_err(|_| "signature does not match the signed data")?;
     // the signed digest must equal the file's
     let mut sd = &signed[..];
     let digests = take_lp(&mut sd).ok_or("no digests")?;
@@ -296,7 +378,9 @@ fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<Option<u32>, S
     take_u32(&mut fx);
     let want = take_lp(&mut fx).ok_or("no digest")?;
     if want != digest {
-        return Err("the APK's content doesn't match its signed digest (modified after signing)".into());
+        return Err(
+            "the APK's content doesn't match its signed digest (modified after signing)".into(),
+        );
     }
     Ok(None)
 }
@@ -308,7 +392,14 @@ pub fn verify(path: &str) -> Result<Vec<String>, String> {
     let cd = u32::from_le_bytes(apk[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
     let Some(block) = crate::sign::signing_block(path) else {
         let v1 = crate::quick::read_entry(path, "META-INF/MANIFEST.MF")?.is_some();
-        return Ok(vec![if v1 { "v1 (JAR) signature only: v2/v3 not present, v1 not checked here" } else { "unsigned: no v1, v2 or v3 signature" }.to_string()]);
+        return Ok(vec![
+            if v1 {
+                "v1 (JAR) signature only: v2/v3 not present, v1 not checked here"
+            } else {
+                "unsigned: no v1, v2 or v3 signature"
+            }
+            .to_string(),
+        ]);
     };
     let size = u64::from_le_bytes(apk[cd - 24..cd - 16].try_into().unwrap()) as usize;
     let start = cd - size - 8;
@@ -351,22 +442,37 @@ mod tests {
         {
             use std::io::Write;
             let mut w = zip::ZipWriter::new(std::fs::File::create(&src).unwrap());
-            w.start_file("classes.dex", zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file("classes.dex", zip::write::SimpleFileOptions::default())
+                .unwrap();
             w.write_all(&[3u8; 5000]).unwrap();
             w.finish().unwrap();
         }
-        let (apk, cd) = crate::rebuild::rebuild(src.to_str().unwrap(), &Default::default()).unwrap();
+        let (apk, cd) =
+            crate::rebuild::rebuild(src.to_str().unwrap(), &Default::default()).unwrap();
         let signed = sign(apk, cd, &key).unwrap();
         let out = std::env::temp_dir().join(format!("apkscope-signed-{}.apk", std::process::id()));
         std::fs::write(&out, &signed).unwrap();
-        assert_eq!(verify(out.to_str().unwrap()).unwrap(), vec!["v2: verified", "v3: verified"]);
+        assert_eq!(
+            verify(out.to_str().unwrap()).unwrap(),
+            vec!["v2: verified", "v3: verified"]
+        );
         // still a valid zip
-        assert!(zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap().by_name("classes.dex").is_ok());
+        assert!(
+            zip::ZipArchive::new(std::fs::File::open(&out).unwrap())
+                .unwrap()
+                .by_name("classes.dex")
+                .is_ok()
+        );
         // flip one byte of the file content: both schemes must fail
         let mut bad = signed.clone();
         bad[40] ^= 1;
         std::fs::write(&out, &bad).unwrap();
-        assert!(verify(out.to_str().unwrap()).unwrap().iter().all(|l| l.contains("FAILED")));
+        assert!(
+            verify(out.to_str().unwrap())
+                .unwrap()
+                .iter()
+                .all(|l| l.contains("FAILED"))
+        );
         let _ = std::fs::remove_file(src);
         let _ = std::fs::remove_file(out);
     }

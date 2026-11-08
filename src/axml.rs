@@ -12,13 +12,24 @@ const ANDROID_NS: &str = "http://schemas.android.com/apk/res/android";
 
 #[derive(Debug, PartialEq)]
 pub enum Node {
-    Start { name: String, attrs: Vec<(String, String)>, line: u32 },
-    End { name: String, line: u32 },
+    Start {
+        name: String,
+        attrs: Vec<(String, String)>,
+        line: u32,
+    },
+    End {
+        name: String,
+        line: u32,
+    },
     Text(String),
 }
 
 fn unescape(s: &str) -> String {
-    s.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 pub fn parse(text: &str) -> Result<Vec<Node>, String> {
@@ -37,10 +48,20 @@ pub fn parse(text: &str) -> Result<Vec<Node>, String> {
             let name = text[i + 2..end].trim().to_string();
             match stack.pop() {
                 Some(open) if open == name => {}
-                Some(open) => return Err(format!("line {}: </{name}> closes <{open}>", line_at(i))),
-                None => return Err(format!("line {}: </{name}> without an open tag", line_at(i))),
+                Some(open) => {
+                    return Err(format!("line {}: </{name}> closes <{open}>", line_at(i)));
+                }
+                None => {
+                    return Err(format!(
+                        "line {}: </{name}> without an open tag",
+                        line_at(i)
+                    ));
+                }
             }
-            out.push(Node::End { name, line: line_at(i) });
+            out.push(Node::End {
+                name,
+                line: line_at(i),
+            });
             i = end + 1;
         } else if b[i] == b'<' {
             let line = line_at(i);
@@ -60,23 +81,41 @@ pub fn parse(text: &str) -> Result<Vec<Node>, String> {
                 match b.get(j) {
                     None => return Err(format!("line {line}: unterminated <{name}>")),
                     Some(b'>') => {
-                        out.push(Node::Start { name: name.clone(), attrs, line });
+                        out.push(Node::Start {
+                            name: name.clone(),
+                            attrs,
+                            line,
+                        });
                         stack.push(name);
                         j += 1;
                         break;
                     }
                     Some(b'/') if b.get(j + 1) == Some(&b'>') => {
-                        out.push(Node::Start { name: name.clone(), attrs, line });
+                        out.push(Node::Start {
+                            name: name.clone(),
+                            attrs,
+                            line,
+                        });
                         out.push(Node::End { name, line });
                         j += 2;
                         break;
                     }
                     _ => {
-                        let k = j + text[j..].find('=').ok_or_else(|| format!("line {}: attribute without a value", line_at(j)))?;
+                        let k = j + text[j..].find('=').ok_or_else(|| {
+                            format!("line {}: attribute without a value", line_at(j))
+                        })?;
                         let an = text[j..k].trim().to_string();
-                        let q = k + 1 + text[k + 1..].find(['"', '\'']).ok_or_else(|| format!("line {}: attribute {an} needs quotes", line_at(k)))?;
+                        let q = k
+                            + 1
+                            + text[k + 1..].find(['"', '\'']).ok_or_else(|| {
+                                format!("line {}: attribute {an} needs quotes", line_at(k))
+                            })?;
                         let quote = b[q] as char;
-                        let e = q + 1 + text[q + 1..].find(quote).ok_or_else(|| format!("line {}: unterminated value of {an}", line_at(q)))?;
+                        let e = q
+                            + 1
+                            + text[q + 1..].find(quote).ok_or_else(|| {
+                                format!("line {}: unterminated value of {an}", line_at(q))
+                            })?;
                         attrs.push((an, unescape(&text[q + 1..e])));
                         j = e + 1;
                     }
@@ -111,12 +150,26 @@ fn u32_at(d: &[u8], o: usize) -> Option<u32> {
 /// `prefix:name` / `name` -> (value type, resource id) of every attribute in a binary XML file.
 pub fn original_attrs(d: &[u8]) -> HashMap<String, (u8, Option<u32>)> {
     let mut out = HashMap::new();
-    let Ok(text) = crate::res::decode_xml(d, None) else { return out };
+    let Ok(text) = crate::res::decode_xml(d, None) else {
+        return out;
+    };
     // the decoder gives names with prefixes; walk the binary for the types in the same order
     let names: Vec<String> = match parse(&text) {
         Ok(nodes) => nodes
             .into_iter()
-            .filter_map(|n| if let Node::Start { attrs, .. } = n { Some(attrs.into_iter().map(|a| a.0).filter(|a| !a.starts_with("xmlns:")).collect::<Vec<_>>()) } else { None })
+            .filter_map(|n| {
+                if let Node::Start { attrs, .. } = n {
+                    Some(
+                        attrs
+                            .into_iter()
+                            .map(|a| a.0)
+                            .filter(|a| !a.starts_with("xmlns:"))
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
+            })
             .flatten()
             .collect(),
         Err(_) => return out,
@@ -124,20 +177,33 @@ pub fn original_attrs(d: &[u8]) -> HashMap<String, (u8, Option<u32>)> {
     let mut res_ids = Vec::new();
     let mut types = Vec::new();
     let mut at = u16_at(d, 2).unwrap_or(8) as usize;
-    while let (Some(ty), Some(h), Some(size)) = (u16_at(d, at), u16_at(d, at + 2), u32_at(d, at + 4)) {
+    while let (Some(ty), Some(h), Some(size)) =
+        (u16_at(d, at), u16_at(d, at + 2), u32_at(d, at + 4))
+    {
         let (h, size) = (h as usize, size as usize);
         if size < 8 {
             break;
         }
         match ty {
-            0x0180 => res_ids = (0..(size - h) / 4).filter_map(|k| u32_at(d, at + h + k * 4)).collect(),
+            0x0180 => {
+                res_ids = (0..(size - h) / 4)
+                    .filter_map(|k| u32_at(d, at + h + k * 4))
+                    .collect()
+            }
             0x0102 => {
                 let body = at + h;
-                let (start, asize, count) = (u16_at(d, body + 8).unwrap_or(20) as usize, u16_at(d, body + 10).unwrap_or(20) as usize, u16_at(d, body + 12).unwrap_or(0) as usize);
+                let (start, asize, count) = (
+                    u16_at(d, body + 8).unwrap_or(20) as usize,
+                    u16_at(d, body + 10).unwrap_or(20) as usize,
+                    u16_at(d, body + 12).unwrap_or(0) as usize,
+                );
                 for k in 0..count {
                     let a = body + start + k * asize;
                     let name_idx = u32_at(d, a + 4).unwrap_or(u32::MAX) as usize;
-                    types.push((d.get(a + 15).copied().unwrap_or(3), res_ids.get(name_idx).copied()));
+                    types.push((
+                        d.get(a + 15).copied().unwrap_or(3),
+                        res_ids.get(name_idx).copied(),
+                    ));
                 }
             }
             _ => {}
@@ -167,7 +233,11 @@ fn complex(v: f64, unit: u32) -> u32 {
 
 /// Resolve `@type/name`, `@android:type/name`, `@0x7f..`, `?attr/x` to (type, id).
 fn reference(s: &str, names: &Names) -> Result<(u8, u32), String> {
-    let (ty, body) = if let Some(b) = s.strip_prefix('?') { (0x02, b) } else { (0x01, &s[1..]) };
+    let (ty, body) = if let Some(b) = s.strip_prefix('?') {
+        (0x02, b)
+    } else {
+        (0x01, &s[1..])
+    };
     if body == "null" {
         return Ok((0x01, 0));
     }
@@ -176,11 +246,20 @@ fn reference(s: &str, names: &Names) -> Result<(u8, u32), String> {
         None => (false, body),
     };
     if let Some(hex) = body.strip_prefix("0x") {
-        return u32::from_str_radix(hex, 16).map(|id| (ty, id)).map_err(|_| format!("bad resource id {s}"));
+        return u32::from_str_radix(hex, 16)
+            .map(|id| (ty, id))
+            .map_err(|_| format!("bad resource id {s}"));
     }
-    let (t, n) = body.split_once('/').ok_or_else(|| format!("{s}: expected @type/name"))?;
-    let id = if android { framework_id(t, n) } else { names.id_of(t, n) };
-    id.map(|id| (ty, id)).ok_or_else(|| format!("unknown resource {s}"))
+    let (t, n) = body
+        .split_once('/')
+        .ok_or_else(|| format!("{s}: expected @type/name"))?;
+    let id = if android {
+        framework_id(t, n)
+    } else {
+        names.id_of(t, n)
+    };
+    id.map(|id| (ty, id))
+        .ok_or_else(|| format!("unknown resource {s}"))
 }
 
 /// (raw string, type, data) for an attribute value.
@@ -219,7 +298,15 @@ fn typed(text: &str, orig: Option<u8>, names: &Names) -> Result<(Option<String>,
             return Ok((None, ty, v));
         }
     }
-    for (unit, code) in [("px", 0), ("dip", 1), ("dp", 1), ("sp", 2), ("pt", 3), ("in", 4), ("mm", 5)] {
+    for (unit, code) in [
+        ("px", 0),
+        ("dip", 1),
+        ("dp", 1),
+        ("sp", 2),
+        ("pt", 3),
+        ("in", 4),
+        ("mm", 5),
+    ] {
         if let Some(num) = text.strip_suffix(unit) {
             if let Ok(v) = num.parse::<f64>() {
                 return Ok((None, 0x05, complex(v, code)));
@@ -227,7 +314,9 @@ fn typed(text: &str, orig: Option<u8>, names: &Names) -> Result<(Option<String>,
         }
     }
     if orig.is_some_and(|t| t != 0x03) {
-        return Err(format!("\"{text}\" can't be stored as the type this attribute had"));
+        return Err(format!(
+            "\"{text}\" can't be stored as the type this attribute had"
+        ));
     }
     string
 }
@@ -322,24 +411,34 @@ pub fn encode(text: &str, original: Option<&[u8]>, names: &Names) -> Result<Vec<
         }
     }
     let attr_id = |full: &str| -> Result<Option<u32>, String> {
-        let Some((prefix, name)) = full.split_once(':') else { return Ok(None) };
+        let Some((prefix, name)) = full.split_once(':') else {
+            return Ok(None);
+        };
         if let Some(&(_, Some(id))) = orig.get(full) {
             return Ok(Some(id));
         }
         match ns.get(prefix).map(String::as_str) {
-            Some(ANDROID_NS) => framework_id("attr", name).map(Some).ok_or_else(|| format!("unknown attribute {full}")),
+            Some(ANDROID_NS) => framework_id("attr", name)
+                .map(Some)
+                .ok_or_else(|| format!("unknown attribute {full}")),
             Some(_) => Ok(None),
             None => Err(format!("undeclared namespace prefix in {full}")),
         }
     };
     // attribute names with resource ids go first, in id order, matching the resource map
-    let mut pool = Pool { items: Vec::new(), index: HashMap::new() };
+    let mut pool = Pool {
+        items: Vec::new(),
+        index: HashMap::new(),
+    };
     let mut with_ids: Vec<(u32, String)> = Vec::new();
     for n in &nodes {
         if let Node::Start { attrs, .. } = n {
             for (k, _) in attrs.iter().filter(|a| !a.0.starts_with("xmlns:")) {
                 if let Some(id) = attr_id(k)? {
-                    with_ids.push((id, k.split_once(':').map_or(k.as_str(), |x| x.1).to_string()));
+                    with_ids.push((
+                        id,
+                        k.split_once(':').map_or(k.as_str(), |x| x.1).to_string(),
+                    ));
                 }
             }
         }
@@ -373,10 +472,13 @@ pub fn encode(text: &str, original: Option<&[u8]>, names: &Names) -> Result<Vec<
                         Some((p, l)) => (Some(ns[p].clone()), l.to_string()),
                         None => (None, k.clone()),
                     };
-                    let (raw, ty, data) = typed(v, orig.get(k).map(|x| x.0), names).map_err(|e| format!("line {line}, {k}: {e}"))?;
+                    let (raw, ty, data) = typed(v, orig.get(k).map(|x| x.0), names)
+                        .map_err(|e| format!("line {line}, {k}: {e}"))?;
                     list.push((id, uri, local, raw, ty, data));
                 }
-                list.sort_by(|a, b| (a.0.unwrap_or(u32::MAX), &a.2).cmp(&(b.0.unwrap_or(u32::MAX), &b.2)));
+                list.sort_by(|a, b| {
+                    (a.0.unwrap_or(u32::MAX), &a.2).cmp(&(b.0.unwrap_or(u32::MAX), &b.2))
+                });
                 let elem = name.as_str();
                 let mut c = Vec::new();
                 node_head(&mut c, 0x0102, 36 + 20 * list.len() as u32, *line);
@@ -386,7 +488,14 @@ pub fn encode(text: &str, original: Option<&[u8]>, names: &Names) -> Result<Vec<
                 push16(&mut c, 20);
                 push16(&mut c, list.len() as u16);
                 // 1-based positions of the id/class/style attributes
-                let pos = |want: &str| list.iter().position(|a| a.1.is_none() && a.2 == want || a.1.as_deref() == Some(ANDROID_NS) && want == "id" && a.2 == "id").map_or(0, |p| p as u16 + 1);
+                let pos = |want: &str| {
+                    list.iter()
+                        .position(|a| {
+                            a.1.is_none() && a.2 == want
+                                || a.1.as_deref() == Some(ANDROID_NS) && want == "id" && a.2 == "id"
+                        })
+                        .map_or(0, |p| p as u16 + 1)
+                };
                 push16(&mut c, pos("id"));
                 push16(&mut c, pos("class"));
                 push16(&mut c, pos("style"));
@@ -438,7 +547,10 @@ pub fn encode(text: &str, original: Option<&[u8]>, names: &Names) -> Result<Vec<
     let mut out = Vec::new();
     push16(&mut out, 0x0003);
     push16(&mut out, 8);
-    push32(&mut out, (8 + pool_chunk.len() + map.len() + body.len()) as u32);
+    push32(
+        &mut out,
+        (8 + pool_chunk.len() + map.len() + body.len()) as u32,
+    );
     out.extend(pool_chunk);
     out.extend(map);
     out.extend(body);
@@ -451,9 +563,24 @@ mod tests {
 
     #[test]
     fn parses_and_reports_errors() {
-        let n = parse("<?xml version=\"1.0\"?>\n<a x=\"1 &amp; 2\">\n  <!-- c -->\n  <b/>hi</a>").unwrap();
-        assert_eq!(n[0], Node::Start { name: "a".into(), attrs: vec![("x".into(), "1 & 2".into())], line: 2 });
-        assert_eq!(n[1], Node::Start { name: "b".into(), attrs: vec![], line: 4 });
+        let n = parse("<?xml version=\"1.0\"?>\n<a x=\"1 &amp; 2\">\n  <!-- c -->\n  <b/>hi</a>")
+            .unwrap();
+        assert_eq!(
+            n[0],
+            Node::Start {
+                name: "a".into(),
+                attrs: vec![("x".into(), "1 & 2".into())],
+                line: 2
+            }
+        );
+        assert_eq!(
+            n[1],
+            Node::Start {
+                name: "b".into(),
+                attrs: vec![],
+                line: 4
+            }
+        );
         assert_eq!(n[3], Node::Text("hi".into()));
         assert!(parse("<a><b></a>").unwrap_err().contains("closes <b>"));
         assert!(parse("<a x=1/>").unwrap_err().contains("needs quotes"));
@@ -461,17 +588,31 @@ mod tests {
 
     #[test]
     fn types_and_complex() {
-        let names = crate::res::Names::new(&crate::res::Table { package: String::new(), id: 0x7f, values: vec![], types: vec![], keys: vec![], configs: Default::default() });
-        assert_eq!(typed("true", None, &names).unwrap(), (None, 0x12, 0xffff_ffff));
+        let names = crate::res::Names::new(&crate::res::Table {
+            package: String::new(),
+            id: 0x7f,
+            values: vec![],
+            types: vec![],
+            keys: vec![],
+            configs: Default::default(),
+        });
+        assert_eq!(
+            typed("true", None, &names).unwrap(),
+            (None, 0x12, 0xffff_ffff)
+        );
         assert_eq!(typed("21", None, &names).unwrap(), (None, 0x10, 21));
         // was a string in the original: stays one
         assert_eq!(typed("21", Some(0x03), &names).unwrap().1, 0x03);
-        assert_eq!(typed("@android:style/Theme", None, &names).unwrap(), (None, 0x01, 0x0103_0005));
+        assert_eq!(
+            typed("@android:style/Theme", None, &names).unwrap(),
+            (None, 0x01, 0x0103_0005)
+        );
         assert!(typed("@string/missing", None, &names).is_err());
         // 16dp: mantissa 16 at radix 23p0... decodes back to 16
         let c = complex(16.0, 1);
         assert_eq!(c & 0xf, 1);
-        let mant = (c as i32 >> 8) as f64 / f64::from(1u32 << [0, 7, 15, 23][((c >> 4) & 3) as usize]);
+        let mant =
+            (c as i32 >> 8) as f64 / f64::from(1u32 << [0, 7, 15, 23][((c >> 4) & 3) as usize]);
         assert!((mant - 16.0).abs() < 1e-6);
     }
 

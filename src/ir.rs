@@ -10,7 +10,14 @@ use crate::imports::type_ref;
 type R<T> = Result<T, String>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Call { Static, Virtual, Super, Direct, Interface, Poly }
+pub enum Call {
+    Static,
+    Virtual,
+    Super,
+    Direct,
+    Interface,
+    Poly,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -83,8 +90,19 @@ impl Expr {
             Field(Some(o), _) => vec![&**o],
             Invoke(_, _, a) | New(_, _, a) | Filled(_, a) | Custom(_, a) => a.iter().collect(),
             Concat(p) => p.iter().map(|x| &x.0).collect(),
-            NewArray(_, a) | Un(_, _, a) | Cast(_, a) | InstanceOf(a, _) | ArrayLen(a) | Not(a) | Fill(a, _) => vec![&**a],
-            Bin(_, _, a, b) | ArrayGet(a, b) | Cmp(_, a, b) | And(a, b) | Or(a, b) | Compare(_, a, b) => vec![&**a, &**b],
+            NewArray(_, a)
+            | Un(_, _, a)
+            | Cast(_, a)
+            | InstanceOf(a, _)
+            | ArrayLen(a)
+            | Not(a)
+            | Fill(a, _) => vec![&**a],
+            Bin(_, _, a, b)
+            | ArrayGet(a, b)
+            | Cmp(_, a, b)
+            | And(a, b)
+            | Or(a, b)
+            | Compare(_, a, b) => vec![&**a, &**b],
             _ => vec![],
         }
     }
@@ -94,8 +112,19 @@ impl Expr {
             Field(Some(o), _) => vec![&mut **o],
             Invoke(_, _, a) | New(_, _, a) | Filled(_, a) | Custom(_, a) => a.iter_mut().collect(),
             Concat(p) => p.iter_mut().map(|x| &mut x.0).collect(),
-            NewArray(_, a) | Un(_, _, a) | Cast(_, a) | InstanceOf(a, _) | ArrayLen(a) | Not(a) | Fill(a, _) => vec![&mut **a],
-            Bin(_, _, a, b) | ArrayGet(a, b) | Cmp(_, a, b) | And(a, b) | Or(a, b) | Compare(_, a, b) => vec![&mut **a, &mut **b],
+            NewArray(_, a)
+            | Un(_, _, a)
+            | Cast(_, a)
+            | InstanceOf(a, _)
+            | ArrayLen(a)
+            | Not(a)
+            | Fill(a, _) => vec![&mut **a],
+            Bin(_, _, a, b)
+            | ArrayGet(a, b)
+            | Cmp(_, a, b)
+            | And(a, b)
+            | Or(a, b)
+            | Compare(_, a, b) => vec![&mut **a, &mut **b],
             _ => vec![],
         }
     }
@@ -103,7 +132,8 @@ impl Expr {
     /// no side effects and nothing a side effect could change
     pub fn is_pure(&self) -> bool {
         match self {
-            Field(..) | Invoke(..) | New(..) | Concat(..) | NewArray(..) | Filled(..) | ArrayGet(..) | Custom(..) | Fill(..) | Raw(_) | Caught => false,
+            Field(..) | Invoke(..) | New(..) | Concat(..) | NewArray(..) | Filled(..)
+            | ArrayGet(..) | Custom(..) | Fill(..) | Raw(_) | Caught => false,
             _ => self.children().iter().all(|c| c.is_pure()),
         }
     }
@@ -148,7 +178,12 @@ impl Expr {
 
 fn flip(op: &'static str) -> &'static str {
     match op {
-        "==" => "!=", "!=" => "==", "<" => ">=", ">=" => "<", ">" => "<=", _ => ">",
+        "==" => "!=",
+        "!=" => "==",
+        "<" => ">=",
+        ">=" => "<",
+        ">" => "<=",
+        _ => ">",
     }
 }
 
@@ -156,7 +191,11 @@ impl Stmt {
     /// expressions this statement evaluates, in order
     pub fn exprs(&self) -> Vec<&Expr> {
         match self {
-            Stmt::Assign(_, e) | Stmt::Do(e) | Stmt::Throw(e) | Stmt::Monitor(_, e) | Stmt::Return(Some(e)) => vec![e],
+            Stmt::Assign(_, e)
+            | Stmt::Do(e)
+            | Stmt::Throw(e)
+            | Stmt::Monitor(_, e)
+            | Stmt::Return(Some(e)) => vec![e],
             Stmt::Store(l, r) => l.children().into_iter().chain([r]).collect(),
             Stmt::Return(None) | Stmt::Nop => vec![],
         }
@@ -164,7 +203,11 @@ impl Stmt {
 
     pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
         match self {
-            Stmt::Assign(_, e) | Stmt::Do(e) | Stmt::Throw(e) | Stmt::Monitor(_, e) | Stmt::Return(Some(e)) => vec![e],
+            Stmt::Assign(_, e)
+            | Stmt::Do(e)
+            | Stmt::Throw(e)
+            | Stmt::Monitor(_, e)
+            | Stmt::Return(Some(e)) => vec![e],
             Stmt::Store(l, r) => l.children_mut().into_iter().chain([r]).collect(),
             Stmt::Return(None) | Stmt::Nop => vec![],
         }
@@ -196,18 +239,35 @@ fn bin_type(k: u8) -> char {
 
 fn bin_op(k: u8) -> &'static str {
     let k = k % 32;
-    if k < 22 { BIN[(k % 11) as usize] } else { BIN[((k - 22) % 5) as usize] }
+    if k < 22 {
+        BIN[(k % 11) as usize]
+    } else {
+        BIN[((k - 22) % 5) as usize]
+    }
 }
 
 fn call_kind(op: u8) -> Call {
     match op {
         0xfa | 0xfb => Call::Poly,
-        _ => [Call::Virtual, Call::Super, Call::Direct, Call::Static, Call::Interface][((op - 0x6e) % 6) as usize],
+        _ => [
+            Call::Virtual,
+            Call::Super,
+            Call::Direct,
+            Call::Static,
+            Call::Interface,
+        ][((op - 0x6e) % 6) as usize],
     }
 }
 
 /// Statements of insns first..=last, plus the terminator's condition (If) or key (Switch).
-pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize, term: &Term) -> R<(Vec<Stmt>, Option<Expr>)> {
+pub fn lower(
+    dex: &Dex,
+    insns: &[Insn],
+    units: &[u8],
+    first: usize,
+    last: usize,
+    term: &Term,
+) -> R<(Vec<Stmt>, Option<Expr>)> {
     let mut out: Vec<Stmt> = Vec::with_capacity(last + 1 - first);
     let mut pending_new: HashMap<u16, (usize, String)> = HashMap::new();
     let mut cond = None;
@@ -215,18 +275,29 @@ pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize,
         let i = &insns[k];
         let r = |n: usize| Reg(i.regs[n]);
         let args = || -> Vec<Expr> {
-            if i.range { (0..i.nregs as u16).map(|x| Reg(i.regs[0] + x)).collect() } else { i.regs[..i.nregs as usize].iter().map(|&x| Reg(x)).collect() }
+            if i.range {
+                (0..i.nregs as u16).map(|x| Reg(i.regs[0] + x)).collect()
+            } else {
+                i.regs[..i.nregs as usize].iter().map(|&x| Reg(x)).collect()
+            }
         };
         let assign = |e: Expr| Stmt::Assign(r(0), e);
         let s = match i.op {
             0x00 => continue,
             0x01..=0x09 => assign(r(1)),
             0x0a..=0x0c => {
-                let prev = k.checked_sub(1).filter(|&p| p >= first).map(|p| insns[p].op);
-                let folds = prev.is_some_and(|p| matches!(p, 0x24 | 0x25 | 0x6e..=0x72 | 0x74..=0x78 | 0xfa..=0xfd));
+                let prev = k
+                    .checked_sub(1)
+                    .filter(|&p| p >= first)
+                    .map(|p| insns[p].op);
+                let folds = prev.is_some_and(
+                    |p| matches!(p, 0x24 | 0x25 | 0x6e..=0x72 | 0x74..=0x78 | 0xfa..=0xfd),
+                );
                 match out.last() {
                     Some(Stmt::Do(_)) if folds => {
-                        let Some(Stmt::Do(e)) = out.pop() else { unreachable!() };
+                        let Some(Stmt::Do(e)) = out.pop() else {
+                            unreachable!()
+                        };
                         assign(e)
                     }
                     _ => assign(Raw("<result>".into())),
@@ -269,7 +340,11 @@ pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize,
                 continue;
             }
             0x38..=0x3d => {
-                cond = Some(Cmp(CMP[(i.op - 0x38) as usize], bx(r(0)), bx(Lit(0, false))));
+                cond = Some(Cmp(
+                    CMP[(i.op - 0x38) as usize],
+                    bx(r(0)),
+                    bx(Lit(0, false)),
+                ));
                 continue;
             }
             0x2b | 0x2c => {
@@ -278,7 +353,13 @@ pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize,
             }
             0x28..=0x2a => continue,
             0x2d..=0x31 => {
-                let f = ["Float.compare", "Float.compare", "Double.compare", "Double.compare", "Long.compare"][(i.op - 0x2d) as usize];
+                let f = [
+                    "Float.compare",
+                    "Float.compare",
+                    "Double.compare",
+                    "Double.compare",
+                    "Long.compare",
+                ][(i.op - 0x2d) as usize];
                 assign(Compare(f, bx(r(1)), bx(r(2))))
             }
             0x44..=0x4a => assign(ArrayGet(bx(r(1)), bx(r(2)))),
@@ -318,19 +399,55 @@ pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize,
             0xff => assign(Raw(format!("method_type(\"{}\")", dex.proto(i.idx)?))),
             0x7b..=0x8f => {
                 const UN: [(&str, char); 21] = [
-                    ("-", 'I'), ("~", 'I'), ("-", 'J'), ("~", 'J'), ("-", 'F'), ("-", 'D'), ("(long) ", 'J'), ("(float) ", 'F'),
-                    ("(double) ", 'D'), ("(int) ", 'I'), ("(float) ", 'F'), ("(double) ", 'D'), ("(int) ", 'I'), ("(long) ", 'J'),
-                    ("(double) ", 'D'), ("(int) ", 'I'), ("(long) ", 'J'), ("(float) ", 'F'), ("(byte) ", 'B'), ("(char) ", 'C'), ("(short) ", 'S'),
+                    ("-", 'I'),
+                    ("~", 'I'),
+                    ("-", 'J'),
+                    ("~", 'J'),
+                    ("-", 'F'),
+                    ("-", 'D'),
+                    ("(long) ", 'J'),
+                    ("(float) ", 'F'),
+                    ("(double) ", 'D'),
+                    ("(int) ", 'I'),
+                    ("(float) ", 'F'),
+                    ("(double) ", 'D'),
+                    ("(int) ", 'I'),
+                    ("(long) ", 'J'),
+                    ("(double) ", 'D'),
+                    ("(int) ", 'I'),
+                    ("(long) ", 'J'),
+                    ("(float) ", 'F'),
+                    ("(byte) ", 'B'),
+                    ("(char) ", 'C'),
+                    ("(short) ", 'S'),
                 ];
                 let (p, t) = UN[(i.op - 0x7b) as usize];
                 assign(Un(p, t, bx(r(1))))
             }
-            0x90..=0xaf => assign(Bin(bin_op(i.op - 0x90), bin_type(i.op - 0x90), bx(r(1)), bx(r(2)))),
-            0xb0..=0xcf => assign(Bin(bin_op(i.op - 0xb0), bin_type(i.op - 0xb0), bx(r(0)), bx(r(1)))),
+            0x90..=0xaf => assign(Bin(
+                bin_op(i.op - 0x90),
+                bin_type(i.op - 0x90),
+                bx(r(1)),
+                bx(r(2)),
+            )),
+            0xb0..=0xcf => assign(Bin(
+                bin_op(i.op - 0xb0),
+                bin_type(i.op - 0xb0),
+                bx(r(0)),
+                bx(r(1)),
+            )),
             0xd0..=0xe2 => {
-                let k = if i.op <= 0xd7 { i.op - 0xd0 } else { i.op - 0xd8 } as usize;
+                let k = if i.op <= 0xd7 {
+                    i.op - 0xd0
+                } else {
+                    i.op - 0xd8
+                } as usize;
                 let lit = bx(Lit(i.lit, false));
-                if k == 1 { assign(Bin("-", 'I', lit, bx(r(1)))) } else { assign(Bin(BIN[k], 'I', bx(r(1)), lit)) }
+                if k == 1 {
+                    assign(Bin("-", 'I', lit, bx(r(1))))
+                } else {
+                    assign(Bin(BIN[k], 'I', bx(r(1)), lit))
+                }
             }
             op => return Err(format!("unhandled opcode {op:#x}")),
         };
@@ -348,7 +465,11 @@ pub fn lower(dex: &Dex, insns: &[Insn], units: &[u8], first: usize, last: usize,
 
 /// fill-array-data payload at code unit `p`: element values, sign-extended to their width
 fn array_payload(units: &[u8], p: usize) -> R<Vec<i64>> {
-    let b = |o: usize, n: usize| units.get(p * 2 + o..p * 2 + o + n).ok_or_else(|| "array payload past end".to_string());
+    let b = |o: usize, n: usize| {
+        units
+            .get(p * 2 + o..p * 2 + o + n)
+            .ok_or_else(|| "array payload past end".to_string())
+    };
     let width = u16::from_le_bytes(b(2, 2)?.try_into().unwrap()) as usize;
     let count = u32::from_le_bytes(b(4, 4)?.try_into().unwrap()) as usize;
     if !matches!(width, 1 | 2 | 4 | 8) || count > units.len() {
@@ -372,8 +493,15 @@ pub fn jtype(desc: &str) -> String {
         return jtype(inner) + "[]";
     }
     match desc {
-        "V" => "void", "Z" => "boolean", "B" => "byte", "S" => "short", "C" => "char",
-        "I" => "int", "J" => "long", "F" => "float", "D" => "double",
+        "V" => "void",
+        "Z" => "boolean",
+        "B" => "byte",
+        "S" => "short",
+        "C" => "char",
+        "I" => "int",
+        "J" => "long",
+        "F" => "float",
+        "D" => "double",
         _ => return dex::java_name(desc),
     }
     .into()
@@ -393,34 +521,99 @@ pub fn simple(desc: &str) -> String {
 }
 
 const KEYWORDS: &[&str] = &[
-    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do",
-    "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof",
-    "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static",
-    "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile", "while",
-    "true", "false", "null", "var", "record", "yield",
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "void",
+    "volatile",
+    "while",
+    "true",
+    "false",
+    "null",
+    "var",
+    "record",
+    "yield",
 ];
 
 /// variable name from a type, JADX-style: `WorldScreen` -> `worldScreen`, `int` -> `i`
 pub fn name_for(ty: Option<&str>) -> String {
     let Some(t) = ty else { return "obj".into() };
     match t {
-        "I" => return "i".into(), "J" => return "j".into(), "Z" => return "z".into(), "F" => return "f".into(),
-        "D" => return "d".into(), "C" => return "c".into(), "B" => return "b".into(), "S" => return "s".into(),
-        "Ljava/lang/String;" => return "str".into(), "Ljava/lang/Object;" => return "obj".into(),
+        "I" => return "i".into(),
+        "J" => return "j".into(),
+        "Z" => return "z".into(),
+        "F" => return "f".into(),
+        "D" => return "d".into(),
+        "C" => return "c".into(),
+        "B" => return "b".into(),
+        "S" => return "s".into(),
+        "Ljava/lang/String;" => return "str".into(),
+        "Ljava/lang/Object;" => return "obj".into(),
         _ => {}
     }
     if let Some(inner) = t.strip_prefix('[') {
         return name_for(Some(inner)) + "Arr";
     }
     let s = simple(t);
-    let s: String = s.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+    let s: String = s
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
     let mut cs = s.chars();
     let n = match cs.next() {
         Some(c) if c.is_ascii_digit() => format!("v{s}"),
         Some(c) => c.to_lowercase().chain(cs).collect(),
         None => "obj".into(),
     };
-    if KEYWORDS.contains(&n.as_str()) { n + "Val" } else { n }
+    if KEYWORDS.contains(&n.as_str()) {
+        n + "Val"
+    } else {
+        n
+    }
 }
 
 /// Per-method variable table; indices are definition ids.
@@ -453,19 +646,33 @@ impl<'a> Ctx<'a> {
             Class(_) => Some("Ljava/lang/Class;".into()),
             Caught => Some("Ljava/lang/Throwable;".into()),
             Field(_, f) => d.field_parts(*f).ok().map(|p| p.1),
-            Invoke(_, m, _) => d.method_parts(*m).ok().and_then(|(_, _, p)| d.proto_parts(p).ok()).map(|p| p.0).filter(|t| t != "V"),
-            New(t, ..) | NewArray(t, _) | Filled(t, _) | Cast(t, _) | ArrayLit(t, _) => Some(t.clone()),
+            Invoke(_, m, _) => d
+                .method_parts(*m)
+                .ok()
+                .and_then(|(_, _, p)| d.proto_parts(p).ok())
+                .map(|p| p.0)
+                .filter(|t| t != "V"),
+            New(t, ..) | NewArray(t, _) | Filled(t, _) | Cast(t, _) | ArrayLit(t, _) => {
+                Some(t.clone())
+            }
             Bin(_, t, ..) | Un(_, t, _) => Some(t.to_string()),
             InstanceOf(..) | Cmp(..) | And(..) | Or(..) | Not(_) => Some("Z".into()),
             ArrayLen(_) | Compare(..) => Some("I".into()),
             Concat(_) => Some("Ljava/lang/String;".into()),
-            ArrayGet(a, _) => self.type_of(a).and_then(|t| t.strip_prefix('[').map(str::to_string)),
+            ArrayGet(a, _) => self
+                .type_of(a)
+                .and_then(|t| t.strip_prefix('[').map(str::to_string)),
             _ => None,
         }
     }
 
     /// Types and names for every variable. `params` = (def id, descriptor, fixed name).
-    pub fn assign_vars(&mut self, mut vars: Vars, blocks: &[(Vec<Stmt>, Option<Expr>)], params: &[(usize, String, Option<String>)]) {
+    pub fn assign_vars(
+        &mut self,
+        mut vars: Vars,
+        blocks: &[(Vec<Stmt>, Option<Expr>)],
+        params: &[(usize, String, Option<String>)],
+    ) {
         for (d, t, _) in params {
             let r = vars.root[*d];
             vars.ty[r] = Some(t.clone());
@@ -493,7 +700,9 @@ impl<'a> Ctx<'a> {
         let mut used: HashMap<String, usize> = HashMap::new();
         for (d, _, fixed) in params {
             let r = v.root[*d];
-            let base = fixed.clone().unwrap_or_else(|| name_for(v.ty[r].as_deref()));
+            let base = fixed
+                .clone()
+                .unwrap_or_else(|| name_for(v.ty[r].as_deref()));
             let k = used.entry(base.clone()).or_default();
             *k += 1;
             v.name[r] = if *k == 1 { base } else { format!("{base}{k}") };
@@ -550,7 +759,13 @@ impl<'a> Ctx<'a> {
                 }
             }
             Invoke(kind, m, args) => {
-                let params = self.dex.method_parts(*m).ok().and_then(|(_, _, p)| self.dex.proto_parts(p).ok()).map(|p| p.1).unwrap_or_default();
+                let params = self
+                    .dex
+                    .method_parts(*m)
+                    .ok()
+                    .and_then(|(_, _, p)| self.dex.proto_parts(p).ok())
+                    .map(|p| p.1)
+                    .unwrap_or_default();
                 let skip = (*kind != Call::Static) as usize;
                 for (k, a) in args.iter().enumerate() {
                     let t = k.checked_sub(skip).and_then(|k| params.get(k).cloned());
@@ -558,8 +773,17 @@ impl<'a> Ctx<'a> {
                 }
             }
             New(_, m, args) => {
-                let params = self.dex.method_parts(*m).ok().and_then(|(_, _, p)| self.dex.proto_parts(p).ok()).map(|p| p.1).unwrap_or_default();
-                for (a, t) in args.iter().zip(params.into_iter().map(Some).chain(std::iter::repeat(None))) {
+                let params = self
+                    .dex
+                    .method_parts(*m)
+                    .ok()
+                    .and_then(|(_, _, p)| self.dex.proto_parts(p).ok())
+                    .map(|p| p.1)
+                    .unwrap_or_default();
+                for (a, t) in args
+                    .iter()
+                    .zip(params.into_iter().map(Some).chain(std::iter::repeat(None)))
+                {
                     self.hint(a, t);
                 }
             }
@@ -587,7 +811,14 @@ impl<'a> Ctx<'a> {
 
     fn atom(&self, e: &Expr) -> String {
         let s = self.expr(e, None);
-        if matches!(e, Bin(..) | Cmp(..) | And(..) | Or(..) | InstanceOf(..) | Cast(..) | Un(..)) { format!("({s})") } else { s }
+        if matches!(
+            e,
+            Bin(..) | Cmp(..) | And(..) | Or(..) | InstanceOf(..) | Cast(..) | Un(..)
+        ) {
+            format!("({s})")
+        } else {
+            s
+        }
     }
 
     fn owner(&self, class: &str) -> Option<String> {
@@ -595,7 +826,11 @@ impl<'a> Ctx<'a> {
     }
 
     fn call_args(&self, args: &[Expr], params: &[String]) -> String {
-        let v: Vec<String> = args.iter().enumerate().map(|(k, a)| self.expr(a, params.get(k).map(String::as_str))).collect();
+        let v: Vec<String> = args
+            .iter()
+            .enumerate()
+            .map(|(k, a)| self.expr(a, params.get(k).map(String::as_str)))
+            .collect();
         v.join(", ")
     }
 
@@ -609,7 +844,9 @@ impl<'a> Ctx<'a> {
             Class(t) => format!("{}.class", type_ref(t)),
             Caught => "<caught exception>".into(),
             Field(obj, f) => {
-                let Ok((c, ty, name)) = d.field_parts(*f) else { return format!("field#{f}") };
+                let Ok((c, ty, name)) = d.field_parts(*f) else {
+                    return format!("field#{f}");
+                };
                 // non-capturing lambda singleton
                 if obj.is_none() && ty == c {
                     if let Some(l) = self.lambda(&c, &[]) {
@@ -625,24 +862,37 @@ impl<'a> Ctx<'a> {
                                 return t;
                             }
                         }
-                        format!("{recv}.{}", crate::deobf::field(&c, &name, &ty).unwrap_or(name))
+                        format!(
+                            "{recv}.{}",
+                            crate::deobf::field(&c, &name, &ty).unwrap_or(name)
+                        )
                     }
                     None => {
                         let name = crate::deobf::field(&c, &name, &ty).unwrap_or(name);
-                        self.owner(&c).map_or(name.clone(), |o| format!("{o}.{name}"))
+                        self.owner(&c)
+                            .map_or(name.clone(), |o| format!("{o}.{name}"))
                     }
                 }
             }
             Invoke(kind, m, args) => {
-                let Ok((c, name, p)) = d.method_parts(*m) else { return format!("method#{m}") };
+                let Ok((c, name, p)) = d.method_parts(*m) else {
+                    return format!("method#{m}");
+                };
                 let name = crate::deobf::method(&c, &name).unwrap_or(name);
                 let params = d.proto_parts(p).map(|p| p.1).unwrap_or_default();
                 if *kind == Call::Static || args.is_empty() {
                     let a = self.call_args(args, &params);
-                    let call = self.owner(&c).map_or(format!("{name}({a})"), |o| format!("{o}.{name}({a})"));
+                    let call = self
+                        .owner(&c)
+                        .map_or(format!("{name}({a})"), |o| format!("{o}.{name}({a})"));
                     // string decryptor on constants: show what it returns
-                    return match (*kind == Call::Static).then(|| crate::re::decrypt_call(d, *m, args)).flatten() {
-                        Some(p) => format!("{call} /* = {} */", java_string(&p).replace("*/", "* /")),
+                    return match (*kind == Call::Static)
+                        .then(|| crate::re::decrypt_call(d, *m, args))
+                        .flatten()
+                    {
+                        Some(p) => {
+                            format!("{call} /* = {} */", java_string(&p).replace("*/", "* /"))
+                        }
                         None => call,
                     };
                 }
@@ -665,13 +915,22 @@ impl<'a> Ctx<'a> {
                 if let Some(l) = self.lambda(t, args) {
                     return l;
                 }
-                let params = d.method_parts(*m).ok().and_then(|(_, _, p)| d.proto_parts(p).ok()).map(|p| p.1).unwrap_or_default();
+                let params = d
+                    .method_parts(*m)
+                    .ok()
+                    .and_then(|(_, _, p)| d.proto_parts(p).ok())
+                    .map(|p| p.1)
+                    .unwrap_or_default();
                 format!("new {}({})", type_ref(t), self.call_args(args, &params))
             }
             NewArray(t, n) => {
                 let elem = type_ref(t.strip_prefix('[').unwrap_or(t));
                 let (base, dims) = (elem.trim_end_matches("[]"), elem.matches("[]").count());
-                format!("new {base}[{}]{}", self.expr(n, Some("I")), "[]".repeat(dims))
+                format!(
+                    "new {base}[{}]{}",
+                    self.expr(n, Some("I")),
+                    "[]".repeat(dims)
+                )
             }
             Filled(t, args) => {
                 let elem = t.strip_prefix('[').unwrap_or(t);
@@ -681,11 +940,19 @@ impl<'a> Ctx<'a> {
             Bin("+", t, a, b) if matches!(**b, Lit(v, _) if v < 0 && v != i64::MIN) => {
                 let Lit(v, w) = **b else { unreachable!() };
                 let t = t.to_string();
-                format!("{} - {}", self.operand(a, Some(&t)), self.operand(&Lit(-v, w), Some(&t)))
+                format!(
+                    "{} - {}",
+                    self.operand(a, Some(&t)),
+                    self.operand(&Lit(-v, w), Some(&t))
+                )
             }
             Bin(op, t, a, b) => {
                 let t = t.to_string();
-                format!("{} {op} {}", self.operand(a, Some(&t)), self.operand(b, Some(&t)))
+                format!(
+                    "{} {op} {}",
+                    self.operand(a, Some(&t)),
+                    self.operand(b, Some(&t))
+                )
             }
             Un(p, _, a) => format!("{p}{}", self.atom(a)),
             Cast(t, a) => format!("({}) {}", type_ref(t), self.atom(a)),
@@ -700,12 +967,26 @@ impl<'a> Ctx<'a> {
                 }
                 let (ta, tb) = (self.type_of(a), self.type_of(b));
                 if matches!(**b, Lit(0, _)) && ta.as_deref() == Some("Z") {
-                    return if *op == "==" { format!("!{}", self.atom(a)) } else { self.expr(a, None) };
+                    return if *op == "==" {
+                        format!("!{}", self.atom(a))
+                    } else {
+                        self.expr(a, None)
+                    };
                 }
-                format!("{} {op} {}", self.operand(a, tb.as_deref()), self.operand(b, ta.as_deref()))
+                format!(
+                    "{} {op} {}",
+                    self.operand(a, tb.as_deref()),
+                    self.operand(b, ta.as_deref())
+                )
             }
             And(a, b) => {
-                let p = |x: &Expr| if matches!(x, Or(..)) { format!("({})", self.expr(x, None)) } else { self.expr(x, None) };
+                let p = |x: &Expr| {
+                    if matches!(x, Or(..)) {
+                        format!("({})", self.expr(x, None))
+                    } else {
+                        self.expr(x, None)
+                    }
+                };
                 format!("{} && {}", p(a), p(b))
             }
             Or(a, b) => format!("{} || {}", self.expr(a, None), self.expr(b, None)),
@@ -718,12 +999,22 @@ impl<'a> Ctx<'a> {
                 format!("new {}{{{}}}", type_ref(t), v.join(", "))
             }
             Fill(a, vals) => {
-                let t = self.type_of(a).filter(|t| t.starts_with('[')).unwrap_or_else(|| "[I".into());
-                format!("{} = {}", self.expr(a, None), self.expr(&ArrayLit(t, vals.clone()), None))
+                let t = self
+                    .type_of(a)
+                    .filter(|t| t.starts_with('['))
+                    .unwrap_or_else(|| "[I".into());
+                format!(
+                    "{} = {}",
+                    self.expr(a, None),
+                    self.expr(&ArrayLit(t, vals.clone()), None)
+                )
             }
             Concat(parts) => {
                 let is_str = |e: &Expr| self.type_of(e).as_deref() == Some("Ljava/lang/String;");
-                let mut v: Vec<String> = parts.iter().map(|(e, t)| self.operand(e, Some(t))).collect();
+                let mut v: Vec<String> = parts
+                    .iter()
+                    .map(|(e, t)| self.operand(e, Some(t)))
+                    .collect();
                 // `a + b` with no String among the first two would add numbers, not concatenate
                 if !parts.iter().take(2).any(|(e, _)| is_str(e)) {
                     v.insert(0, "\"\"".into());
@@ -754,12 +1045,21 @@ impl<'a> Ctx<'a> {
         let def = d.class_def(c).ok()?;
         // synthetic + final, implementing exactly one interface
         // captured values are computed at creation; inside the body they would look lazy
-        if def.access & 0x1010 != 0x1010 || def.interfaces.len() != 1 || !captured.iter().all(Expr::is_pure) {
+        if def.access & 0x1010 != 0x1010
+            || def.interfaces.len() != 1
+            || !captured.iter().all(Expr::is_pure)
+        {
             return None;
         }
         let data = d.class_data(c).ok()?;
-        let mut impls = data.methods.iter().filter(|m| m.code.is_some() && d.method_parts(m.method_idx).is_ok_and(|p| !p.1.starts_with('<')));
-        let (m, None) = (impls.next()?, impls.next()) else { return None };
+        let mut impls = data.methods.iter().filter(|m| {
+            m.code.is_some()
+                && d.method_parts(m.method_idx)
+                    .is_ok_and(|p| !p.1.starts_with('<'))
+        });
+        let (m, None) = (impls.next()?, impls.next()) else {
+            return None;
+        };
         let code = m.code.as_ref()?;
         let (_, _, proto) = d.method_parts(m.method_idx).ok()?;
         let (ret, params) = d.proto_parts(proto).ok()?;
@@ -768,14 +1068,29 @@ impl<'a> Ctx<'a> {
         if cfg.blocks.len() != 1 {
             return None;
         }
-        let mut bir = vec![lower(d, &insns, code.insns, 0, cfg.blocks[0].last, &cfg.blocks[0].term).ok()?];
+        let mut bir = vec![
+            lower(
+                d,
+                &insns,
+                code.insns,
+                0,
+                cfg.blocks[0].last,
+                &cfg.blocks[0].term,
+            )
+            .ok()?,
+        ];
         crate::opt::inline(&cfg, &mut bir, code.registers as usize);
         let body = match bir[0].0.as_slice() {
             [Stmt::Return(Some(e))] | [Stmt::Do(e), Stmt::Return(None)] => e.clone(),
             _ => return None,
         };
         // instance fields in order are the captured values
-        let fields: Vec<u32> = data.fields.iter().filter(|f| f.1 & 0x8 == 0).map(|f| f.0).collect();
+        let fields: Vec<u32> = data
+            .fields
+            .iter()
+            .filter(|f| f.1 & 0x8 == 0)
+            .map(|f| f.0)
+            .collect();
         let this = code.registers - code.ins;
         let mut names = Vec::new();
         let mut regs: HashMap<u16, String> = HashMap::new();
@@ -791,17 +1106,29 @@ impl<'a> Ctx<'a> {
             r += if p == "J" || p == "D" { 2 } else { 1 };
         }
         let mut ok = true;
-        fn subst(e: &mut Expr, this: u16, fields: &[u32], cap: &[String], regs: &HashMap<u16, String>, ok: &mut bool) {
+        fn subst(
+            e: &mut Expr,
+            this: u16,
+            fields: &[u32],
+            cap: &[String],
+            regs: &HashMap<u16, String>,
+            ok: &mut bool,
+        ) {
             match e {
-                Field(Some(o), f) if **o == Reg(this) => match fields.iter().position(|x| x == f).and_then(|k| cap.get(k)) {
-                    Some(s) => *e = Raw(s.clone()),
-                    None => *ok = false,
-                },
+                Field(Some(o), f) if **o == Reg(this) => {
+                    match fields.iter().position(|x| x == f).and_then(|k| cap.get(k)) {
+                        Some(s) => *e = Raw(s.clone()),
+                        None => *ok = false,
+                    }
+                }
                 Reg(x) => match regs.get(x) {
                     Some(n) => *e = Raw(n.clone()),
                     None => *ok = false,
                 },
-                _ => e.children_mut().into_iter().for_each(|c| subst(c, this, fields, cap, regs, ok)),
+                _ => e
+                    .children_mut()
+                    .into_iter()
+                    .for_each(|c| subst(c, this, fields, cap, regs, ok)),
             }
         }
         let cap: Vec<String> = captured.iter().map(|a| self.expr(a, None)).collect();
@@ -810,13 +1137,26 @@ impl<'a> Ctx<'a> {
         if !ok {
             return None;
         }
-        let inner = Ctx { dex: d, class: self.class, ret, vars: None };
-        Some(format!("({}) -> {}", names.join(", "), inner.expr(&body, None)))
+        let inner = Ctx {
+            dex: d,
+            class: self.class,
+            ret,
+            vars: None,
+        };
+        Some(format!(
+            "({}) -> {}",
+            names.join(", "),
+            inner.expr(&body, None)
+        ))
     }
 
     fn operand(&self, e: &Expr, t: Option<&str>) -> String {
         let s = self.expr(e, t);
-        if matches!(e, Bin(..) | Cmp(..) | And(..) | Or(..) | InstanceOf(..)) { format!("({s})") } else { s }
+        if matches!(e, Bin(..) | Cmp(..) | And(..) | Or(..) | InstanceOf(..)) {
+            format!("({s})")
+        } else {
+            s
+        }
     }
 
     pub fn stmt(&self, s: &Stmt) -> String {
@@ -835,7 +1175,9 @@ impl<'a> Ctx<'a> {
                         return match (*op, &**b) {
                             ("+", Lit(1, _)) | ("-", Lit(-1, _)) => format!("{name}++;"),
                             ("-", Lit(1, _)) | ("+", Lit(-1, _)) => format!("{name}--;"),
-                            ("+", Lit(v, w)) if *v < 0 && *v != i64::MIN => format!("{name} -= {};", self.expr(&Lit(-v, *w), ty.as_deref())),
+                            ("+", Lit(v, w)) if *v < 0 && *v != i64::MIN => {
+                                format!("{name} -= {};", self.expr(&Lit(-v, *w), ty.as_deref()))
+                            }
                             _ => format!("{name} {op}= {};", self.expr(b, ty.as_deref())),
                         };
                     }
@@ -849,7 +1191,8 @@ impl<'a> Ctx<'a> {
                     Field(None, f) => match self.dex.field_parts(*f) {
                         Ok((c, ty, name)) => {
                             let name = crate::deobf::field(&c, &name, &ty).unwrap_or(name);
-                            self.owner(&c).map_or(name.clone(), |o| format!("{o}.{name}"))
+                            self.owner(&c)
+                                .map_or(name.clone(), |o| format!("{o}.{name}"))
                         }
                         Err(_) => self.expr(l, None),
                     },
@@ -861,7 +1204,11 @@ impl<'a> Ctx<'a> {
             Stmt::Return(None) => "return;".into(),
             Stmt::Return(Some(e)) => format!("return {};", self.expr(e, Some(&self.ret))),
             Stmt::Throw(e) => format!("throw {};", self.expr(e, None)),
-            Stmt::Monitor(enter, e) => format!("monitor{}({});", if *enter { "Enter" } else { "Exit" }, self.expr(e, None)),
+            Stmt::Monitor(enter, e) => format!(
+                "monitor{}({});",
+                if *enter { "Enter" } else { "Exit" },
+                self.expr(e, None)
+            ),
             Stmt::Nop => String::new(),
         }
     }
@@ -896,7 +1243,9 @@ pub fn propagate_constants(bir: &mut [(Vec<Stmt>, Option<Expr>)], vars: &Vars) {
         }
     }
     for (stmts, cond) in bir.iter_mut() {
-        stmts.retain(|st| !matches!(st, Stmt::Assign(Var(d), _) if consts.contains_key(&vars.root[*d])));
+        stmts.retain(
+            |st| !matches!(st, Stmt::Assign(Var(d), _) if consts.contains_key(&vars.root[*d])),
+        );
         for st in stmts.iter_mut() {
             for e in st.exprs_mut() {
                 sub(e, vars, &consts);
@@ -912,7 +1261,12 @@ pub fn propagate_constants(bir: &mut [(Vec<Stmt>, Option<Expr>)], vars: &Vars) {
 /// the call, where the object really starts to exist. A placeholder in the call's own block wins,
 /// then one whose block dominates the call, then a lone placeholder. A copy `y = x` made before
 /// the constructor ran (`y.<init>(..)`) moves to just after the new `x = new T(..)`.
-pub fn fold_split_new(dex: &Dex, cfg: &crate::cfg::Cfg, bir: &mut [(Vec<Stmt>, Option<Expr>)], vars: &Vars) {
+pub fn fold_split_new(
+    dex: &Dex,
+    cfg: &crate::cfg::Cfg,
+    bir: &mut [(Vec<Stmt>, Option<Expr>)],
+    vars: &Vars,
+) {
     // root -> placeholders (block, stmt, def, type)
     let mut pending: HashMap<usize, Vec<(usize, usize, usize, String)>> = HashMap::new();
     for (b, (stmts, _)) in bir.iter().enumerate() {
@@ -945,7 +1299,9 @@ pub fn fold_split_new(dex: &Dex, cfg: &crate::cfg::Cfg, bir: &mut [(Vec<Stmt>, O
     let mut replace: HashMap<(usize, usize), Vec<Stmt>> = HashMap::new();
     for (blk, (stmts, _)) in bir.iter().enumerate() {
         for (k, st) in stmts.iter().enumerate() {
-            let Stmt::Do(Invoke(Call::Direct, m, a)) = st else { continue };
+            let Stmt::Do(Invoke(Call::Direct, m, a)) = st else {
+                continue;
+            };
             let Some(Var(x)) = a.first() else { continue };
             let mut root = vars.root[*x];
             let mut copy = None;
@@ -954,7 +1310,9 @@ pub fn fold_split_new(dex: &Dex, cfg: &crate::cfg::Cfg, bir: &mut [(Vec<Stmt>, O
                 root = c.0;
                 copy = Some(c.clone());
             }
-            let Some(cands) = pending.get(&root) else { continue };
+            let Some(cands) = pending.get(&root) else {
+                continue;
+            };
             if !dex.method_parts(*m).is_ok_and(|p| p.1 == "<init>") {
                 continue;
             }
@@ -962,7 +1320,11 @@ pub fn fold_split_new(dex: &Dex, cfg: &crate::cfg::Cfg, bir: &mut [(Vec<Stmt>, O
             let pick = cands
                 .iter()
                 .rposition(|c| c.0 == blk && c.1 < k)
-                .or_else(|| cands.iter().position(|c| c.0 != blk && cfg.dominates(c.0, blk)))
+                .or_else(|| {
+                    cands
+                        .iter()
+                        .position(|c| c.0 != blk && cfg.dominates(c.0, blk))
+                })
                 .or((cands.len() == 1).then_some(0));
             let Some(pick) = pick else { continue };
             // kept: a `new T` before a branch is constructed once in each arm
@@ -1009,11 +1371,18 @@ pub fn fold_concat(dex: &Dex, bir: &mut [(Vec<Stmt>, Option<Expr>)], vars: &Vars
             count(x, vars, &mut uses);
         }
     }
-    let method = |m: u32| dex.method_parts(m).ok().and_then(|(c, n, p)| Some((c, n, dex.proto_parts(p).ok()?.1)));
+    let method = |m: u32| {
+        dex.method_parts(m)
+            .ok()
+            .and_then(|(c, n, p)| Some((c, n, dex.proto_parts(p).ok()?.1)))
+    };
     for (stmts, _) in bir.iter_mut() {
         let mut i = 0;
         while i < stmts.len() {
-            let Stmt::Assign(Var(d), New(t, ctor, args)) = &stmts[i] else { i += 1; continue };
+            let Stmt::Assign(Var(d), New(t, ctor, args)) = &stmts[i] else {
+                i += 1;
+                continue;
+            };
             let r = vars.root[*d];
             if !BUILDERS.contains(&t.as_str()) || vars.defs[r] != 1 || vars.param[r] {
                 i += 1;
@@ -1021,13 +1390,19 @@ pub fn fold_concat(dex: &Dex, bir: &mut [(Vec<Stmt>, Option<Expr>)], vars: &Vars
             }
             let mut parts: Vec<(Expr, String)> = Vec::new();
             match (method(*ctor), args.first()) {
-                (Some((_, _, p)), Some(a)) if p.first().is_some_and(|t| t != "I") => parts.push((a.clone(), p[0].clone())),
+                (Some((_, _, p)), Some(a)) if p.first().is_some_and(|t| t != "I") => {
+                    parts.push((a.clone(), p[0].clone()))
+                }
                 _ => {}
             }
             let mut j = i + 1;
             while let Some(Stmt::Do(Invoke(Call::Virtual, m, a))) = stmts.get(j) {
                 let Some((c, n, p)) = method(*m) else { break };
-                if !(BUILDERS.contains(&c.as_str()) && n == "append" && a.len() == 2 && matches!(a[0], Var(x) if vars.root[x] == r)) {
+                if !(BUILDERS.contains(&c.as_str())
+                    && n == "append"
+                    && a.len() == 2
+                    && matches!(a[0], Var(x) if vars.root[x] == r))
+                {
                     break;
                 }
                 parts.push((a[1].clone(), p.first().cloned().unwrap_or_default()));
@@ -1069,7 +1444,9 @@ fn lit(v: i64, wide: bool, want: Option<&str>) -> String {
         Some('L' | '[') if v == 0 => "null".into(),
         Some('F') => float(f32::from_bits(v as u32) as f64, "f", "Float"),
         Some('D') => float(f64::from_bits(v as u64), "", "Double"),
-        Some('C') if (0x20..0x7f).contains(&v) => format!("{:?}", char::from(v as u8)).replace('"', "\\\""),
+        Some('C') if (0x20..0x7f).contains(&v) => {
+            format!("{:?}", char::from(v as u8)).replace('"', "\\\"")
+        }
         Some('J') => format!("{v}L"),
         _ if wide => format!("{v}L"),
         _ => v.to_string(),
@@ -1080,7 +1457,10 @@ fn float(x: f64, suffix: &str, class: &str) -> String {
     if x.is_nan() {
         format!("{class}.NaN")
     } else if x.is_infinite() {
-        format!("{class}.{}_INFINITY", if x > 0.0 { "POSITIVE" } else { "NEGATIVE" })
+        format!(
+            "{class}.{}_INFINITY",
+            if x > 0.0 { "POSITIVE" } else { "NEGATIVE" }
+        )
     } else {
         format!("{x:?}{suffix}")
     }
@@ -1126,7 +1506,10 @@ mod tests {
         assert_eq!(lit(0x3f800000, false, Some("F")), "1.0f");
         assert_eq!(java_string("a\"\n\u{e9}"), "\"a\\\"\\n\\u00e9\"");
         let c = Cmp("<", bx(Reg(0)), bx(Reg(1)));
-        assert_eq!(And(bx(c.clone()), bx(Reg(2))).negate(), Or(bx(Cmp(">=", bx(Reg(0)), bx(Reg(1)))), bx(Not(bx(Reg(2))))));
+        assert_eq!(
+            And(bx(c.clone()), bx(Reg(2))).negate(),
+            Or(bx(Cmp(">=", bx(Reg(0)), bx(Reg(1)))), bx(Not(bx(Reg(2)))))
+        );
         assert_eq!(bin_op(0xaf - 0x90), "%");
         assert_eq!(bin_type(0xaf - 0x90), 'D');
     }
