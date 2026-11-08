@@ -34,7 +34,7 @@ case "$os" in
   Linux)  os=linux ;;
   Darwin) os=macos ;;
   *) echo "error: unsupported OS '$os' (this installer covers Linux and macOS;" \
-       "on Windows use install.ps1 or grab apkscope.exe from the Releases page)" >&2
+       "on Windows use install.ps1 or grab apkscope_windows_x86_64.exe from the Releases page)" >&2
      exit 1 ;;
 esac
 
@@ -45,7 +45,7 @@ case "$arch" in
   *) echo "error: unsupported CPU architecture '$arch'" >&2; exit 1 ;;
 esac
 
-asset="apkscope_${os}_${arch}.tar.gz"
+asset="apkscope_${os}_${arch}"
 
 # --- resolve the download URL ------------------------------------------------
 if [ -n "$VERSION" ]; then
@@ -71,7 +71,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Downloading $what for $os/$arch ..."
-if ! fetch "$base_url/$asset" "$tmp/$asset"; then
+if ! fetch "$base_url/$asset" "$tmp/apkscope"; then
   echo "error: could not download $asset" >&2
   echo "       (no release for this platform yet? check $BASE/$REPO/releases)" >&2
   exit 1
@@ -82,9 +82,9 @@ if fetch "$base_url/checksums.txt" "$tmp/checksums.txt"; then
   want=$(awk -v f="$asset" '$0 ~ f"$" {print $1; exit}' "$tmp/checksums.txt")
   if [ -n "$want" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
-      got=$(sha256sum "$tmp/$asset" | awk '{print $1}')
+      got=$(sha256sum "$tmp/apkscope" | awk '{print $1}')
     elif command -v shasum >/dev/null 2>&1; then
-      got=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
+      got=$(shasum -a 256 "$tmp/apkscope" | awk '{print $1}')
     else
       got=""
       echo "warning: no sha256 tool found, skipping checksum verification"
@@ -103,13 +103,15 @@ else
   echo "warning: checksums.txt not found for this release, skipping verification"
 fi
 
-# --- unpack and install --------------------------------------------------------
-tar -xzf "$tmp/$asset" -C "$tmp"
-if [ ! -f "$tmp/apkscope" ]; then
-  echo "error: $asset did not contain an 'apkscope' binary" >&2
-  exit 1
+# --- sanity: we must have received an executable, not an error page ----------
+if ! file "$tmp/apkscope" 2>/dev/null | grep -Eq 'ELF|Mach-O'; then
+  if [ "$(wc -c < "$tmp/apkscope")" -lt 1000000 ]; then
+    echo "error: downloaded file is not a binary (too small / wrong type)" >&2
+    exit 1
+  fi
 fi
 
+# --- install ------------------------------------------------------------------
 mkdir -p "$DEST"
 if ! cp "$tmp/apkscope" "$DEST/apkscope" 2>/dev/null; then
   echo "error: cannot write to $DEST (try: sudo APKSCOPE_INSTALL_DIR=$DEST ./install.sh," \

@@ -234,8 +234,8 @@ irm https://raw.githubusercontent.com/suffixing/apkscope/main/install.ps1 | iex
 ```
 
 Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
-(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope.exe`),
-or build from source:
+(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
+the Linux builds are fully static), or build from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server

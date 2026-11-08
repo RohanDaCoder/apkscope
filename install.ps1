@@ -19,7 +19,7 @@ $ErrorActionPreference = 'Stop'
 $Repo  = if ($env:APKSCOPE_REPO) { $env:APKSCOPE_REPO } else { 'suffixing/apkscope' }
 $Base  = if ($env:APKSCOPE_BASE_URL) { $env:APKSCOPE_BASE_URL } else { 'https://github.com' }
 $Dest  = Join-Path $env:LOCALAPPDATA 'Programs\apkscope'
-$Asset = 'apkscope.exe'
+$Asset = 'apkscope_windows_x86_64.exe'
 
 # The Windows build is x64; Windows on ARM runs it under emulation.
 if ($Version -ne '') {
