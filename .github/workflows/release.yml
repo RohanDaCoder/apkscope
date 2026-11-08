@@ -6,13 +6,34 @@ name: release
 #
 # Linux builds are static musl binaries (no glibc dependency), built with the
 # distro's musl-gcc; aarch64 runs natively on GitHub's arm runner.
+#
+# Pipeline: lint (fmt + check + clippy) -> per-platform build -> release.
+# If lint fails, no compute is spent on the binary matrix.
+#
+# All actions pinned to Node 24-compatible major versions (Node 20 was
+# removed from GitHub-hosted runners on 2026-09-23).
+#   https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
 on:
   push:
     tags:
       - "v*"
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      # CLI + MCP server only — matches the Linux/macOS release build
+      - run: cargo check --release --no-default-features
+      - run: cargo clippy --release --no-default-features -- -D warnings
+
   linux-x86_64:
+    needs: [lint]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -34,6 +55,7 @@ jobs:
           path: dist/
 
   linux-aarch64:
+    needs: [lint]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -55,6 +77,7 @@ jobs:
           path: dist/
 
   macos:
+    needs: [lint]
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -75,6 +98,7 @@ jobs:
           path: dist/
 
   windows:
+    needs: [lint]
     # the GUI viewer, built where it is tested
     runs-on: windows-latest
     timeout-minutes: 30
