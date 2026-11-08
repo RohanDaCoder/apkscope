@@ -1,18 +1,9 @@
 name: release
 
 # Builds every platform when a version tag (v*) is pushed and attaches the
-# binaries to a GitHub Release. Tag names containing "-" (e.g. v0.9.1-rc.1)
-# are published as pre-releases.
-#
-# Linux builds are static musl binaries (no glibc dependency), built with the
-# distro's musl-gcc; aarch64 runs natively on GitHub's arm runner.
-#
-# Pipeline: lint (fmt + check + clippy) -> per-platform build -> release.
-# If lint fails, no compute is spent on the binary matrix.
-#
-# All actions pinned to Node 24-compatible major versions (Node 20 was
-# removed from GitHub-hosted runners on 2026-09-23).
-#   https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+# binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
+# publishes as a pre-release. Linux binaries are static musl builds; the
+# lint job gates the matrix so a broken tag wastes no compute.
 on:
   push:
     tags:
@@ -30,16 +21,7 @@ jobs:
       - run: cargo fmt --all -- --check
       # CLI + MCP server only — matches the Linux/macOS release build
       - run: cargo check --release --no-default-features
-      # Same allow-list as ci.yml's clippy job (categories that need per-site
-      # judgment on the existing codebase — tracked for follow-up cleanup).
       - run: cargo clippy --release --no-default-features -- -D warnings
-          -A dead_code
-          -A clippy::collapsible_if
-          -A clippy::type_complexity
-          -A clippy::too_many_arguments
-          -A clippy::chunks_exact_to_as_chunks
-          -A clippy::needless_range_loop
-          -A clippy::explicit_counter_loop
 
   linux-x86_64:
     needs: [lint]

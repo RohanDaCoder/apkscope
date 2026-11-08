@@ -1,21 +1,8 @@
 name: ci
 
-# Quality gate + cross-platform cargo test/build matrix.
-#
-# Runs on every branch push and pull request. Tag pushes (v*) are
-# excluded: release.yml handles release tags with its own inline lint
-# gate -> build matrix, so we don't duplicate work on every release.
-#
-# Pipeline (all jobs run in parallel unless they need each other):
-#   fmt     - cargo fmt --check (fast, no compile)
-#   check   - cargo check on the CLI + MCP build (the --no-default-features
-#             config the Linux/macOS release binaries are built with)
-#   clippy  - cargo clippy with -D warnings on the same build
-#   build   - cargo test + build matrix on linux/macos/windows
-#
-# All actions pinned to Node 24-compatible major versions (Node 20 was
-# removed from GitHub-hosted runners on 2026-09-23).
-#   https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+# Quality gate + cross-platform test/build matrix; release tags (v*) are
+# handled by release.yml instead. Pinned actions are Node 24-compatible —
+# Node 20 was removed from GitHub-hosted runners on 2026-09-23.
 
 on:
   push:
@@ -53,22 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # Lint with -D warnings, but allow a few categories that need per-site
-      # judgment on the existing codebase (tracked for follow-up cleanup):
-      #   -A dead_code                  — 17 unused pub fns/types; need API-surface review
-      #   -A clippy::collapsible_if     — 52 sites; collapsing often hurts readability
-      #   -A clippy::type_complexity    — 9 sites; subjective, code may be clearer inline
-      #   -A clippy::too_many_arguments — 2 sites; refactor risk
-      #   -A clippy::chunks_exact_to_as_chunks — 7 sites; needs verification
-      #   -A clippy::needless_range_loop, explicit_counter_loop — judgment calls
       - run: cargo clippy --release --no-default-features -- -D warnings
-          -A dead_code
-          -A clippy::collapsible_if
-          -A clippy::type_complexity
-          -A clippy::too_many_arguments
-          -A clippy::chunks_exact_to_as_chunks
-          -A clippy::needless_range_loop
-          -A clippy::explicit_counter_loop
 
   build:
     strategy:
@@ -85,7 +57,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      # CLI + MCP server, no GUI libraries needed
       - run: cargo test --release --no-default-features
       - run: cargo build --release --no-default-features
       - uses: actions/upload-artifact@v5
