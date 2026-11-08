@@ -1,0 +1,104 @@
+name: release
+
+# Builds every platform when a version tag (v*) is pushed and attaches the
+# binaries to a GitHub Release. Tag names containing "-" (e.g. v0.9.1-rc.1)
+# are published as pre-releases.
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ZIG_VERSION: "0.17.1"
+  CARGO_ZIGBUILD_VERSION: "0.24.1"
+
+jobs:
+  linux:
+    # static musl builds (no glibc dependency) for x86_64 and aarch64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - run: cargo install cargo-zigbuild --locked --version "$CARGO_ZIGBUILD_VERSION"
+      - name: Install pinned zig
+        run: |
+          curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ -C "$HOME"
+          echo "$HOME/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - run: cargo zigbuild --release --no-default-features --target x86_64-unknown-linux-musl
+      - run: cargo zigbuild --release --no-default-features --target aarch64-unknown-linux-musl
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/apkscope_linux_x86_64.tar.gz -C target/x86_64-unknown-linux-musl/release apkscope
+          tar -czf dist/apkscope_linux_aarch64.tar.gz -C target/aarch64-unknown-linux-musl/release apkscope
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist-linux
+          path: dist/
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # arm64 build is native; x86_64 cross-compiles with the Apple toolchain
+      - run: cargo build --release --no-default-features --target aarch64-apple-darwin
+      - run: cargo build --release --no-default-features --target x86_64-apple-darwin
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/apkscope_macos_aarch64.tar.gz -C target/aarch64-apple-darwin/release apkscope
+          tar -czf dist/apkscope_macos_x86_64.tar.gz -C target/x86_64-apple-darwin/release apkscope
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist-macos
+          path: dist/
+
+  windows:
+    # the GUI viewer, built where it is tested (same artifact name as before)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: |
+          mkdir dist
+          cp target/Release/apkscope.exe dist/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist-windows
+          path: dist/
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum apkscope.exe *.tar.gz > checksums.txt
+          cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/apkscope.exe
+            dist/*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

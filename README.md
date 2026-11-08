@@ -217,7 +217,25 @@ library really does, and anyone who hands APKs to an AI agent.
 
 ## Get started
 
-**1. Get it:** `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases), or build:
+**1. Get it:**
+
+Linux (x86_64, aarch64) or macOS — one command, detects your CPU and verifies the checksum:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/install.sh | sh
+# or a pinned version:
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/install.sh | sh -s 0.9.1
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/suffixing/apkscope/main/install.ps1 | iex
+```
+
+Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
+(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope.exe`),
+or build from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
