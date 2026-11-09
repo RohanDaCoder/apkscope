@@ -305,6 +305,30 @@ impl<'a> Reader<'a> {
             .collect()
     }
 
+    /// The DEX's id tables, already in model form and sorted order, for reusing as write pools.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn pool_tables(
+        &self,
+    ) -> (
+        &[S],
+        &[S],
+        &[Proto],
+        &[FieldRef],
+        &[MethodRef],
+        &[Handle],
+        &[Arc<Vec<Value>>],
+    ) {
+        (
+            &self.strings,
+            &self.types,
+            &self.protos,
+            &self.fields,
+            &self.methods,
+            &self.handles,
+            &self.call_sites,
+        )
+    }
+
     pub fn class(&self, i: usize) -> R<Class> {
         let d = self.d;
         let o = self.class_defs + i * 32;

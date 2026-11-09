@@ -2,6 +2,7 @@
 //! order later sections need its offsets.
 
 use super::model::*;
+use super::read;
 use crate::bytecode::{self, Fmt};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -31,6 +32,13 @@ fn sleb(out: &mut Vec<u8>, mut v: i32) {
         }
         out.push(b | 0x80);
     }
+}
+
+fn index_map<T: Clone + Eq + std::hash::Hash>(v: &[T]) -> HashMap<T, u32> {
+    v.iter()
+        .enumerate()
+        .map(|(i, x)| (x.clone(), i as u32))
+        .collect()
 }
 
 fn shorty(p: &Proto) -> S {
@@ -315,6 +323,28 @@ impl Pools {
             hi,
             ci,
         })
+    }
+
+    /// Reuse a DEX's own id tables, in their existing (sorted) order, as the write pools. Lets an
+    /// edit be assembled against the indices already in the file, so untouched classes stay valid.
+    fn from_reader(r: &read::Reader<'_>) -> Self {
+        let (strings, types, protos, fields, methods, handles, sites) = r.pool_tables();
+        Pools {
+            si: index_map(strings),
+            ti: index_map(types),
+            pi: index_map(protos),
+            fi: index_map(fields),
+            mi: index_map(methods),
+            hi: index_map(handles),
+            ci: index_map(sites),
+            strings: strings.to_vec(),
+            types: types.to_vec(),
+            protos: protos.to_vec(),
+            fields: fields.to_vec(),
+            methods: methods.to_vec(),
+            handles: handles.to_vec(),
+            sites: sites.to_vec(),
+        }
     }
 
     fn value(&self, v: &Value, out: &mut Vec<u8>) {
@@ -1506,6 +1536,100 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
     f.extend_from_slice(&data);
     seal(&mut f);
     Ok(f)
+}
+
+/// Patch edited classes into `dex` in place, without rebuilding the whole file. Only works when
+/// every edit just changes instruction bytes of existing methods (same code layout, no new pool
+/// entries, no field/annotation/signature changes); returns `None` to fall back to [`write`]
+/// otherwise. Keeps peak memory near the DEX size instead of modelling every class.
+pub fn patch(dex: &[u8], edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
+    let r = read::Reader::new(dex)?;
+    let p = Pools::from_reader(&r);
+    let dx = crate::dex::Dex::parse(dex)?;
+    let mut out = dex.to_vec();
+    for &(ci, new) in edits {
+        let Ok(orig) = r.class(ci) else {
+            return Ok(None);
+        };
+        if !shell_eq(&orig, new) {
+            return Ok(None); // fields/annotations/signatures changed: needs a full rebuild
+        }
+        let mut col = Collect::default();
+        col.class(new);
+        if !refs_present(&col, &p) {
+            return Ok(None); // edit introduces a new pool entry: needs a full rebuild
+        }
+        let cd = dx.class_data(ci)?;
+        if cd.methods.len() != orig.methods.len() || new.methods.len() != orig.methods.len() {
+            return Ok(None);
+        }
+        for ((om, nm), dm) in orig.methods.iter().zip(&new.methods).zip(&cd.methods) {
+            let (oc, nc) = match (&om.code, &nm.code) {
+                (Some(a), Some(b)) if a != b => (a, b),
+                (Some(_), Some(_)) | (None, None) => continue,
+                _ => return Ok(None), // a method gained or lost its body
+            };
+            let what = || {
+                format!(
+                    "{}->{}",
+                    String::from_utf8_lossy(&new.name),
+                    String::from_utf8_lossy(&nm.name)
+                )
+            };
+            let ao = assemble(oc, &p, &what)?;
+            let an = assemble(nc, &p, &what)?;
+            // only the instruction bytes may differ; registers/outs/tries/handlers/debug and the
+            // total length must match, so the surrounding code_item and all other offsets are kept
+            if (ao.outs, &ao.tries, &ao.handlers, &ao.events, ao.insns.len())
+                != (an.outs, &an.tries, &an.handlers, &an.events, an.insns.len())
+            {
+                return Ok(None);
+            }
+            let Some(code) = &dm.code else {
+                return Ok(None);
+            };
+            let off = code.insns.as_ptr() as usize - dex.as_ptr() as usize;
+            let old: Vec<u8> = ao.insns.iter().flat_map(|u| u.to_le_bytes()).collect();
+            // the original must round-trip to its own bytes, or we don't trust the overwrite
+            if code.insns != old {
+                return Ok(None);
+            }
+            let new_bytes: Vec<u8> = an.insns.iter().flat_map(|u| u.to_le_bytes()).collect();
+            out[off..off + new_bytes.len()].copy_from_slice(&new_bytes);
+        }
+    }
+    seal(&mut out);
+    Ok(Some(out))
+}
+
+/// Everything about two class models matches except the instruction bodies of methods.
+fn shell_eq(a: &Class, b: &Class) -> bool {
+    a.name == b.name
+        && a.access == b.access
+        && a.sup == b.sup
+        && a.ifaces == b.ifaces
+        && a.source == b.source
+        && a.annos == b.annos
+        && a.fields == b.fields
+        && a.methods.len() == b.methods.len()
+        && a.methods.iter().zip(&b.methods).all(|(x, y)| {
+            x.name == y.name
+                && x.proto == y.proto
+                && x.access == y.access
+                && x.annos == y.annos
+                && x.param_annos == y.param_annos
+        })
+}
+
+/// Every reference an edited class makes is already present in the DEX's pools.
+fn refs_present(c: &Collect, p: &Pools) -> bool {
+    c.strings.iter().all(|x| p.si.contains_key(x))
+        && c.types.iter().all(|x| p.ti.contains_key(x))
+        && c.protos.iter().all(|x| p.pi.contains_key(x))
+        && c.fields.iter().all(|x| p.fi.contains_key(x))
+        && c.methods.iter().all(|x| p.mi.contains_key(x))
+        && c.handles.iter().all(|x| p.hi.contains_key(x))
+        && c.sites.iter().all(|x| p.ci.contains_key(x))
 }
 
 /// Recompute the header's SHA-1 signature and Adler-32 checksum.

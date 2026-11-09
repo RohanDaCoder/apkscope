@@ -81,17 +81,36 @@ pub fn inject(
         let bytes = apk
             .read(&name)
             .ok_or_else(|| format!("{name} not in the APK"))?;
-        let mut all = read::read(&bytes).map_err(|e| format!("{name}: {e}"))?;
-        for c in edited {
-            match all.iter().position(|x| x.name == c.name) {
-                Some(k) => all[k] = c,
-                None => all.push(c),
+        // fast path: patch instruction bytes in place when the edits only change existing methods'
+        // code, so a one-class edit doesn't model and rewrite the whole DEX
+        let patched = {
+            let dx = crate::dex::Dex::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
+            let indexed: Option<Vec<(usize, &Class)>> = edited
+                .iter()
+                .map(|c| {
+                    dx.find_class(&String::from_utf8_lossy(&c.name))
+                        .map(|k| (k, c))
+                })
+                .collect();
+            match indexed {
+                Some(ix) => write::patch(&bytes, &ix).map_err(|e| format!("{name}: {e}"))?,
+                None => None, // a brand-new class: no in-place slot
             }
-        }
-        edits.insert(
-            name.clone(),
-            Some(write::write(&all, version(&bytes)).map_err(|e| format!("{name}: {e}"))?),
-        );
+        };
+        let dex = match patched {
+            Some(d) => d,
+            None => {
+                let mut all = read::read(&bytes).map_err(|e| format!("{name}: {e}"))?;
+                for c in edited {
+                    match all.iter().position(|x| x.name == c.name) {
+                        Some(k) => all[k] = c,
+                        None => all.push(c),
+                    }
+                }
+                write::write(&all, version(&bytes)).map_err(|e| format!("{name}: {e}"))?
+            }
+        };
+        edits.insert(name.clone(), Some(dex));
         changed.push(name);
     }
     Ok(changed)
@@ -339,6 +358,39 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains(":nowhere"), "{e}");
+    }
+
+    #[test]
+    fn patches_instruction_in_place() {
+        let src = ".class public Lcom/ex/P;\n.super Ljava/lang/Object;\n\
+                   .method public static f()I\n    .registers 1\n    const/16 v0, 0x64\n    return v0\n.end method\n";
+        let dex = write::write(&[text::parse(src).unwrap()], *b"035").unwrap();
+        let ci = Dex::parse(&dex).unwrap().find_class("Lcom/ex/P;").unwrap();
+
+        // same-width immediate change: patched in place, same size, only the operand (and header
+        // checksum/signature) differ, and it decodes to the new value
+        let edited = text::parse(&src.replace("0x64", "0x65")).unwrap();
+        let patched = write::patch(&dex, &[(ci, &edited)])
+            .unwrap()
+            .expect("same-width edit should patch in place");
+        assert_eq!(patched.len(), dex.len());
+        let back = read::read(&patched).unwrap();
+        let lit = back[0].methods[0]
+            .code
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|it| match it {
+                model::Item::Ins(i) if i.op == 0x13 => Some(i.lit),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(lit, 0x65);
+
+        // adding an instruction changes the layout, so it must fall back (returns None)
+        let grew = text::parse(&src.replace("    return v0", "    nop\n    return v0")).unwrap();
+        assert!(write::patch(&dex, &[(ci, &grew)]).unwrap().is_none());
     }
 
     /// APKSCOPE_ROUNDTRIP=<dir of .apk> cargo test --release roundtrip_apks -- --ignored --nocapture
