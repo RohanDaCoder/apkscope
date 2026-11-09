@@ -217,12 +217,17 @@ library really does, and anyone who hands APKs to an AI agent.
 
 ## Get started
 
-**1. Get it:** `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases), or build:
+**1. Get it:** Windows `apkscope.exe`, Linux `apkscope_<version>_amd64.deb` (Debian/Ubuntu) or
+`apkscope-<version>-x86_64.AppImage` (any distro), from
+[Releases](https://github.com/suffixing/apkscope/releases) — or build:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
-cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, servers)
+cargo build --release --no-default-features    # CLI + MCP only (servers)
 ```
+
+The viewer needs no system GUI libraries at build time: it loads the desktop's X11 or Wayland
+stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro.
 
 **2. Give it to your agent:**
 
@@ -334,7 +339,7 @@ under half a second of tool time.
 
 <p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview" width="760"></p>
 
-Double-click `apkscope.exe` and drop in an APK. Security overview first, then your app's code apart
+Double-click `apkscope.exe` (or launch the Linux .deb/AppImage) and drop in an APK. Security overview first, then your app's code apart
 from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
 callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
 **Edit smali** on a class to patch its code, then **Build & sign** with undo.
@@ -345,7 +350,8 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 - Cold one-shot queries: rust_ASC is still quicker at string xrefs (0.78-0.97x, 5-40 ms) and a
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
-- The viewer is tested on Windows; CLI and MCP pass CI on Linux and macOS.
+- The viewer is tested on Windows; the Linux build (`.deb`, AppImage) is smoke-tested under Xvfb
+  in CI, but day-to-day use on Linux isn't validated yet.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).
 - `decrypt` only runs decryptors that compute from constants.
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
