@@ -33,3 +33,27 @@ jobs:
       # the viewer builds on Windows (where it is tested)
       - if: matrix.os == 'windows-latest'
         run: cargo build --release
+
+  gui-linux:
+    # the viewer on Linux: the same default-feature build as on Windows, packaged
+    # as .deb + AppImage and smoke-tested under Xvfb. Pinned to 24.04 because the
+    # binary links glibc dynamically — building on the oldest supported LTS keeps
+    # it installable everywhere, and ubuntu-latest rolls to 26.04 this month.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # gui unit tests (the matrix job tests the CLI feature set)
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: packaging/linux/package.sh target/release/apkscope dist
+      # smoke test: the window opens on the X server with software GL; still
+      # being alive when the timeout kills it is the pass condition
+      - run: |
+          sudo apt-get install -y xvfb xauth
+          timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
+      - uses: actions/upload-artifact@v5
+        with:
+          name: apkscope-gui-linux-x86_64
+          path: dist/
