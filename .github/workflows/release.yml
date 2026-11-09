@@ -2,8 +2,9 @@ name: release
 
 # Builds every platform when a version tag (v*) is pushed and attaches the
 # binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
-# publishes as a pre-release. Linux binaries are static musl builds; the
-# lint job gates the matrix so a broken tag wastes no compute.
+# publishes as a pre-release. Linux CLI/MCP binaries are static musl builds;
+# the Linux viewer is a glibc build packaged as .deb + AppImage. The lint job
+# gates the matrix so a broken tag wastes no compute.
 on:
   push:
     tags:
@@ -40,6 +41,10 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_x86_64
+      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
+      # runtime, so nothing is statically linked), packaged as .deb and AppImage
+      - run: cargo build --release
+      - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-x86_64
@@ -62,6 +67,10 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_aarch64
+      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
+      # runtime, so nothing is statically linked), packaged as .deb and AppImage
+      - run: cargo build --release
+      - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-aarch64
@@ -120,12 +129,12 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum apkscope_* > checksums.txt
+          sha256sum apkscope* > checksums.txt
           cat checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/apkscope_*
+            dist/apkscope*
             dist/checksums.txt
           generate_release_notes: true
           fail_on_unmatched_files: true

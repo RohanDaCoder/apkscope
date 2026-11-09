@@ -69,3 +69,15 @@ jobs:
       # the viewer builds on Windows (where it is tested)
       - if: matrix.os == 'windows-latest'
         run: cargo build --release
+      # the viewer on Linux as well: built and packaged (.deb + AppImage).
+      # Pinned to 24.04 because the binary links glibc dynamically — building
+      # on the oldest supported LTS keeps it installable everywhere.
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo build --release
+      - if: matrix.os == 'ubuntu-24.04'
+        run: packaging/linux/package.sh target/release/apkscope dist
+      - if: matrix.os == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v7
+        with:
+          name: apkscope-viewer-linux-x64
+          path: dist/

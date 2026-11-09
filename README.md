@@ -235,14 +235,17 @@ irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps
 
 Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
 (`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
-the Linux builds are fully static). Note: the Linux/macOS release binaries are CLI + MCP server only
-(no GUI viewer); the Windows binary includes the native viewer. Build from source to get the viewer
-on Linux/macOS:
+the Linux/macOS binaries are fully static, CLI + MCP server only). The viewer ships as
+`apkscope_<version>_<arch>.deb` (Debian/Ubuntu) or `apkscope-<version>-<arch>.AppImage` (any distro)
+in the same releases, and as `apkscope.exe` on Windows; on macOS, build from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
-cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, servers)
+cargo build --release --no-default-features    # CLI + MCP only (servers)
 ```
+
+The viewer needs no system GUI libraries at build time: it loads the desktop's X11 or Wayland
+stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro.
 
 To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
@@ -356,7 +359,7 @@ under half a second of tool time.
 
 <p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview" width="760"></p>
 
-Double-click `apkscope.exe` and drop in an APK. Security overview first, then your app's code apart
+Double-click `apkscope.exe` (or launch the Linux .deb/AppImage) and drop in an APK. Security overview first, then your app's code apart
 from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
 callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
 **Edit smali** on a class to patch its code, then **Build & sign** with undo.
@@ -367,7 +370,7 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 - Cold one-shot queries: rust_ASC is still quicker at string xrefs (0.78-0.97x, 5-40 ms) and a
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
-- The viewer is tested on Windows; CLI and MCP pass CI on Linux and macOS.
+- The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).
 - `decrypt` only runs decryptors that compute from constants.
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
