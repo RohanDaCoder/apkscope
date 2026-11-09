@@ -60,7 +60,8 @@ function Warn($msg) {
 function Die($msg) {
     if ($script:Plain) { Write-Host "error: $msg" }
     else { Write-Host 'error: ' -ForegroundColor Red -NoNewline; Write-Host $msg }
-    exit 1
+    # throw, not exit: under `irm ... | iex` exit closes the user's PowerShell window
+    throw 'apkscope install aborted'
 }
 
 # The Windows build is x64; Windows on ARM runs it under emulation.
