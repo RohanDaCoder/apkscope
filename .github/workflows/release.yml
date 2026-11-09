@@ -103,7 +103,7 @@ jobs:
       # smoke test: the window opens on the X server with software GL; still
       # being alive when the timeout kills it is the pass condition
       - run: |
-          sudo apt-get install -y xvfb xauth
+          sudo apt-get install -y xvfb xauth libx11-6 libxcb1 libxcursor1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-egl1 libgl1 libegl1
           timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
       - uses: actions/upload-artifact@v7
         with:
@@ -119,7 +119,7 @@ jobs:
       - run: cargo build --release
       - run: packaging/linux/package.sh target/release/apkscope dist
       - run: |
-          sudo apt-get install -y xvfb xauth
+          sudo apt-get install -y xvfb xauth libx11-6 libxcb1 libxcursor1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-egl1 libgl1 libegl1
           timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
       - uses: actions/upload-artifact@v7
         with:
