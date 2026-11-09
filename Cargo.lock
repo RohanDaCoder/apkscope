@@ -164,7 +164,7 @@ checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
 name = "apkscope"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "crc32fast",
  "eframe",
