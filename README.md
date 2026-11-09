@@ -217,12 +217,34 @@ library really does, and anyone who hands APKs to an AI agent.
 
 ## Get started
 
-**1. Get it:** `apkscope.exe` from [Releases](https://github.com/suffixing/apkscope/releases), or build:
+**1. Get it:**
+
+Linux (x86_64, aarch64) or macOS — one command, detects your CPU and verifies the checksum:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.sh | sh
+# or a pinned version:
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.sh | sh -s 0.9.1
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps1 | iex
+```
+
+Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
+(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
+the Linux builds are fully static). Note: the Linux/macOS release binaries are CLI + MCP server only
+(no GUI viewer); the Windows binary includes the native viewer. Build from source to get the viewer
+on Linux/macOS:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
 cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, servers)
 ```
+
+To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
 **2. Give it to your agent:**
 

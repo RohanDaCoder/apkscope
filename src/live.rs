@@ -74,10 +74,37 @@ impl Live {
             (true, Some("local")) => "-n",
             (true, _) => "-N",
         });
-        cmd.arg(target).args(["-q", "-t", "inf", "-l"]).arg(&path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let child = cmd.spawn().map_err(|e| format!("cannot run frida ({e}); install it with: pip install frida-tools"))?;
-        let mut live = Live { child, path, hooks: BTreeMap::new(), events: Default::default() };
-        for (pipe, is_err) in [(live.child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), false), (live.child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), true)] {
+        cmd.arg(target)
+            .args(["-q", "-t", "inf", "-l"])
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = cmd.spawn().map_err(|e| {
+            format!("cannot run frida ({e}); install it with: pip install frida-tools")
+        })?;
+        let mut live = Live {
+            child,
+            path,
+            hooks: BTreeMap::new(),
+            events: Default::default(),
+        };
+        for (pipe, is_err) in [
+            (
+                live.child
+                    .stdout
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+                false,
+            ),
+            (
+                live.child
+                    .stderr
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+                true,
+            ),
+        ] {
             let Some(pipe) = pipe else { continue };
             let ev = live.events.clone();
             std::thread::spawn(move || {
@@ -90,14 +117,27 @@ impl Live {
         while t.elapsed() < Duration::from_secs(15) {
             if let Ok(Some(st)) = live.child.try_wait() {
                 std::thread::sleep(Duration::from_millis(100));
-                return Err(explain(format!("frida exited ({st}):\n{}", live.text(0, "", 50).0)));
+                return Err(explain(format!(
+                    "frida exited ({st}):\n{}",
+                    live.text(0, "", 50).0
+                )));
             }
-            if live.events.lock().unwrap().list.iter().any(|e| e["k"] == "loaded") {
+            if live
+                .events
+                .lock()
+                .unwrap()
+                .list
+                .iter()
+                .any(|e| e["k"] == "loaded")
+            {
                 return Ok(live);
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        Err(format!("frida did not load the script within 15 s:\n{}", live.text(0, "", 50).0))
+        Err(format!(
+            "frida did not load the script within 15 s:\n{}",
+            live.text(0, "", 50).0
+        ))
     }
 
     pub fn alive(&mut self) -> bool {
@@ -118,7 +158,8 @@ impl Live {
     /// Remove hooks whose key is `key` or starts with `key#` ("*" removes all); how many went.
     pub fn unhook(&mut self, key: &str) -> Result<usize, String> {
         let n = self.hooks.len();
-        self.hooks.retain(|k, _| !(key == "*" || k == key || k.starts_with(&format!("{key}#"))));
+        self.hooks
+            .retain(|k, _| !(key == "*" || k == key || k.starts_with(&format!("{key}#"))));
         self.write()?;
         Ok(n - self.hooks.len())
     }
@@ -131,7 +172,11 @@ impl Live {
     /// newest, as one line each; also the next `since` to pass.
     pub fn text(&self, since: u64, filter: &str, limit: usize) -> (String, u64) {
         let ev = self.events.lock().unwrap();
-        let hits: Vec<&Value> = ev.list.iter().filter(|e| e["seq"].as_u64() >= Some(since) && matches(e, filter)).collect();
+        let hits: Vec<&Value> = ev
+            .list
+            .iter()
+            .filter(|e| e["seq"].as_u64() >= Some(since) && matches(e, filter))
+            .collect();
         let mut o = String::new();
         for e in &hits[hits.len().saturating_sub(limit)..] {
             o += &line(e);
@@ -143,18 +188,28 @@ impl Live {
     /// Calls, returns and throws per method since `since`, busiest first.
     pub fn summary(&self, since: u64) -> String {
         let mut by: BTreeMap<String, [u64; 3]> = BTreeMap::new();
-        for e in self.events.lock().unwrap().list.iter().filter(|e| e["seq"].as_u64() >= Some(since)) {
+        for e in self
+            .events
+            .lock()
+            .unwrap()
+            .list
+            .iter()
+            .filter(|e| e["seq"].as_u64() >= Some(since))
+        {
             let i = match e["k"].as_str() {
                 Some("call") => 0,
                 Some("ret") => 1,
                 Some("throw") => 2,
                 _ => continue,
             };
-            by.entry(e["m"].as_str().unwrap_or_default().into()).or_default()[i] += 1;
+            by.entry(e["m"].as_str().unwrap_or_default().into())
+                .or_default()[i] += 1;
         }
         let mut v: Vec<_> = by.into_iter().collect();
         v.sort_by(|a, b| b.1[0].cmp(&a.1[0]));
-        v.iter().map(|(m, [c, r, t])| format!("{c:>7} calls {r:>7} returns {t:>5} throws  {m}\n")).collect()
+        v.iter()
+            .map(|(m, [c, r, t])| format!("{c:>7} calls {r:>7} returns {t:>5} throws  {m}\n"))
+            .collect()
     }
 }
 
@@ -167,19 +222,26 @@ fn script(hooks: &BTreeMap<String, (String, bool)>) -> String {
         if *raw { s += &block } else { java += &block }
     }
     if !java.is_empty() {
-        s += &format!("if (Java.available) Java.perform(() => {{\n{java}}}); else __ev(\"error\", \"\", \"no Java runtime in this process\");\n");
+        s += &format!(
+            "if (Java.available) Java.perform(() => {{\n{java}}}); else __ev(\"error\", \"\", \"no Java runtime in this process\");\n"
+        );
     }
     s += &format!("__ev(\"loaded\", \"\", {});\n", hooks.len());
     s
 }
 
 fn matches(e: &Value, filter: &str) -> bool {
-    filter.is_empty() || e["m"].as_str().is_some_and(|m| m.contains(filter)) || e["v"].to_string().contains(filter)
+    filter.is_empty()
+        || e["m"].as_str().is_some_and(|m| m.contains(filter))
+        || e["v"].to_string().contains(filter)
 }
 
 /// A frida output line as an event: hook events are JSON after \x01, anything else is frida's own text.
 pub fn parse(line: &str, is_err: bool) -> Value {
-    match line.split_once('\u{1}').and_then(|(_, j)| serde_json::from_str::<Value>(j).ok()) {
+    match line
+        .split_once('\u{1}')
+        .and_then(|(_, j)| serde_json::from_str::<Value>(j).ok())
+    {
         Some(e) => e,
         None => json!({"k": if is_err { "stderr" } else { "log" }, "m": "", "v": line}),
     }
@@ -188,14 +250,26 @@ pub fn parse(line: &str, is_err: bool) -> Value {
 /// `#seq tid kind method value`
 pub fn line(e: &Value) -> String {
     let v = value(e);
-    format!("#{} t{} {:<6} {} {v}", e["seq"], e["tid"].as_u64().unwrap_or(0), e["k"].as_str().unwrap_or("?"), e["m"].as_str().unwrap_or(""))
+    format!(
+        "#{} t{} {:<6} {} {v}",
+        e["seq"],
+        e["tid"].as_u64().unwrap_or(0),
+        e["k"].as_str().unwrap_or("?"),
+        e["m"].as_str().unwrap_or("")
+    )
 }
 
 /// An event's value as text: arguments as `(a, b)`.
 pub fn value(e: &Value) -> String {
     match &e["v"] {
         Value::String(s) => s.clone(),
-        Value::Array(a) => format!("({})", a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!(
+            "({})",
+            a.iter()
+                .map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         v => v.to_string(),
     }
 }
@@ -270,9 +344,20 @@ setTimeout(() => { clearInterval(__t); __hookScripts(); __dumpDex(); }, WAIT);
 /// Spawn `target` under frida, collect what `DUMP_JS` sends, and write `out/dex/classesN.dex`
 /// and `out/scripts/*`. Scripts keep coming while the app runs, so this waits `secs` for the
 /// app to unpack, dumps, then `extra` seconds more for scripts. Returns the files written.
-pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::Path, secs: u64, extra: u64) -> Result<Vec<String>, String> {
+pub fn dump(
+    target: &str,
+    attach: bool,
+    device: Option<&str>,
+    out: &std::path::Path,
+    secs: u64,
+    extra: u64,
+) -> Result<Vec<String>, String> {
     let mut l = Live::start(target, attach, device)?;
-    l.hook("dump", &DUMP_JS.replace("WAIT", &(secs * 1000).to_string()), true)?;
+    l.hook(
+        "dump",
+        &DUMP_JS.replace("WAIT", &(secs * 1000).to_string()),
+        true,
+    )?;
     let mut since = 0;
     let mut parts: BTreeMap<(String, u64), (String, Vec<u8>)> = BTreeMap::new();
     let mut done_at: Option<Instant> = None;
@@ -285,7 +370,12 @@ pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::P
         std::thread::sleep(Duration::from_millis(200));
         let evs: Vec<Value> = {
             let ev = l.events.lock().unwrap();
-            let v = ev.list.iter().filter(|e| e["seq"].as_u64() >= Some(since)).cloned().collect();
+            let v = ev
+                .list
+                .iter()
+                .filter(|e| e["seq"].as_u64() >= Some(since))
+                .cloned()
+                .collect();
             since = ev.next;
             v
         };
@@ -293,12 +383,16 @@ pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::P
             match e["k"].as_str() {
                 Some(k @ ("dex" | "js")) => {
                     let v = &e["v"];
-                    let p = parts.entry((k.into(), v["id"].as_u64().unwrap_or(0))).or_insert_with(|| (e["m"].as_str().unwrap_or("").into(), Vec::new()));
+                    let p = parts
+                        .entry((k.into(), v["id"].as_u64().unwrap_or(0)))
+                        .or_insert_with(|| (e["m"].as_str().unwrap_or("").into(), Vec::new()));
                     p.1.extend(unhex(v["hex"].as_str().unwrap_or("")));
                 }
                 Some("dexdone") => done_at = Some(Instant::now()),
                 Some("error" | "stderr") => eprintln!("{}", line(&e)),
-                Some("log") if e["v"].as_str().is_some_and(|s| s.starts_with("hooked ")) => eprintln!("{}", value(&e)),
+                Some("log") if e["v"].as_str().is_some_and(|s| s.starts_with("hooked ")) => {
+                    eprintln!("{}", value(&e))
+                }
                 _ => {}
             }
         }
@@ -310,7 +404,11 @@ pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::P
     }
     let mut files = Vec::new();
     for ((kind, id), (name, bytes)) in parts {
-        let rel = if kind == "dex" { format!("dex/classes{}.dex", id + 1) } else { format!("scripts/{id:04}_{}", script_name(&name)) };
+        let rel = if kind == "dex" {
+            format!("dex/classes{}.dex", id + 1)
+        } else {
+            format!("scripts/{id:04}_{}", script_name(&name))
+        };
         let path = out.join(&rel);
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -320,12 +418,29 @@ pub fn dump(target: &str, attach: bool, device: Option<&str>, out: &std::path::P
 }
 
 fn unhex(s: &str) -> impl Iterator<Item = u8> + '_ {
-    s.as_bytes().chunks_exact(2).filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+    s.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
 }
 
 /// A script's file name, safe on any file system; `.js` when it had none.
 fn script_name(name: &str) -> String {
-    let base: String = name.rsplit(['/', '\\']).next().unwrap_or("").chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).take(80).collect();
+    let base: String = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
     match base.as_str() {
         "" => "script.js".into(),
         b if b.contains('.') => base,
@@ -336,7 +451,9 @@ fn script_name(name: &str) -> String {
 /// Spells out frida's errors that mean "frida-server is not running on the device".
 fn explain(log: String) -> String {
     if log.contains("need Gadget") || log.contains("unable to connect to remote frida-server") {
-        format!("frida-server is not running on the device. Start it (Live panel, device, Start frida-server) or run:\n  adb shell \"su -c '/data/local/tmp/frida-server -D'\"\n\n{log}")
+        format!(
+            "frida-server is not running on the device. Start it (Live panel, device, Start frida-server) or run:\n  adb shell \"su -c '/data/local/tmp/frida-server -D'\"\n\n{log}"
+        )
     } else {
         log
     }
@@ -349,7 +466,10 @@ mod tests {
     #[test]
     fn events() {
         let mut ev = Events::default();
-        ev.push(parse("\u{1}{\"k\":\"call\",\"m\":\"a.B.c\",\"v\":[\"1\",\"x\"],\"tid\":7,\"ts\":0}", false));
+        ev.push(parse(
+            "\u{1}{\"k\":\"call\",\"m\":\"a.B.c\",\"v\":[\"1\",\"x\"],\"tid\":7,\"ts\":0}",
+            false,
+        ));
         ev.push(parse("Spawned `x`.", true));
         assert_eq!(line(&ev.list[0]), "#0 t7 call   a.B.c (1, x)");
         assert_eq!(ev.list[1]["k"], "stderr");

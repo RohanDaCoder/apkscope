@@ -90,14 +90,20 @@ pub fn sleb128(d: &[u8], off: &mut usize) -> R<i32> {
     let v = uleb128(d, off)?;
     let bits = 7 * (*off - start) as u32;
     // sign-extend from the last encoded bit
-    Ok(if bits < 32 { ((v << (32 - bits)) as i32) >> (32 - bits) } else { v as i32 })
+    Ok(if bits < 32 {
+        ((v << (32 - bits)) as i32) >> (32 - bits)
+    } else {
+        v as i32
+    })
 }
 
 fn type_list(d: &[u8], off: usize) -> R<Vec<u32>> {
     if off == 0 {
         return Ok(vec![]);
     }
-    (0..u32_at(d, off)? as usize).map(|i| u16_at(d, off + 4 + i * 2).map(u32::from)).collect()
+    (0..u32_at(d, off)? as usize)
+        .map(|i| u16_at(d, off + 4 + i * 2).map(u32::from))
+        .collect()
 }
 
 pub fn parse_tries(d: &[u8], code_off: usize, units: usize) -> R<Vec<Try>> {
@@ -118,7 +124,11 @@ pub fn parse_tries(d: &[u8], code_off: usize, units: usize) -> R<Vec<Try>> {
         if size <= 0 {
             handlers.push((None, uleb128(d, &mut h)?));
         }
-        out.push(Try { start: u32_at(d, o)?, count: u16_at(d, o + 4)? as u32, handlers });
+        out.push(Try {
+            start: u32_at(d, o)?,
+            count: u16_at(d, o + 4)? as u32,
+            handlers,
+        });
     }
     Ok(out)
 }
@@ -155,7 +165,10 @@ impl<'a> Dex<'a> {
     pub fn string(&self, idx: u32) -> R<String> {
         let mut off = u32_at(self.data, self.string_ids + idx as usize * 4)? as usize;
         uleb128(self.data, &mut off)?; // utf16 length, unused
-        let end = self.data[off..].iter().position(|&b| b == 0).ok_or("unterminated string")?;
+        let end = self.data[off..]
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("unterminated string")?;
         Ok(mutf8(&self.data[off..off + end]))
     }
 
@@ -163,7 +176,11 @@ impl<'a> Dex<'a> {
     pub fn string_bytes(&self, idx: u32) -> R<&'a [u8]> {
         let mut off = u32_at(self.data, self.string_ids + idx as usize * 4)? as usize;
         uleb128(self.data, &mut off)?;
-        let end = self.data.get(off..).and_then(|d| d.iter().position(|&b| b == 0)).ok_or("unterminated string")?;
+        let end = self
+            .data
+            .get(off..)
+            .and_then(|d| d.iter().position(|&b| b == 0))
+            .ok_or("unterminated string")?;
         Ok(&self.data[off..off + end])
     }
 
@@ -194,7 +211,13 @@ impl<'a> Dex<'a> {
         let off = self.proto_ids + idx as usize * 12;
         let ret = self.type_name(u32_at(self.data, off + 4)?)?;
         let params = type_list(self.data, u32_at(self.data, off + 8)? as usize)?;
-        Ok((ret, params.into_iter().map(|t| self.type_name(t)).collect::<R<_>>()?))
+        Ok((
+            ret,
+            params
+                .into_iter()
+                .map(|t| self.type_name(t))
+                .collect::<R<_>>()?,
+        ))
     }
 
     /// `(params)Ret`
@@ -207,7 +230,11 @@ impl<'a> Dex<'a> {
     pub fn method_parts(&self, idx: u32) -> R<(String, String, u32)> {
         let off = self.method_ids + idx as usize * 8;
         let class = self.type_name(u16_at(self.data, off)? as u32)?;
-        Ok((class, self.string(u32_at(self.data, off + 4)?)?, u16_at(self.data, off + 2)? as u32))
+        Ok((
+            class,
+            self.string(u32_at(self.data, off + 4)?)?,
+            u16_at(self.data, off + 2)? as u32,
+        ))
     }
 
     /// `Lcls;->name(params)Ret`
@@ -218,13 +245,19 @@ impl<'a> Dex<'a> {
 
     pub fn find_class(&self, desc: &str) -> Option<usize> {
         let table = self.by_name.get_or_init(|| {
-            let mut v: Vec<(u64, u32)> = (0..self.class_count).filter_map(|i| Some((name_hash(&self.class_descriptor(i).ok()?), i as u32))).collect();
+            let mut v: Vec<(u64, u32)> = (0..self.class_count)
+                .filter_map(|i| Some((name_hash(&self.class_descriptor(i).ok()?), i as u32)))
+                .collect();
             v.sort_unstable();
             v
         });
         let h = name_hash(desc);
         let from = table.partition_point(|e| e.0 < h);
-        table[from..].iter().take_while(|e| e.0 == h).map(|e| e.1 as usize).find(|&i| self.class_descriptor(i).is_ok_and(|d| d == desc))
+        table[from..]
+            .iter()
+            .take_while(|e| e.0 == h)
+            .map(|e| e.1 as usize)
+            .find(|&i| self.class_descriptor(i).is_ok_and(|d| d == desc))
     }
 
     pub fn nesting(&self) -> &Nesting {
@@ -245,7 +278,13 @@ impl<'a> Dex<'a> {
     fn find_parent(&self, c: usize) -> Option<usize> {
         let desc = self.class_descriptor(c).ok()?;
         let body = desc.trim_end_matches(';');
-        body.char_indices().rev().filter(|&(i, ch)| ch == '$' && i > 0).find_map(|(i, _)| self.find_class(&format!("{};", &body[..i])).filter(|&o| o != c))
+        body.char_indices()
+            .rev()
+            .filter(|&(i, ch)| ch == '$' && i > 0)
+            .find_map(|(i, _)| {
+                self.find_class(&format!("{};", &body[..i]))
+                    .filter(|&o| o != c)
+            })
     }
 
     /// `nesting().parent[c]`, without building the table for every class when it isn't there.
@@ -269,12 +308,20 @@ impl<'a> Dex<'a> {
             out.sort_unstable();
             return out;
         }
-        let Ok(desc) = self.class_descriptor(c) else { return vec![] };
+        let Ok(desc) = self.class_descriptor(c) else {
+            return vec![];
+        };
         let prefix = format!("{}$", desc.trim_end_matches(';'));
         // an ancestor chain leads back to `c` exactly when the name starts with `c$`
         // (raw bytes equal UTF-8 except for NUL / characters above U+FFFF: decode those)
-        let starts = |d: &[u8]| d.starts_with(prefix.as_bytes()) || (std::str::from_utf8(d).is_err() && mutf8(d).starts_with(&prefix));
-        (0..self.class_count).filter(|&k| k != c && self.class_desc_bytes(k).is_ok_and(starts)).filter(|&k| self.chain_reaches(k, c)).collect()
+        let starts = |d: &[u8]| {
+            d.starts_with(prefix.as_bytes())
+                || (std::str::from_utf8(d).is_err() && mutf8(d).starts_with(&prefix))
+        };
+        (0..self.class_count)
+            .filter(|&k| k != c && self.class_desc_bytes(k).is_ok_and(starts))
+            .filter(|&k| self.chain_reaches(k, c))
+            .collect()
     }
 
     fn chain_reaches(&self, mut k: usize, c: usize) -> bool {
@@ -326,7 +373,10 @@ impl<'a> Dex<'a> {
     pub fn class_data(&self, i: usize) -> R<ClassData<'a>> {
         let mut off = u32_at(self.data, self.class_defs + i * 32 + 24)? as usize;
         if off == 0 {
-            return Ok(ClassData { fields: vec![], methods: vec![] }); // marker interface etc.
+            return Ok(ClassData {
+                fields: vec![],
+                methods: vec![],
+            }); // marker interface etc.
         }
         let d = self.data;
         let sf = uleb128(d, &mut off)?;
@@ -352,14 +402,28 @@ impl<'a> Dex<'a> {
                     None
                 } else {
                     let units = u32_at(d, code_off + 12)? as usize;
-                    let insns = d.get(code_off + 16..code_off + 16 + units * 2).ok_or("code past end")?;
+                    let insns = d
+                        .get(code_off + 16..code_off + 16 + units * 2)
+                        .ok_or("code past end")?;
                     let tries = parse_tries(d, code_off, units)?;
-                    Some(Code { registers: u16_at(d, code_off)?, ins: u16_at(d, code_off + 2)?, insns, tries })
+                    Some(Code {
+                        registers: u16_at(d, code_off)?,
+                        ins: u16_at(d, code_off + 2)?,
+                        insns,
+                        tries,
+                    })
                 };
-                out.push(Method { method_idx: idx, access, code });
+                out.push(Method {
+                    method_idx: idx,
+                    access,
+                    code,
+                });
             }
         }
-        Ok(ClassData { fields, methods: out })
+        Ok(ClassData {
+            fields,
+            methods: out,
+        })
     }
 }
 
@@ -396,13 +460,19 @@ impl<'a> Dex<'a> {
 
     /// (owner type id, name string id) of a field (`method = false`) or method id, unallocated.
     pub fn member_ids(&self, method: bool, idx: u32) -> R<(u32, u32)> {
-        let off = if method { self.method_ids } else { self.field_ids } + idx as usize * 8;
+        let off = if method {
+            self.method_ids
+        } else {
+            self.field_ids
+        } + idx as usize * 8;
         Ok((u16_at(self.data, off)? as u32, u32_at(self.data, off + 4)?))
     }
 
     /// (offset of string data, string id) for every string, sorted by offset.
     pub fn string_offsets(&self) -> Vec<(u32, u32)> {
-        let mut v: Vec<(u32, u32)> = (0..self.counts()[0] as u32).filter_map(|i| Some((u32_at(self.data, self.string_ids + i as usize * 4).ok()?, i))).collect();
+        let mut v: Vec<(u32, u32)> = (0..self.counts()[0] as u32)
+            .filter_map(|i| Some((u32_at(self.data, self.string_ids + i as usize * 4).ok()?, i)))
+            .collect();
         if !v.windows(2).all(|w| w[0].0 <= w[1].0) {
             v.sort_unstable();
         }
@@ -421,7 +491,12 @@ impl<'a> Dex<'a> {
             return Ok(());
         }
         let d = self.data;
-        let (sf, inf, dm, vm) = (uleb128(d, &mut off)?, uleb128(d, &mut off)?, uleb128(d, &mut off)?, uleb128(d, &mut off)?);
+        let (sf, inf, dm, vm) = (
+            uleb128(d, &mut off)?,
+            uleb128(d, &mut off)?,
+            uleb128(d, &mut off)?,
+            uleb128(d, &mut off)?,
+        );
         for _ in 0..(sf + inf) * 2 {
             uleb128(d, &mut off)?;
         }
@@ -435,7 +510,10 @@ impl<'a> Dex<'a> {
                     None
                 } else {
                     let units = u32_at(d, code_off + 12)? as usize;
-                    Some(d.get(code_off + 16..code_off + 16 + units * 2).ok_or("code past end")?)
+                    Some(
+                        d.get(code_off + 16..code_off + 16 + units * 2)
+                            .ok_or("code past end")?,
+                    )
                 };
                 f(idx, code);
             }
@@ -507,7 +585,9 @@ fn encoded_value(d: &[u8], off: &mut usize, depth: u32) -> R<Value> {
         0x04 => Value::Int(signed(raw(arg + 1)?, arg + 1), 'i'),
         0x06 => Value::Int(signed(raw(arg + 1)?, arg + 1), 'j'),
         // floats keep their high bytes; missing low bytes are zero
-        0x10 => Value::Float(f32::from_bits((raw(arg + 1)? << (8 * (3 - arg.min(3)))) as u32)),
+        0x10 => Value::Float(f32::from_bits(
+            (raw(arg + 1)? << (8 * (3 - arg.min(3)))) as u32,
+        )),
         0x11 => Value::Double(f64::from_bits(raw(arg + 1)? << (8 * (7 - arg.min(7))))),
         0x15 => Value::MethodType(raw(arg + 1)? as u32),
         0x16 => Value::MethodHandle(raw(arg + 1)? as u32),
@@ -518,7 +598,11 @@ fn encoded_value(d: &[u8], off: &mut usize, depth: u32) -> R<Value> {
         0x1b => Value::Enum(raw(arg + 1)? as u32),
         0x1c => {
             let n = uleb128(d, off)?;
-            Value::Array((0..n).map(|_| encoded_value(d, off, depth + 1)).collect::<R<_>>()?)
+            Value::Array(
+                (0..n)
+                    .map(|_| encoded_value(d, off, depth + 1))
+                    .collect::<R<_>>()?,
+            )
         }
         0x1d => Value::Annotation(encoded_annotation(d, off, 3, depth + 1)?),
         0x1e => Value::Null,
@@ -535,7 +619,11 @@ fn encoded_annotation(d: &[u8], off: &mut usize, visibility: u8, depth: u32) -> 
         let name = uleb128(d, off)?;
         elements.push((name, encoded_value(d, off, depth)?));
     }
-    Ok(Annotation { visibility, type_idx, elements })
+    Ok(Annotation {
+        visibility,
+        type_idx,
+        elements,
+    })
 }
 
 fn annotation_set(d: &[u8], off: usize) -> R<Vec<Annotation>> {
@@ -561,7 +649,9 @@ impl<'a> Dex<'a> {
             return Ok(vec![]);
         }
         let n = uleb128(self.data, &mut off)?;
-        (0..n).map(|_| encoded_value(self.data, &mut off, 0)).collect()
+        (0..n)
+            .map(|_| encoded_value(self.data, &mut off, 0))
+            .collect()
     }
 
     pub fn annotations(&self, c: usize) -> R<Annotations> {
@@ -572,20 +662,32 @@ impl<'a> Dex<'a> {
             return Ok(out);
         }
         out.class = annotation_set(d, u32_at(d, dir)? as usize)?;
-        let (nf, nm, np) = (u32_at(d, dir + 4)? as usize, u32_at(d, dir + 8)? as usize, u32_at(d, dir + 12)? as usize);
+        let (nf, nm, np) = (
+            u32_at(d, dir + 4)? as usize,
+            u32_at(d, dir + 8)? as usize,
+            u32_at(d, dir + 12)? as usize,
+        );
         let mut o = dir + 16;
         for _ in 0..nf {
-            out.fields.insert(u32_at(d, o)?, annotation_set(d, u32_at(d, o + 4)? as usize)?);
+            out.fields.insert(
+                u32_at(d, o)?,
+                annotation_set(d, u32_at(d, o + 4)? as usize)?,
+            );
             o += 8;
         }
         for _ in 0..nm {
-            out.methods.insert(u32_at(d, o)?, annotation_set(d, u32_at(d, o + 4)? as usize)?);
+            out.methods.insert(
+                u32_at(d, o)?,
+                annotation_set(d, u32_at(d, o + 4)? as usize)?,
+            );
             o += 8;
         }
         for _ in 0..np {
             let list = u32_at(d, o + 4)? as usize;
             let n = u32_at(d, list)? as usize;
-            let sets = (0..n).map(|k| annotation_set(d, u32_at(d, list + 4 + k * 4)? as usize)).collect::<R<_>>()?;
+            let sets = (0..n)
+                .map(|k| annotation_set(d, u32_at(d, list + 4 + k * 4)? as usize))
+                .collect::<R<_>>()?;
             out.params.insert(u32_at(d, o)?, sets);
             o += 8;
         }
@@ -627,7 +729,10 @@ pub fn mutf8(b: &[u8]) -> String {
 
 pub fn java_name(desc: &str) -> String {
     let desc = crate::deobf::class(desc).unwrap_or(desc);
-    desc.strip_prefix('L').and_then(|s| s.strip_suffix(';')).unwrap_or(desc).replace('/', ".")
+    desc.strip_prefix('L')
+        .and_then(|s| s.strip_suffix(';'))
+        .unwrap_or(desc)
+        .replace('/', ".")
 }
 
 #[cfg(test)]
@@ -638,7 +743,8 @@ pub(crate) mod tests {
     pub(crate) fn tiny_dex() -> Vec<u8> {
         let mut d = vec![0u8; 0x70];
         d[..8].copy_from_slice(b"dex\n035\0");
-        let put = |d: &mut Vec<u8>, off: usize, v: u32| d[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        let put =
+            |d: &mut Vec<u8>, off: usize, v: u32| d[off..off + 4].copy_from_slice(&v.to_le_bytes());
         put(&mut d, 0x3C, 0x70); // string_ids
         put(&mut d, 0x44, 0x74); // type_ids
         put(&mut d, 0x60, 1);

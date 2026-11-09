@@ -23,7 +23,12 @@ struct Entry {
 /// v1 (JAR) signature files: stale once the APK changes, and replaced by v2/v3
 pub fn is_v1_signature(name: &str) -> bool {
     let up = name.to_uppercase();
-    up.starts_with("META-INF/") && !up[9..].contains('/') && (up == "META-INF/MANIFEST.MF" || [".SF", ".RSA", ".DSA", ".EC"].iter().any(|x| up.ends_with(x)))
+    up.starts_with("META-INF/")
+        && !up[9..].contains('/')
+        && (up == "META-INF/MANIFEST.MF"
+            || [".SF", ".RSA", ".DSA", ".EC"]
+                .iter()
+                .any(|x| up.ends_with(x)))
 }
 
 /// Entries that must stay uncompressed: Android maps them straight from the file.
@@ -48,14 +53,21 @@ fn push32(o: &mut Vec<u8>, v: u32) {
 }
 
 /// Append one local file header (with alignment padding) and its data.
-fn write_entry(out: &mut Vec<u8>, name: &str, method: u16, crc: u32, usize: u32, data: &[u8]) -> Result<Entry, String> {
+fn write_entry(
+    out: &mut Vec<u8>,
+    name: &str,
+    method: u16,
+    crc: u32,
+    usize: u32,
+    data: &[u8],
+) -> Result<Entry, String> {
     let offset = u32::try_from(out.len()).map_err(|_| "APK larger than 4 GB")?;
     let align = alignment(name, method);
     let base = out.len() + 30 + name.len();
     // pad with Android's alignment extra field (id 0xd935): id, size, alignment, zeros
     let extra = if align > 1 {
         let mut len = 6;
-        while (base + len) % align != 0 {
+        while !(base + len).is_multiple_of(align) {
             len += 1;
         }
         let mut e = Vec::with_capacity(len);
@@ -82,7 +94,14 @@ fn write_entry(out: &mut Vec<u8>, name: &str, method: u16, crc: u32, usize: u32,
     out.extend_from_slice(name.as_bytes());
     out.extend_from_slice(&extra);
     out.extend_from_slice(data);
-    Ok(Entry { name: name.to_string(), method, crc, csize: data.len() as u32, usize, offset })
+    Ok(Entry {
+        name: name.to_string(),
+        method,
+        crc,
+        csize: data.len() as u32,
+        usize,
+        offset,
+    })
 }
 
 /// Rebuild `src` with `edits` applied. Returns the unsigned APK and its central directory
@@ -113,17 +132,18 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
                 };
                 let (crc, usize) = (e.crc32(), e.size() as u32);
                 let mut raw = Vec::with_capacity(e.compressed_size() as usize);
-                e.read_to_end(&mut raw).map_err(|err| format!("{name}: {err}"))?;
+                e.read_to_end(&mut raw)
+                    .map_err(|err| format!("{name}: {err}"))?;
                 entries.push(write_entry(&mut out, &name, method, crc, usize, &raw)?);
             }
         }
     }
     // added files
     for (name, new) in edits {
-        if let Some(new) = new {
-            if !seen.contains(name) {
-                entries.push(fresh(&mut out, name, new)?);
-            }
+        if let Some(new) = new
+            && !seen.contains(name)
+        {
+            entries.push(fresh(&mut out, name, new)?);
         }
     }
     if entries.len() > 0xffff {
@@ -153,7 +173,10 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
     push16(&mut out, entries.len() as u16);
     push16(&mut out, entries.len() as u16);
     push32(&mut out, cd_size as u32);
-    push32(&mut out, u32::try_from(cd).map_err(|_| "APK larger than 4 GB")?);
+    push32(
+        &mut out,
+        u32::try_from(cd).map_err(|_| "APK larger than 4 GB")?,
+    );
     push16(&mut out, 0);
     Ok((out, cd))
 }
@@ -167,7 +190,11 @@ fn fresh(out: &mut Vec<u8>, name: &str, data: &[u8]) -> Result<Entry, String> {
     }
     let z = miniz_oxide::deflate::compress_to_vec(data, 6);
     // keep it stored when deflate doesn't help (already-compressed media)
-    if z.len() >= data.len() { write_entry(out, name, 0, crc, usize, data) } else { write_entry(out, name, 8, crc, usize, &z) }
+    if z.len() >= data.len() {
+        write_entry(out, name, 0, crc, usize, data)
+    } else {
+        write_entry(out, name, 8, crc, usize, &z)
+    }
 }
 
 #[cfg(test)]
@@ -178,8 +205,10 @@ mod tests {
         use std::io::Write;
         let p = std::env::temp_dir().join(format!("apkscope-rebuild-{}.apk", std::process::id()));
         let mut w = zip::ZipWriter::new(std::fs::File::create(&p).unwrap());
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         w.start_file("AndroidManifest.xml", deflated).unwrap();
         w.write_all(&[1u8; 300]).unwrap();
         w.start_file("lib/arm64-v8a/libx.so", stored).unwrap();
@@ -203,22 +232,42 @@ mod tests {
         let out = std::env::temp_dir().join(format!("apkscope-rebuilt-{}.apk", std::process::id()));
         std::fs::write(&out, &bytes).unwrap();
         let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
-        let names: Vec<String> = z.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
-        assert_eq!(names, vec!["lib/arm64-v8a/libx.so", "assets/a.txt", "assets/new.bin"]);
+        let names: Vec<String> = z
+            .file_names()
+            .filter_map(|n| n.ok().map(|n| n.into_owned()))
+            .collect();
+        assert_eq!(
+            names,
+            vec!["lib/arm64-v8a/libx.so", "assets/a.txt", "assets/new.bin"]
+        );
         let mut s = String::new();
-        z.by_name("assets/a.txt").unwrap().read_to_string(&mut s).unwrap();
+        z.by_name("assets/a.txt")
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
         assert_eq!(s, "replaced");
         // the .so is stored and page-aligned, so Android can map it in place
         let so = z.by_name("lib/arm64-v8a/libx.so").unwrap();
         assert_eq!(so.data_start().unwrap() % 4096, 0);
-        assert_eq!(u32::from_le_bytes(bytes[bytes.len() - 6..bytes.len() - 2].try_into().unwrap()) as usize, cd);
+        assert_eq!(
+            u32::from_le_bytes(bytes[bytes.len() - 6..bytes.len() - 2].try_into().unwrap())
+                as usize,
+            cd
+        );
         let _ = std::fs::remove_file(src);
         let _ = std::fs::remove_file(out);
     }
 
     #[test]
     fn v1_signature_names() {
-        assert!(is_v1_signature("META-INF/CERT.RSA") && is_v1_signature("META-INF/MANIFEST.MF") && is_v1_signature("META-INF/x.SF"));
-        assert!(!is_v1_signature("META-INF/services/foo") && !is_v1_signature("META-INF/kotlin.kotlin_module"));
+        assert!(
+            is_v1_signature("META-INF/CERT.RSA")
+                && is_v1_signature("META-INF/MANIFEST.MF")
+                && is_v1_signature("META-INF/x.SF")
+        );
+        assert!(
+            !is_v1_signature("META-INF/services/foo")
+                && !is_v1_signature("META-INF/kotlin.kotlin_module")
+        );
     }
 }

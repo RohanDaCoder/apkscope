@@ -1,16 +1,53 @@
 name: ci
 
+# Quality gate + cross-platform test/build matrix; release tags (v*) are
+# handled by release.yml instead. Pinned actions are Node 24-compatible —
+# Node 20 was removed from GitHub-hosted runners on 2026-09-23.
+
 on:
   push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "v*"
   pull_request:
 
 jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # CLI + MCP server only — matches the Linux/macOS release build
+      - run: cargo check --release --no-default-features
+
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --release --no-default-features -- -D warnings
+
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, name: linux-x64 }
+          - { os: ubuntu-24.04, name: linux-x64 }
           - { os: macos-latest, name: macos-arm64, optional: true }
           - { os: windows-latest, name: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -20,10 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      # CLI + MCP server, no GUI libraries needed
       - run: cargo test --release --no-default-features
       - run: cargo build --release --no-default-features
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: apkscope-cli-${{ matrix.name }}
           path: |

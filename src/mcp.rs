@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -130,7 +130,11 @@ fn exe() -> Result<std::path::PathBuf, String> {
 
 /// Run the CLI once; returns (stdout + stderr notes, success).
 fn run_cli(args: &[String]) -> Result<(String, bool), String> {
-    let out = Command::new(exe()?).args(args).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
+    let out = Command::new(exe()?)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     let err = String::from_utf8_lossy(&out.stderr);
     if !err.trim().is_empty() {
@@ -141,10 +145,19 @@ fn run_cli(args: &[String]) -> Result<(String, bool), String> {
 
 /// Ask the APK's warm session; until it has loaded, answer with the stateless `fallback`
 /// command instead (requests without one wait for the load).
-fn ask_worker(workers: &mut HashMap<String, Worker>, apk: &str, deobf: bool, req: &[String], fallback: Option<Vec<String>>) -> Result<(String, bool), String> {
+fn ask_worker(
+    workers: &mut HashMap<String, Worker>,
+    apk: &str,
+    deobf: bool,
+    req: &[String],
+    fallback: Option<Vec<String>>,
+) -> Result<(String, bool), String> {
     let key = format!("{apk}\0{deobf}");
     // a worker that exited on its own (idle timeout) is started again
-    if workers.get_mut(&key).is_some_and(|w| !matches!(w.child.try_wait(), Ok(None))) {
+    if workers
+        .get_mut(&key)
+        .is_some_and(|w| !matches!(w.child.try_wait(), Ok(None)))
+    {
         workers.remove(&key);
     }
     if !workers.contains_key(&key) {
@@ -157,7 +170,12 @@ fn ask_worker(workers: &mut HashMap<String, Worker>, apk: &str, deobf: bool, req
         if !deobf {
             cmd.arg("--no-deobf");
         }
-        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| e.to_string())?;
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
         let stdin = child.stdin.take().ok_or("no worker stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("no worker stdout")?);
         let (tx, rx) = mpsc::channel();
@@ -168,7 +186,16 @@ fn ask_worker(workers: &mut HashMap<String, Worker>, apk: &str, deobf: bool, req
                 }
             }
         });
-        workers.insert(key.clone(), Worker { child, stdin, rx, ready: false, used: Instant::now() });
+        workers.insert(
+            key.clone(),
+            Worker {
+                child,
+                stdin,
+                rx,
+                ready: false,
+                used: Instant::now(),
+            },
+        );
     }
     let w = workers.get_mut(&key).unwrap();
     w.used = Instant::now();
@@ -202,11 +229,17 @@ fn ask_worker(workers: &mut HashMap<String, Worker>, apk: &str, deobf: bool, req
     if v["busy"].as_bool() == Some(true) {
         return run_cli(fallback.as_deref().unwrap_or_default());
     }
-    Ok((v["text"].as_str().unwrap_or_default().to_string(), v["ok"].as_bool().unwrap_or(false)))
+    Ok((
+        v["text"].as_str().unwrap_or_default().to_string(),
+        v["ok"].as_bool().unwrap_or(false),
+    ))
 }
 
 fn s(a: &Value, k: &str) -> Option<String> {
-    a.get(k).and_then(Value::as_str).filter(|x| !x.is_empty()).map(str::to_string)
+    a.get(k)
+        .and_then(Value::as_str)
+        .filter(|x| !x.is_empty())
+        .map(str::to_string)
 }
 
 fn b(a: &Value, k: &str) -> bool {
@@ -222,7 +255,11 @@ fn cached(a: &Value) -> bool {
     a.get("cache").and_then(Value::as_bool).unwrap_or(true)
 }
 
-fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<(String, bool), String> {
+fn call(
+    workers: &mut HashMap<String, Worker>,
+    name: &str,
+    a: &Value,
+) -> Result<(String, bool), String> {
     let apk = s(a, "apk_path").ok_or("apk_path is required")?;
     let mut args: Vec<String> = Vec::new();
     let push_opt = |args: &mut Vec<String>, flag: &str, v: Option<String>| {
@@ -239,13 +276,20 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             }
         }
     };
-    let deobf = a.get("deobfuscate").and_then(Value::as_bool).unwrap_or(true);
+    let deobf = a
+        .get("deobfuscate")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     match name {
         "list_classes" => {
             args.extend(["classes".into(), apk]);
             push_opt(&mut args, "--prefix", s(a, "prefix"));
-            if b(a, "app_only") { args.push("--app-only".into()) }
-            if b(a, "descriptors") { args.push("--desc".into()) }
+            if b(a, "app_only") {
+                args.push("--app-only".into())
+            }
+            if b(a, "descriptors") {
+                args.push("--desc".into())
+            }
             paging(&mut args);
             run_cli(&args)
         }
@@ -263,10 +307,22 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             run_cli(&args)
         }
         "find_refs" => {
-            let mut req = vec!["refs".to_string(), s(a, "kind").ok_or("kind is required")?, s(a, "query").ok_or("query is required")?];
+            let mut req = vec![
+                "refs".to_string(),
+                s(a, "kind").ok_or("kind is required")?,
+                s(a, "query").ok_or("query is required")?,
+            ];
             push_opt(&mut req, "--class", s(a, "class_name"));
-            for (k, f) in [("fuzzy_class", "--fuzzy-class"), ("regex", "--regex"), ("ignore_case", "--ignore-case"), ("with_java", "--java"), ("json", "--json")] {
-                if b(a, k) { req.push(f.into()) }
+            for (k, f) in [
+                ("fuzzy_class", "--fuzzy-class"),
+                ("regex", "--regex"),
+                ("ignore_case", "--ignore-case"),
+                ("with_java", "--java"),
+                ("json", "--json"),
+            ] {
+                if b(a, k) {
+                    req.push(f.into())
+                }
             }
             paging(&mut req);
             args.extend(["refs".into(), apk.clone()]);
@@ -278,7 +334,10 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
         }
         "decompile" => {
             let classes: Vec<String> = match a.get("classes") {
-                Some(Value::Array(v)) => v.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+                Some(Value::Array(v)) => v
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect(),
                 Some(Value::String(c)) => vec![c.clone()],
                 _ => vec![],
             };
@@ -287,26 +346,44 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             }
             let mut opts = Vec::new();
             push_opt(&mut opts, "--method", s(a, "method"));
-            if b(a, "smali") { opts.push("--smali".into()) }
+            if b(a, "smali") {
+                opts.push("--smali".into())
+            }
             let mut req = vec!["decompile".to_string()];
             req.extend(classes.iter().cloned());
             req.extend(opts.iter().cloned());
             args.extend(["decompile".into(), apk.clone()]);
             args.extend(classes);
             args.extend(opts);
-            if !deobf { args.push("--no-deobf".into()) }
+            if !deobf {
+                args.push("--no-deobf".into())
+            }
             if cached(a) {
                 return ask_worker(workers, &apk, deobf, &req, Some(args));
             }
             run_cli(&args)
         }
         "search" => {
-            let mut req = vec!["search".to_string(), s(a, "scope").ok_or("scope is required")?];
+            let mut req = vec![
+                "search".to_string(),
+                s(a, "scope").ok_or("scope is required")?,
+            ];
             req.extend(s(a, "query"));
-            for (k, f) in [("regex", "--regex"), ("case_sensitive", "--case"), ("app_only", "--app-only"), ("whole_method", "--method")] {
-                if b(a, k) { req.push(f.into()) }
+            for (k, f) in [
+                ("regex", "--regex"),
+                ("case_sensitive", "--case"),
+                ("app_only", "--app-only"),
+                ("whole_method", "--method"),
+            ] {
+                if b(a, k) {
+                    req.push(f.into())
+                }
             }
-            push_opt(&mut req, "--context", n(a, "context").map(|c| c.to_string()));
+            push_opt(
+                &mut req,
+                "--context",
+                n(a, "context").map(|c| c.to_string()),
+            );
             push_opt(&mut req, "--format", s(a, "format"));
             if cached(a) {
                 return ask_worker(workers, &apk, deobf, &req, None);
@@ -314,23 +391,45 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             args.extend(["search".into(), apk]);
             args.extend(req.into_iter().skip(1));
             args.push("--no-cache".into());
-            if !deobf { args.push("--no-deobf".into()) }
+            if !deobf {
+                args.push("--no-deobf".into())
+            }
             run_cli(&args)
         }
-        "apk_info" if cached(a) => ask_worker(workers, &apk, deobf, &["info".into()], Some(vec!["info".into(), apk.clone()])),
+        "apk_info" if cached(a) => ask_worker(
+            workers,
+            &apk,
+            deobf,
+            &["info".into()],
+            Some(vec!["info".into(), apk.clone()]),
+        ),
         "apk_info" => run_cli(&["info".into(), apk]),
         "get_manifest" => run_cli(&["manifest".into(), apk]),
         "get_resource" => {
             let path = s(a, "path").ok_or("path is required")?;
             if cached(a) {
-                return ask_worker(workers, &apk, deobf, &["resource".into(), path.clone()], Some(vec!["resource".into(), apk.clone(), path]));
+                return ask_worker(
+                    workers,
+                    &apk,
+                    deobf,
+                    &["resource".into(), path.clone()],
+                    Some(vec!["resource".into(), apk.clone(), path]),
+                );
             }
             run_cli(&["resource".into(), apk, path])
         }
-        "export_project" => run_cli(&["export".into(), apk, s(a, "out_dir").ok_or("out_dir is required")?]),
+        "export_project" => run_cli(&[
+            "export".into(),
+            apk,
+            s(a, "out_dir").ok_or("out_dir is required")?,
+        ]),
         "verify_signature" => run_cli(&["verify".into(), apk]),
         "diff_apks" => {
-            args.extend(["diff".into(), apk, s(a, "new_apk_path").ok_or("new_apk_path is required")?]);
+            args.extend([
+                "diff".into(),
+                apk,
+                s(a, "new_apk_path").ok_or("new_apk_path is required")?,
+            ]);
             if b(a, "strings") {
                 args.push("--strings".into());
             }
@@ -338,18 +437,35 @@ fn call(workers: &mut HashMap<String, Worker>, name: &str, a: &Value) -> Result<
             run_cli(&args)
         }
         "callers" => {
-            args.extend(["callers".into(), apk, s(a, "class").ok_or("class is required")?]);
-            if let Some(m) = s(a, "method") { args.push(m) }
+            args.extend([
+                "callers".into(),
+                apk,
+                s(a, "class").ok_or("class is required")?,
+            ]);
+            if let Some(m) = s(a, "method") {
+                args.push(m)
+            }
             run_cli(&args)
         }
         "call_graph" => {
-            args.extend(["callgraph".into(), apk, s(a, "class").ok_or("class is required")?]);
-            if let Some(m) = s(a, "method") { args.push(m) }
+            args.extend([
+                "callgraph".into(),
+                apk,
+                s(a, "class").ok_or("class is required")?,
+            ]);
+            if let Some(m) = s(a, "method") {
+                args.push(m)
+            }
             push_opt(&mut args, "--depth", n(a, "depth").map(|d| d.to_string()));
             run_cli(&args)
         }
         "field_access" => {
-            args.extend(["access".into(), apk, s(a, "class").ok_or("class is required")?, s(a, "field").ok_or("field is required")?]);
+            args.extend([
+                "access".into(),
+                apk,
+                s(a, "class").ok_or("class is required")?,
+                s(a, "field").ok_or("field is required")?,
+            ]);
             run_cli(&args)
         }
         "decrypt_strings" => run_cli(&["decrypt".into(), apk]),
@@ -364,7 +480,9 @@ fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, 
         *live = None;
         let target = match (s(a, "package"), s(a, "apk_path")) {
             (Some(p), _) => p,
-            (None, Some(apk)) => Some(crate::quick::package(&apk)).filter(|p| !p.is_empty()).ok_or("no package name in the APK's manifest; pass package")?,
+            (None, Some(apk)) => Some(crate::quick::package(&apk))
+                .filter(|p| !p.is_empty())
+                .ok_or("no package name in the APK's manifest; pass package")?,
             _ => return Err("pass apk_path or package".into()),
         };
         let l = Live::start(&target, b(a, "attach"), s(a, "device").as_deref())?;
@@ -372,7 +490,9 @@ fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, 
         *live = Some(l);
         return Ok((text, true));
     }
-    let l = live.as_mut().ok_or("no live session: call frida_start first")?;
+    let l = live
+        .as_mut()
+        .ok_or("no live session: call frida_start first")?;
     if !l.alive() && name != "frida_events" {
         return Err(format!("frida has exited:\n{}", l.text(0, "", 30).0));
     }
@@ -380,7 +500,11 @@ fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, 
         "frida_hook" => {
             let class = s(a, "class").ok_or("class is required")?;
             let method = s(a, "method");
-            let mut args = vec!["frida".into(), s(a, "apk_path").ok_or("apk_path is required")?, class.clone()];
+            let mut args = vec![
+                "frida".into(),
+                s(a, "apk_path").ok_or("apk_path is required")?,
+                class.clone(),
+            ];
             args.extend(method.clone());
             args.push("--live".into());
             let (js, ok) = run_cli(&args)?;
@@ -389,21 +513,52 @@ fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, 
             }
             let key = method.map_or(class.clone(), |m| format!("{class}#{m}"));
             l.hook(&key, &js, false)?;
-            Ok((format!("hooked {key} ({} overloads); active: {}", js.matches(".implementation").count(), l.hook_keys().join(", ")), true))
+            Ok((
+                format!(
+                    "hooked {key} ({} overloads); active: {}",
+                    js.matches(".implementation").count(),
+                    l.hook_keys().join(", ")
+                ),
+                true,
+            ))
         }
         "frida_script" => {
             let key = s(a, "name").ok_or("name is required")?;
             l.hook(&key, &s(a, "js").ok_or("js is required")?, true)?;
-            Ok((format!("loaded {key}; active: {}", l.hook_keys().join(", ")), true))
+            Ok((
+                format!("loaded {key}; active: {}", l.hook_keys().join(", ")),
+                true,
+            ))
         }
         "frida_unhook" => {
             let n = l.unhook(&s(a, "key").ok_or("key is required")?)?;
-            Ok((format!("removed {n}; active: {}", l.hook_keys().join(", ")), n > 0))
+            Ok((
+                format!("removed {n}; active: {}", l.hook_keys().join(", ")),
+                n > 0,
+            ))
         }
         "frida_events" => {
             let since = n(a, "since").unwrap_or(0);
-            let (body, next) = if b(a, "summary") { (l.summary(since), l.events.lock().unwrap().next) } else { l.text(since, &s(a, "filter").unwrap_or_default(), n(a, "limit").unwrap_or(200) as usize) };
-            Ok((format!("next_since: {next}{}\n{body}", if l.alive() { "" } else { "  (frida has exited)" }), true))
+            let (body, next) = if b(a, "summary") {
+                (l.summary(since), l.events.lock().unwrap().next)
+            } else {
+                l.text(
+                    since,
+                    &s(a, "filter").unwrap_or_default(),
+                    n(a, "limit").unwrap_or(200) as usize,
+                )
+            };
+            Ok((
+                format!(
+                    "next_since: {next}{}\n{body}",
+                    if l.alive() {
+                        ""
+                    } else {
+                        "  (frida has exited)"
+                    }
+                ),
+                true,
+            ))
         }
         "frida_stop" => {
             *live = None;
@@ -419,8 +574,14 @@ fn cap(text: String, max: usize) -> String {
         return text;
     }
     let cut: String = text.chars().take(max).collect();
-    let cut = cut.rfind('\n').map_or(cut.as_str(), |k| &cut[..k]).to_string();
-    format!("{cut}\n\n[truncated at {max} of {} characters: narrow the query, use limit/offset, or raise max_chars]", text.chars().count())
+    let cut = cut
+        .rfind('\n')
+        .map_or(cut.as_str(), |k| &cut[..k])
+        .to_string();
+    format!(
+        "{cut}\n\n[truncated at {max} of {} characters: narrow the query, use limit/offset, or raise max_chars]",
+        text.chars().count()
+    )
 }
 
 pub fn serve() -> Result<(), String> {
@@ -436,12 +597,18 @@ pub fn serve() -> Result<(), String> {
         let msg: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}}));
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})
+                );
                 continue;
             }
         };
         // notifications get no reply
-        let Some(id) = msg.get("id").cloned() else { continue };
+        let Some(id) = msg.get("id").cloned() else {
+            continue;
+        };
         let method = msg["method"].as_str().unwrap_or_default();
         let params = &msg["params"];
         let reply = match method {
@@ -457,7 +624,11 @@ pub fn serve() -> Result<(), String> {
                 let name = params["name"].as_str().unwrap_or_default();
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let max = n(&args, "max_chars").map_or(MAX_CHARS, |m| m as usize);
-                let res = if name.starts_with("frida_") { live_call(&mut live, name, &args) } else { call(&mut workers, name, &args) };
+                let res = if name.starts_with("frida_") {
+                    live_call(&mut live, name, &args)
+                } else {
+                    call(&mut workers, name, &args)
+                };
                 let (text, ok) = res.unwrap_or_else(|e| (e, false));
                 Ok(json!({"content": [{"type": "text", "text": cap(text, max)}], "isError": !ok}))
             }
@@ -484,19 +655,28 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
         l.all()?;
         Ok((std::mem::take(&mut l.name), std::mem::take(&mut l.buf)))
     })?;
-    let dexes: Vec<(String, crate::dex::Dex)> = files.iter().filter_map(|(n, b)| Some((n.clone(), crate::dex::Dex::parse(b).ok()?))).collect();
-    let state: std::sync::Arc<std::sync::OnceLock<Result<crate::session::State, String>>> = Default::default();
+    let dexes: Vec<(String, crate::dex::Dex)> = files
+        .iter()
+        .filter_map(|(n, b)| Some((n.clone(), crate::dex::Dex::parse(b).ok()?)))
+        .collect();
+    let state: std::sync::Arc<std::sync::OnceLock<Result<crate::session::State, String>>> =
+        Default::default();
     let (bg, path) = (state.clone(), apk.to_string());
-    std::thread::Builder::new().stack_size(256 << 20).spawn(move || {
-        let _ = bg.set(crate::load(&path, deobf));
-    }).map_err(|e| e.to_string())?;
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            let _ = bg.set(crate::load(&path, deobf));
+        })
+        .map_err(|e| e.to_string())?;
     // an idle session holds the whole APK in memory: give it back after IDLE_SECS unused
     static LAST: AtomicU64 = AtomicU64::new(0);
     let start = Instant::now();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        if start.elapsed().as_secs().saturating_sub(LAST.load(Relaxed)) > IDLE_SECS {
-            std::process::exit(0);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            if start.elapsed().as_secs().saturating_sub(LAST.load(Relaxed)) > IDLE_SECS {
+                std::process::exit(0);
+            }
         }
     });
     let mut out = std::io::stdout().lock();
@@ -525,17 +705,40 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
             if kind == "refs" {
                 let mut r = req[1..].to_vec();
                 let json = crate::flag(&mut r, "--json");
-                let limit = crate::num(crate::opt(&mut r, &["--limit"])?, "--limit")?.unwrap_or(usize::MAX);
-                let offset = crate::num(crate::opt(&mut r, &["--offset"])?, "--offset")?.unwrap_or(0);
+                let limit =
+                    crate::num(crate::opt(&mut r, &["--limit"])?, "--limit")?.unwrap_or(usize::MAX);
+                let offset =
+                    crate::num(crate::opt(&mut r, &["--offset"])?, "--offset")?.unwrap_or(0);
                 let (q, java) = crate::refs_query(r)?;
                 let hits = crate::quick::refs_loaded(&dexes, &q, offset.saturating_add(limit))?;
                 let hits = &hits[offset.min(hits.len())..];
                 // Java context needs the session's decompiler (whole-APK names, disk cache)
-                let st = if java { Some(state.wait().as_ref()?) } else { None };
-                let java_of = |owners: &[String]| -> Vec<(String, Option<String>)> {
-                    owners.iter().map(|o| (o.clone(), st.and_then(|st| st.class_text(&format!("{};", o.trim_end_matches(';').split('$').next().unwrap_or(o)), false)))).collect()
+                let st = if java {
+                    Some(state.wait().as_ref()?)
+                } else {
+                    None
                 };
-                let text = crate::refs_text(&q, hits, json, if java { Some(&java_of) } else { None })?;
+                let java_of = |owners: &[String]| -> Vec<(String, Option<String>)> {
+                    owners
+                        .iter()
+                        .map(|o| {
+                            (
+                                o.clone(),
+                                st.and_then(|st| {
+                                    st.class_text(
+                                        &format!(
+                                            "{};",
+                                            o.trim_end_matches(';').split('$').next().unwrap_or(o)
+                                        ),
+                                        false,
+                                    )
+                                }),
+                            )
+                        })
+                        .collect()
+                };
+                let text =
+                    crate::refs_text(&q, hits, json, if java { Some(&java_of) } else { None })?;
                 return Ok(format!("{text}[{} refs]", hits.len()));
             }
             let st = st.expect("needs the session").as_ref()?;
@@ -551,9 +754,14 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
                     let smali = crate::flag(&mut r, "--smali");
                     let mut text = String::new();
                     for c in &r {
-                        let t = st.class_text(c, smali).ok_or_else(|| format!("class {c} not found"))?;
+                        let t = st
+                            .class_text(c, smali)
+                            .ok_or_else(|| format!("class {c} not found"))?;
                         match &method {
-                            Some(m) => text += &crate::quick::method_of(&t, m).ok_or_else(|| format!("method {m} not found in {c}"))?,
+                            Some(m) => {
+                                text += &crate::quick::method_of(&t, m)
+                                    .ok_or_else(|| format!("method {m} not found in {c}"))?
+                            }
                             None => text += &t,
                         }
                         text.push('\n');
@@ -561,7 +769,9 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
                     Ok(text)
                 }
                 "info" => Ok(crate::session::overview(st)),
-                "resource" => st.target_text(req.get(1).map_or("", |s| s)).ok_or_else(|| "resource not found".to_string()),
+                "resource" => st
+                    .target_text(req.get(1).map_or("", |s| s))
+                    .ok_or_else(|| "resource not found".to_string()),
                 _ => Err(format!("unknown request {line}")),
             }
         })();

@@ -9,7 +9,10 @@ pub enum Term {
     Goto(usize),
     /// `taken` when the condition holds, else `fall`
     If { taken: usize, fall: usize },
-    Switch { cases: Vec<(i32, usize)>, default: usize },
+    Switch {
+        cases: Vec<(i32, usize)>,
+        default: usize,
+    },
     /// return or throw
     Exit,
 }
@@ -47,14 +50,18 @@ impl Block {
 }
 
 fn w(units: &[u8], i: usize) -> Result<u32, String> {
-    units.get(i * 2..i * 2 + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as u32).ok_or("payload past end".into())
+    units
+        .get(i * 2..i * 2 + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]) as u32)
+        .ok_or("payload past end".into())
 }
 
 /// (key, target code-unit offset) pairs of the switch at `insn`
 fn switch_targets(units: &[u8], insn: &Insn) -> Result<Vec<(i32, u32)>, String> {
     let p = (insn.off as i64 + insn.lit) as usize;
     let size = w(units, p + 1)? as usize;
-    let i32_at = |i: usize| -> Result<i32, String> { Ok((w(units, i)? | w(units, i + 1)? << 16) as i32) };
+    let i32_at =
+        |i: usize| -> Result<i32, String> { Ok((w(units, i)? | w(units, i + 1)? << 16) as i32) };
     let target = |rel: i32| (insn.off as i64 + rel as i64) as u32;
     let mut out = Vec::with_capacity(size);
     if insn.op == 0x2b {
@@ -64,7 +71,10 @@ fn switch_targets(units: &[u8], insn: &Insn) -> Result<Vec<(i32, u32)>, String> 
         }
     } else {
         for k in 0..size {
-            out.push((i32_at(p + 2 + k * 2)?, target(i32_at(p + 2 + size * 2 + k * 2)?)));
+            out.push((
+                i32_at(p + 2 + k * 2)?,
+                target(i32_at(p + 2 + size * 2 + k * 2)?),
+            ));
         }
     }
     Ok(out)
@@ -81,7 +91,9 @@ pub fn build(insns: &[Insn], units: &[u8], tries: &[Try]) -> Result<Cfg, String>
         at[i.off as usize] = k;
     }
     let mark = |off: i64, leader: &mut Vec<bool>| -> Result<(), String> {
-        let o = usize::try_from(off).ok().filter(|&o| o < n_units && at[o] != usize::MAX);
+        let o = usize::try_from(off)
+            .ok()
+            .filter(|&o| o < n_units && at[o] != usize::MAX);
         leader[o.ok_or(format!("jump to bad offset {off:#x}"))?] = true;
         Ok(())
     };
@@ -117,7 +129,9 @@ pub fn build(insns: &[Insn], units: &[u8], tries: &[Try]) -> Result<Cfg, String>
         }
     }
     // block id of each leader offset
-    let starts: Vec<usize> = (0..insns.len()).filter(|&k| leader[insns[k].off as usize]).collect();
+    let starts: Vec<usize> = (0..insns.len())
+        .filter(|&k| leader[insns[k].off as usize])
+        .collect();
     let block_of = |off: i64| -> usize {
         let k = at[off as usize];
         starts.partition_point(|&s| s <= k) - 1
@@ -126,13 +140,24 @@ pub fn build(insns: &[Insn], units: &[u8], tries: &[Try]) -> Result<Cfg, String>
     for (b, &first) in starts.iter().enumerate() {
         let last = starts.get(b + 1).map_or(insns.len() - 1, |&s| s - 1);
         let i = &insns[last];
-        let fall = || insns.get(last + 1).map(|n| block_of(n.off as i64)).ok_or("falls off end of method");
+        let fall = || {
+            insns
+                .get(last + 1)
+                .map(|n| block_of(n.off as i64))
+                .ok_or("falls off end of method")
+        };
         let term = match i.op {
             0x0e..=0x11 | 0x27 => Term::Exit,
             0x28..=0x2a => Term::Goto(block_of(i.off as i64 + i.lit)),
-            0x32..=0x3d => Term::If { taken: block_of(i.off as i64 + i.lit), fall: fall()? },
+            0x32..=0x3d => Term::If {
+                taken: block_of(i.off as i64 + i.lit),
+                fall: fall()?,
+            },
             0x2b | 0x2c => Term::Switch {
-                cases: switch_targets(units, i)?.into_iter().map(|(k, t)| (k, block_of(t as i64))).collect(),
+                cases: switch_targets(units, i)?
+                    .into_iter()
+                    .map(|(k, t)| (k, block_of(t as i64)))
+                    .collect(),
                 default: fall()?,
             },
             // alignment nop before a trailing payload is unreachable, not a real fall-off
@@ -145,10 +170,19 @@ pub fn build(insns: &[Insn], units: &[u8], tries: &[Try]) -> Result<Cfg, String>
             .filter(|t| (t.start..t.start + t.count).contains(&off))
             .flat_map(|t| t.handlers.iter().map(|&(ty, h)| (ty, block_of(h as i64))))
             .collect();
-        blocks.push(Block { first, last, term, handlers });
+        blocks.push(Block {
+            first,
+            last,
+            term,
+            handlers,
+        });
     }
 
-    let mut cfg = Cfg { blocks, idom: vec![], ipdom: vec![] };
+    let mut cfg = Cfg {
+        blocks,
+        idom: vec![],
+        ipdom: vec![],
+    };
     cfg.recompute();
     Ok(cfg)
 }
@@ -158,8 +192,20 @@ impl Cfg {
     pub fn recompute(&mut self) {
         let blocks = &self.blocks;
         let n = blocks.len();
-        let fwd: Vec<Vec<usize>> = blocks.iter().map(|b| b.succs().into_iter().chain(b.handlers.iter().map(|h| h.1)).collect()).collect();
-        self.idom = dominators(&fwd, &[0]).into_iter().enumerate().map(|(b, d)| d.unwrap_or(b)).collect();
+        let fwd: Vec<Vec<usize>> = blocks
+            .iter()
+            .map(|b| {
+                b.succs()
+                    .into_iter()
+                    .chain(b.handlers.iter().map(|h| h.1))
+                    .collect()
+            })
+            .collect();
+        self.idom = dominators(&fwd, &[0])
+            .into_iter()
+            .enumerate()
+            .map(|(b, d)| d.unwrap_or(b))
+            .collect();
         let mut rev = vec![vec![]; n];
         for (b, blk) in blocks.iter().enumerate() {
             for s in blk.succs() {
@@ -212,11 +258,17 @@ pub fn dominators(succ: &[Vec<usize>], roots: &[usize]) -> Vec<Option<usize>> {
                 if idom[p] == usize::MAX {
                     continue;
                 }
-                new = if new == usize::MAX { p } else {
+                new = if new == usize::MAX {
+                    p
+                } else {
                     let (mut a, mut b) = (p, new);
                     while a != b {
-                        while po[a] < po[b] { a = idom[a]; }
-                        while po[b] < po[a] { b = idom[b]; }
+                        while po[a] < po[b] {
+                            a = idom[a];
+                        }
+                        while po[b] < po[a] {
+                            b = idom[b];
+                        }
                     }
                     a
                 };
@@ -227,7 +279,9 @@ pub fn dominators(succ: &[Vec<usize>], roots: &[usize]) -> Vec<Option<usize>> {
             }
         }
     }
-    (0..n).map(|v| Some(idom[v]).filter(|&d| d != usize::MAX && d != root)).collect()
+    (0..n)
+        .map(|v| Some(idom[v]).filter(|&d| d != usize::MAX && d != root))
+        .collect()
 }
 
 impl Cfg {
@@ -255,7 +309,10 @@ mod tests {
         let g = vec![vec![1, 2], vec![3], vec![3], vec![]];
         assert_eq!(dominators(&g, &[0]), vec![None, Some(0), Some(0), Some(0)]);
         let rev = vec![vec![], vec![0], vec![0], vec![1, 2]];
-        assert_eq!(dominators(&rev, &[3]), vec![Some(3), Some(3), Some(3), None]);
+        assert_eq!(
+            dominators(&rev, &[3]),
+            vec![Some(3), Some(3), Some(3), None]
+        );
     }
 
     #[test]

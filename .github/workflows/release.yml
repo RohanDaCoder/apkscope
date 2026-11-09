@@ -1,0 +1,132 @@
+name: release
+
+# Builds every platform when a version tag (v*) is pushed and attaches the
+# binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
+# publishes as a pre-release. Linux binaries are static musl builds; the
+# lint job gates the matrix so a broken tag wastes no compute.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      # CLI + MCP server only — matches the Linux/macOS release build
+      - run: cargo check --release --no-default-features
+      - run: cargo clippy --release --no-default-features -- -D warnings
+
+  linux-x86_64:
+    needs: [lint]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      - run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_x86_64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-linux-x86_64
+          path: dist/
+
+  linux-aarch64:
+    needs: [lint]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - run: cargo build --release --no-default-features --target aarch64-unknown-linux-musl
+        env:
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      - run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_aarch64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-linux-aarch64
+          path: dist/
+
+  macos:
+    needs: [lint]
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # arm64 build is native; x86_64 cross-compiles with the Apple toolchain
+      - run: cargo build --release --no-default-features --target aarch64-apple-darwin
+      - run: cargo build --release --no-default-features --target x86_64-apple-darwin
+      - run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/apkscope dist/apkscope_macos_aarch64
+          cp target/x86_64-apple-darwin/release/apkscope dist/apkscope_macos_x86_64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-macos
+          path: dist/
+
+  windows:
+    needs: [lint]
+    # the GUI viewer, built where it is tested
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: |
+          mkdir dist
+          cp target/Release/apkscope.exe dist/apkscope_windows_x86_64.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-windows
+          path: dist/
+
+  release:
+    needs: [linux-x86_64, linux-aarch64, macos, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum apkscope_* > checksums.txt
+          cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/apkscope_*
+            dist/checksums.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
