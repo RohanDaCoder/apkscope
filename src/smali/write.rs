@@ -409,14 +409,12 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
         .map(|it| if let Item::Ins(i) = it { i.op } else { 0 })
         .collect();
     for (k, it) in code.items.iter().enumerate() {
-        if let Item::Ins(i) = it {
-            if i.op == 0x1a {
-                if let Ref::Str(x) = &i.r {
-                    if p.si[x] > 0xffff {
-                        ops[k] = 0x1b;
-                    }
-                }
-            }
+        if let Item::Ins(i) = it
+            && i.op == 0x1a
+            && let Ref::Str(x) = &i.r
+            && p.si[x] > 0xffff
+        {
+            ops[k] = 0x1b;
         }
     }
     let mut offs = vec![0u32; code.items.len()];
@@ -461,23 +459,23 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
         }
         let mut changed = false;
         for (k, it) in code.items.iter().enumerate() {
-            if let Item::Ins(i) = it {
-                if matches!(ops[k], 0x28 | 0x29) {
-                    let to = *labels
-                        .get(&i.target)
-                        .ok_or_else(|| err(format!("undefined label {}", i.target)))?;
-                    let rel = to as i64 - offs[k] as i64;
-                    let need = if rel != 0 && fits(rel, 8) {
-                        0x28
-                    } else if rel != 0 && fits(rel, 16) {
-                        0x29
-                    } else {
-                        0x2a
-                    };
-                    if need > ops[k] {
-                        ops[k] = need;
-                        changed = true;
-                    }
+            if let Item::Ins(i) = it
+                && matches!(ops[k], 0x28 | 0x29)
+            {
+                let to = *labels
+                    .get(&i.target)
+                    .ok_or_else(|| err(format!("undefined label {}", i.target)))?;
+                let rel = to as i64 - offs[k] as i64;
+                let need = if rel != 0 && fits(rel, 8) {
+                    0x28
+                } else if rel != 0 && fits(rel, 16) {
+                    0x29
+                } else {
+                    0x2a
+                };
+                if need > ops[k] {
+                    ops[k] = need;
+                    changed = true;
                 }
             }
         }
@@ -495,10 +493,10 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
     // which switch uses each payload: payload targets are relative to it
     let mut users: HashMap<u32, u32> = HashMap::new();
     for (k, it) in code.items.iter().enumerate() {
-        if let Item::Ins(i) = it {
-            if matches!(ops[k], 0x2b | 0x2c) {
-                users.insert(label(i.target)?, offs[k]);
-            }
+        if let Item::Ins(i) = it
+            && matches!(ops[k], 0x2b | 0x2c)
+        {
+            users.insert(label(i.target)?, offs[k]);
         }
     }
 
@@ -658,8 +656,8 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                             return Err(bad("more than 5 registers (use the /range form)"));
                         }
                         let mut g = [0u16; 5];
-                        for j in 0..n {
-                            g[j] = reg4(j)?;
+                        for (j, slot) in g.iter_mut().enumerate().take(n) {
+                            *slot = reg4(j)?;
                         }
                         let x = idx()?;
                         if x > 0xffff {
@@ -739,7 +737,12 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                 if b.len() % 2 == 1 {
                     b.push(0);
                 }
-                w.extend(b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])));
+                w.extend(
+                    b.as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                );
             }
             ev => events.push((w.len() as u32, ev.clone())),
         }

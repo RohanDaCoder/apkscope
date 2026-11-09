@@ -53,6 +53,7 @@ pub fn dir_for(apk: &str, deobf: bool, tag: u64) -> PathBuf {
 }
 
 /// Total size of every cache, in bytes.
+#[cfg(feature = "gui")]
 pub fn total_size() -> u64 {
     fn walk(p: &Path) -> u64 {
         fs::read_dir(p).map_or(0, |rd| {
@@ -70,6 +71,7 @@ pub fn total_size() -> u64 {
     walk(&root())
 }
 
+#[cfg(feature = "gui")]
 pub fn clear_all() -> std::io::Result<()> {
     match fs::remove_dir_all(root()) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -93,7 +95,9 @@ impl Reader {
             return None;
         }
         let slots = raw
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .map(|c| {
                 (
                     u64::from_le_bytes(c[..8].try_into().unwrap()),

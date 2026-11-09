@@ -260,9 +260,27 @@ fn class_body(dex: &Dex, c: usize, name: &str) -> R<String> {
         );
     }
     out += " {\n";
-    out += &members(dex, c, name, a, &def, &data, &anns, None)?;
+    out += &members(
+        dex,
+        c,
+        name,
+        a,
+        &Parts {
+            def: &def,
+            data: &data,
+            anns: &anns,
+        },
+        None,
+    )?;
     out += "}\n";
     Ok(out)
+}
+
+/// The parsed parts of one class that `members` renders.
+struct Parts<'a> {
+    def: &'a dex::ClassDef,
+    data: &'a dex::ClassData<'a>,
+    anns: &'a dex::Annotations,
 }
 
 /// Fields, nested classes and methods of a class, indented one level.
@@ -273,11 +291,10 @@ fn members(
     c: usize,
     name: &str,
     access: u32,
-    def: &dex::ClassDef,
-    data: &dex::ClassData,
-    anns: &dex::Annotations,
+    parts: &Parts,
     anon: Option<&HashSet<u32>>,
 ) -> R<String> {
+    let Parts { def, data, anns } = parts;
     let mut out = String::new();
     // nested classes and methods are rendered first: rendering decides which anonymous classes get
     // inlined, and an interface's static initializer may turn into field initializers
@@ -322,37 +339,37 @@ fn members(
     }
     // interfaces can't have `static { }`: `NAME = value;` lines become field initializers
     let mut inits: HashMap<String, String> = HashMap::new();
-    if access & 0x200 != 0 {
-        if let Some(k) = rendered.iter().position(|r| r.0) {
-            let body: Vec<&str> = rendered[k]
-                .1
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty() && *l != "static {" && *l != "}")
-                .collect();
-            let parsed: Option<Vec<(String, String)>> = body
-                .iter()
-                .map(|l| {
-                    let (n, v) = l.strip_suffix(';')?.split_once(" = ")?;
-                    n.chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                        .then(|| (n.to_string(), v.to_string()))
-                })
-                .collect();
-            if let Some(p) = parsed {
-                inits.extend(p);
-                rendered.remove(k);
-            }
+    if access & 0x200 != 0
+        && let Some(k) = rendered.iter().position(|r| r.0)
+    {
+        let body: Vec<&str> = rendered[k]
+            .1
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && *l != "static {" && *l != "}")
+            .collect();
+        let parsed: Option<Vec<(String, String)>> = body
+            .iter()
+            .map(|l| {
+                let (n, v) = l.strip_suffix(';')?.split_once(" = ")?;
+                n.chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    .then(|| (n.to_string(), v.to_string()))
+            })
+            .collect();
+        if let Some(p) = parsed {
+            inits.extend(p);
+            rendered.remove(k);
         }
     }
     // enum constants: `A = new Foo("A", 0, x);` in the static initializer -> `A(x)`
     let mut constants: Vec<String> = Vec::new();
     let mut constant_fields = HashSet::new();
-    if access & 0x4000 != 0 {
-        if let Some((text, idx)) = enum_constants(dex, data, def, name, &mut rendered) {
-            constants = text;
-            constant_fields = idx;
-        }
+    if access & 0x4000 != 0
+        && let Some((text, idx)) = enum_constants(dex, data, def, name, &mut rendered)
+    {
+        constants = text;
+        constant_fields = idx;
     }
     if !constants.is_empty() {
         let _ = writeln!(out, "    {};\n", constants.join(",\n    "));
@@ -428,13 +445,15 @@ fn members(
     Ok(out)
 }
 
+/// (dex address, top-level class, its nested classes with their parents) of the current file
+type Family = (usize, usize, Vec<(usize, Option<usize>)>);
+
 thread_local! {
     /// anonymous classes printed inline in the current file
     static INLINED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// capture field -> expression, innermost inline anonymous class last
     static CAPTURES: RefCell<Vec<HashMap<u32, String>>> = const { RefCell::new(Vec::new()) };
-    /// (dex address, top-level class, its nested classes with their parents) of the current file
-    static FAMILY: RefCell<(usize, usize, Vec<(usize, Option<usize>)>)> = const { RefCell::new((0, usize::MAX, Vec::new())) };
+    static FAMILY: RefCell<Family> = const { RefCell::new((0, usize::MAX, Vec::new())) };
 }
 
 /// Classes directly nested in `c`, in class order (what `nesting().kids[c]` holds), taken from
@@ -599,9 +618,11 @@ pub fn anon_new(ctx: &ir::Ctx, desc: &str, args: &[ir::Expr]) -> Option<String> 
         c,
         &ir::simple(&sup),
         def.access,
-        &def,
-        &data,
-        &anns,
+        &Parts {
+            def: &def,
+            data: &data,
+            anns: &anns,
+        },
         Some(&hidden),
     );
     CAPTURES.with(|x| x.borrow_mut().pop());
@@ -852,10 +873,10 @@ fn hoist_declarations(lines: &mut Vec<(usize, String)>) {
             .iter()
             .position(|(i, t)| i < d && !is_label(t))
             .map(|p| k + 1 + p);
-        if let Some(end) = end {
-            if seen.get(name).is_some_and(|v| v.iter().any(|&u| u >= end)) {
-                hoisted.push((k, ty.to_string(), name.to_string()));
-            }
+        if let Some(end) = end
+            && seen.get(name).is_some_and(|v| v.iter().any(|&u| u >= end))
+        {
+            hoisted.push((k, ty.to_string(), name.to_string()));
         }
     }
     for (k, ty, name) in hoisted.iter().rev() {
@@ -970,15 +991,15 @@ fn enum_constants(
                 (Some(&f), None) => {
                     let tmp = copy_of.get(rhs).map_or(rhs, String::as_str);
                     // a second field holding an existing constant stays a plain assignment
-                    if let Some(args) = temps.get(tmp).filter(|_| !alias.contains_key(tmp)) {
-                        if let Some(c) = constant(lhs, args) {
-                            found.push((c.0, lhs.to_string(), c.1, f));
-                            for (cp, _) in copy_of.iter().filter(|(_, t)| t.as_str() == tmp) {
-                                alias.insert(cp.clone(), lhs.to_string());
-                            }
-                            alias.insert(tmp.to_string(), lhs.to_string());
-                            consumed = true;
+                    if let Some(args) = temps.get(tmp).filter(|_| !alias.contains_key(tmp))
+                        && let Some(c) = constant(lhs, args)
+                    {
+                        found.push((c.0, lhs.to_string(), c.1, f));
+                        for (cp, _) in copy_of.iter().filter(|(_, t)| t.as_str() == tmp) {
+                            alias.insert(cp.clone(), lhs.to_string());
                         }
+                        alias.insert(tmp.to_string(), lhs.to_string());
+                        consumed = true;
                     }
                 }
                 // `T b = a;` copying a temporary already stored to its field: b names that constant too
@@ -1491,10 +1512,10 @@ impl<'a> Emitter<'a> {
     fn try_block(&mut self, b: usize, ind: usize) -> Option<usize> {
         let hs = self.cfg.blocks[b].handlers.clone();
         let outer = self.trys.last().map_or(0, |t| t.len());
-        if outer == 0 {
-            if let Some(r) = self.synchronized(b, &hs, ind) {
-                return r;
-            }
+        if outer == 0
+            && let Some(r) = self.synchronized(b, &hs, ind)
+        {
+            return r;
         }
         self.starts.entry(b).or_insert(self.lines.len());
         let try_at = self.lines.len();
@@ -1629,14 +1650,13 @@ impl<'a> Emitter<'a> {
             }
         }
         self.line(ind, "}".into());
-        if let Some(x2) = exit {
-            if self.bir[x2]
+        if let Some(x2) = exit
+            && self.bir[x2]
                 .0
                 .first()
                 .is_some_and(|s| self.ctx.stmt(s) == exit_line)
-            {
-                *self.skip.entry(x2).or_default() += 1;
-            }
+        {
+            *self.skip.entry(x2).or_default() += 1;
         }
         Some(exit)
     }
@@ -1707,11 +1727,12 @@ impl<'a> Emitter<'a> {
             // nested try: inner handlers come first, then the enclosing ones
             let nested =
                 |top: &Vec<(Option<u32>, usize)>| hs.len() > top.len() && hs.ends_with(top);
-            if let Some(top) = self.trys.last() {
-                if hs != top && !nested(top) {
-                    self.try_exit.get_or_insert(b);
-                    return;
-                }
+            if let Some(top) = self.trys.last()
+                && hs != top
+                && !nested(top)
+            {
+                self.try_exit.get_or_insert(b);
+                return;
             }
             if !hs.is_empty()
                 && self.trys.last() != Some(hs)
@@ -1739,20 +1760,22 @@ impl<'a> Emitter<'a> {
                 return;
             }
             // a short region that only continues where this construct ends: `if (A) { if (B) X else Y } else Y`
-            if self.visited[b] && ind <= MAX_DEPTH && self.dups < 4 {
-                if let Some(region) = self.small_region(b, stop) {
-                    let saved: Vec<bool> = region
-                        .iter()
-                        .map(|&r| std::mem::replace(&mut self.visited[r], false))
-                        .collect();
-                    self.dups += 1;
-                    self.seq(b, stop, ind);
-                    self.dups -= 1;
-                    for (&r, v) in region.iter().zip(saved) {
-                        self.visited[r] |= v;
-                    }
-                    return;
+            if self.visited[b]
+                && ind <= MAX_DEPTH
+                && self.dups < 4
+                && let Some(region) = self.small_region(b, stop)
+            {
+                let saved: Vec<bool> = region
+                    .iter()
+                    .map(|&r| std::mem::replace(&mut self.visited[r], false))
+                    .collect();
+                self.dups += 1;
+                self.seq(b, stop, ind);
+                self.dups -= 1;
+                for (&r, v) in region.iter().zip(saved) {
+                    self.visited[r] |= v;
                 }
+                return;
             }
             if self.visited[b] || ind > MAX_DEPTH {
                 self.labels.insert(b);

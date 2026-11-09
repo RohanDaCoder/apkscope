@@ -171,10 +171,10 @@ pub fn source_path(desc: &str) -> String {
     {
         return p.to_string();
     }
-    if PATHS.get().is_none() {
-        if let Some(p) = lazy_path(desc) {
-            return p;
-        }
+    if PATHS.get().is_none()
+        && let Some(p) = lazy_path(desc)
+    {
+        return p;
     }
     let t = top_level(desc);
     let (pkg, cls) = t.split_once('/').unwrap_or(("", &t));

@@ -29,6 +29,8 @@ fn u32_at(d: &[u8], o: usize) -> Result<u32, String> {
 pub struct StringRes {
     pub config: String,
     pub name: String,
+    /// the resource text; read by the viewer (and the arsc tests) — CLI search matches names
+    #[cfg(any(test, feature = "gui"))]
     pub value: String,
     at: usize,
 }
@@ -79,7 +81,7 @@ fn type_strings(
     d: &[u8],
     c: usize,
     keys: &[String],
-    values: &[String],
+    _values: &[String],
     out: &mut Vec<StringRes>,
 ) -> Result<(), String> {
     let flags = d[c + 9];
@@ -112,11 +114,13 @@ fn type_strings(
         let key = u32_at(d, e + 4)? as usize;
         let v = e + u16_at(d, e)? as usize;
         if d.get(v + 3) == Some(&0x03) {
+            #[cfg(any(test, feature = "gui"))]
             let idx = u32_at(d, v + 4)? as usize;
             out.push(StringRes {
                 config: config.clone(),
                 name: keys.get(key).cloned().unwrap_or_default(),
-                value: values.get(idx).cloned().unwrap_or_default(),
+                #[cfg(any(test, feature = "gui"))]
+                value: _values.get(idx).cloned().unwrap_or_default(),
                 at: v + 3,
             });
         }

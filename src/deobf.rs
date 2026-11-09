@@ -162,6 +162,7 @@ pub fn set_notes(n: Notes) {
     *USER.get_or_init(Default::default).write().unwrap() = n;
 }
 
+#[cfg(feature = "gui")]
 pub fn notes() -> Notes {
     user(|u| Some(u.clone())).unwrap_or_default()
 }
@@ -201,13 +202,12 @@ pub fn field(owner: &str, name: &str, ty: &str) -> Option<String> {
         return None;
     }
     // an enum constant (a field of an enum typed as that enum) keeps the name its constructor was given
-    if owner == ty {
-        if let Some(n) = ENUM_NAMES
+    if owner == ty
+        && let Some(n) = ENUM_NAMES
             .get()
             .and_then(|m| m.get(&(owner.to_string(), name.to_string())))
-        {
-            return Some(n.clone());
-        }
+    {
+        return Some(n.clone());
     }
     Some(format!("{}_{}", crate::ir::name_for(Some(ty)), ident(name)))
 }
@@ -268,21 +268,20 @@ fn enum_names(dexes: &[Dex]) -> HashMap<(String, String), String> {
                     0x69 => {
                         if let (Some(s), Ok((cls, ty, fname))) =
                             (named.get(&i.regs[0]), dex.field_parts(i.idx))
+                            && cls == def.class
+                            && ty == def.class
+                            && let Ok(n) = dex.string(*s)
                         {
-                            if cls == def.class && ty == def.class {
-                                if let Ok(n) = dex.string(*s) {
-                                    found.push((fname, n));
-                                }
-                            }
+                            found.push((fname, n));
                         }
                     }
                     _ => {
                         // any other write to a register forgets what it held
-                        if let Some(&r) = i.regs.first().filter(|_| i.nregs > 0 && !i.range) {
-                            if !matches!(i.op, 0x69 | 0x6e..=0x78) {
-                                strs.remove(&r);
-                                named.remove(&r);
-                            }
+                        if let Some(&r) = i.regs.first().filter(|_| i.nregs > 0 && !i.range)
+                            && !matches!(i.op, 0x69 | 0x6e..=0x78)
+                        {
+                            strs.remove(&r);
+                            named.remove(&r);
                         }
                     }
                 }

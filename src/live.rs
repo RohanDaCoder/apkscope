@@ -419,7 +419,9 @@ pub fn dump(
 
 fn unhex(s: &str) -> impl Iterator<Item = u8> + '_ {
     s.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
 }
 

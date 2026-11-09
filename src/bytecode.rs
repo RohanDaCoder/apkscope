@@ -331,7 +331,9 @@ pub fn for_each_ref(insns: &[u8], mut f: impl FnMut(Ref, u32)) {
 /// Switch / array payload pseudo-instructions are skipped, not returned.
 pub fn decode(insns: &[u8]) -> Result<Vec<Insn>, String> {
     let w: Vec<u16> = insns
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     let mut out = Vec::with_capacity(w.len() / 2);

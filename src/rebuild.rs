@@ -140,10 +140,10 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
     }
     // added files
     for (name, new) in edits {
-        if let Some(new) = new {
-            if !seen.contains(name) {
-                entries.push(fresh(&mut out, name, new)?);
-            }
+        if let Some(new) = new
+            && !seen.contains(name)
+        {
+            entries.push(fresh(&mut out, name, new)?);
         }
     }
     if entries.len() > 0xffff {

@@ -278,10 +278,10 @@ fn typed(text: &str, orig: Option<u8>, names: &Names) -> Result<(Option<String>,
         "false" => return Ok((None, 0x12, 0)),
         _ => {}
     }
-    if let Some(hex) = text.strip_prefix("0x") {
-        if let Ok(v) = u32::from_str_radix(hex, 16) {
-            return Ok((None, 0x11, v));
-        }
+    if let Some(hex) = text.strip_prefix("0x")
+        && let Ok(v) = u32::from_str_radix(hex, 16)
+    {
+        return Ok((None, 0x11, v));
     }
     if let Ok(v) = text.parse::<i32>() {
         return Ok((None, 0x10, v as u32));
@@ -307,10 +307,10 @@ fn typed(text: &str, orig: Option<u8>, names: &Names) -> Result<(Option<String>,
         ("in", 4),
         ("mm", 5),
     ] {
-        if let Some(num) = text.strip_suffix(unit) {
-            if let Ok(v) = num.parse::<f64>() {
-                return Ok((None, 0x05, complex(v, code)));
-            }
+        if let Some(num) = text.strip_suffix(unit)
+            && let Ok(v) = num.parse::<f64>()
+        {
+            return Ok((None, 0x05, complex(v, code)));
         }
     }
     if orig.is_some_and(|t| t != 0x03) {

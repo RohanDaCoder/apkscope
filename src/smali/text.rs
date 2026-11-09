@@ -915,14 +915,14 @@ impl<'a> P<'a> {
         }
         let save = self.i;
         let w = self.word();
-        if let Some((k, _)) = w.split_once('@') {
-            if let Some(kind) = HANDLE_KINDS.iter().position(|x| *x == k) {
-                self.i = save + k.len() + 1;
-                return Ok(Value::MethodHandle(Box::new(Handle {
-                    kind: kind as u16,
-                    member: self.member()?,
-                })));
-            }
+        if let Some((k, _)) = w.split_once('@')
+            && let Some(kind) = HANDLE_KINDS.iter().position(|x| *x == k)
+        {
+            self.i = save + k.len() + 1;
+            return Ok(Value::MethodHandle(Box::new(Handle {
+                kind: kind as u16,
+                member: self.member()?,
+            })));
         }
         Ok(match w {
             "null" => Value::Null,
@@ -1044,15 +1044,15 @@ fn literal(w: &str) -> Option<Value> {
                 _ => x.parse::<f64>().ok(),
             }
         };
-        if let Some(x) = w.strip_suffix(['f', 'F']) {
-            if let Some(v) = fl(x) {
-                // shortest-repr float text parses back to the same bits
-                return Some(Value::Float(
-                    x.parse::<f32>()
-                        .map(f32::to_bits)
-                        .unwrap_or((v as f32).to_bits()),
-                ));
-            }
+        if let Some(x) = w.strip_suffix(['f', 'F'])
+            && let Some(v) = fl(x)
+        {
+            // shortest-repr float text parses back to the same bits
+            return Some(Value::Float(
+                x.parse::<f32>()
+                    .map(f32::to_bits)
+                    .unwrap_or((v as f32).to_bits()),
+            ));
         }
         if w.contains(['.', 'e', 'E']) || w.trim_start_matches('-') == "Infinity" || w == "NaN" {
             let x = w.strip_suffix(['d', 'D']).unwrap_or(w);

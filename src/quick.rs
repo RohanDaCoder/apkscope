@@ -525,18 +525,17 @@ pub fn flutter(
     let bytes = read_entry(path, &app)?.ok_or_else(|| format!("{app}: entry vanished"))?;
     // Dart snapshot header: magic f5 f5 dc dc, then (past the length/kind fields) a 32-hex
     // version hash immediately followed by the printable features string (arch, mode).
-    if let Some(m) = bytes.windows(4).position(|w| w == [0xf5, 0xf5, 0xdc, 0xdc]) {
-        if let Some(h) = (m + 4..(m + 64).min(bytes.len().saturating_sub(32)))
+    if let Some(m) = bytes.windows(4).position(|w| w == [0xf5, 0xf5, 0xdc, 0xdc])
+        && let Some(h) = (m + 4..(m + 64).min(bytes.len().saturating_sub(32)))
             .find(|&i| bytes[i..i + 32].iter().all(u8::is_ascii_hexdigit))
-        {
-            out.push(format!(
-                "dart snapshot: {}",
-                String::from_utf8_lossy(&bytes[h..h + 32])
-            ));
-            let tail = &bytes[h + 32..(h + 32 + 256).min(bytes.len())];
-            if let Some(feat) = crate::elf::strings(tail, 8).into_iter().next() {
-                out.push(format!("  features: {feat}"));
-            }
+    {
+        out.push(format!(
+            "dart snapshot: {}",
+            String::from_utf8_lossy(&bytes[h..h + 32])
+        ));
+        let tail = &bytes[h + 32..(h + 32 + 256).min(bytes.len())];
+        if let Some(feat) = crate::elf::strings(tail, 8).into_iter().next() {
+            out.push(format!("  features: {feat}"));
         }
     }
     out.push(format!(
@@ -614,13 +613,13 @@ pub fn flutter(
     Ok(out)
 }
 
+/// One zip entry: (name, local header offset, compressed size, size, method).
+type Entry = (String, u64, usize, usize, u16);
+
 /// (name, local header offset, compressed size, size, method) of the zip entries whose raw name
 /// passes `keep`, from the central directory. Zip64 archives go through the zip crate instead.
 /// Big apps have 40k+ entries and a query wants a handful: names are only copied for those.
-fn central_dir(
-    f: &mut std::fs::File,
-    keep: &dyn Fn(&[u8]) -> bool,
-) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
+fn central_dir(f: &mut std::fs::File, keep: &dyn Fn(&[u8]) -> bool) -> Result<Vec<Entry>, String> {
     use std::io::{Seek, SeekFrom};
     let len = f.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     let tail_len = len.min(65_557);
@@ -682,7 +681,7 @@ fn central_dir(
 fn zip_crate_dir(
     f: &mut std::fs::File,
     keep: &dyn Fn(&[u8]) -> bool,
-) -> Result<Vec<(String, u64, usize, usize, u16)>, String> {
+) -> Result<Vec<Entry>, String> {
     let mut zip = zip::ZipArchive::new(f.try_clone().map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -1279,6 +1278,11 @@ pub fn refs_loaded(dexes: &[(String, Dex)], q: &Query, limit: usize) -> Result<V
     Ok(all)
 }
 
+/// One decompiled class: (its name, the text, or the error).
+type Decoded = (String, Result<String, String>);
+/// Every wanted class of one DEX: (offset and length of each, the DEX bytes).
+type DexHits = (Vec<(usize, usize)>, Vec<u8>);
+
 /// Decompiled Java (or Smali) of the named classes, only their DEX files' names deobfuscated.
 /// Unknown names come back as errors next to the found ones.
 pub fn decompile(
@@ -1286,7 +1290,7 @@ pub fn decompile(
     names: &[String],
     smali: bool,
     deobf: bool,
-) -> Result<Vec<(String, Result<String, String>)>, String> {
+) -> Result<Vec<Decoded>, String> {
     crate::deobf::set_notes(crate::re::load_notes(path)?);
     let wanted: Vec<String> = names.iter().map(|n| descriptor(n)).collect();
     let seen: Vec<std::sync::atomic::AtomicBool> =
@@ -1296,29 +1300,28 @@ pub fn decompile(
     // usually the bigger files are never opened. Classes still missing come from the others.
     // shortcut: past classes.dex, a class defined twice comes from whichever DEX finds it first,
     // not always the lowest-numbered one as at runtime; duplicates are rare.
-    let look =
-        |l: &mut Lazy, skip: &[bool]| -> Result<Option<(Vec<(usize, usize)>, Vec<u8>)>, String> {
-            if seen.iter().all(|s| s.load(Ordering::Relaxed)) {
-                return Ok(None);
-            }
-            l.class_names_or_all()?;
-            let hits: Vec<(usize, usize)> = match l.dex() {
-                Some(dx) => wanted
-                    .iter()
-                    .enumerate()
-                    .filter(|(k, _)| !skip[*k])
-                    .filter_map(|(k, w)| dx.find_class(w).map(|c| (k, c)))
-                    .collect(),
-                None => vec![],
-            };
-            if hits.is_empty() {
-                return Ok(None);
-            }
-            hits.iter()
-                .for_each(|h| seen[h.0].store(true, Ordering::Relaxed));
-            l.all()?;
-            Ok(Some((hits, std::mem::take(&mut l.buf))))
+    let look = |l: &mut Lazy, skip: &[bool]| -> Result<Option<DexHits>, String> {
+        if seen.iter().all(|s| s.load(Ordering::Relaxed)) {
+            return Ok(None);
+        }
+        l.class_names_or_all()?;
+        let hits: Vec<(usize, usize)> = match l.dex() {
+            Some(dx) => wanted
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| !skip[*k])
+                .filter_map(|(k, w)| dx.find_class(w).map(|c| (k, c)))
+                .collect(),
+            None => vec![],
         };
+        if hits.is_empty() {
+            return Ok(None);
+        }
+        hits.iter()
+            .for_each(|h| seen[h.0].store(true, Ordering::Relaxed));
+        l.all()?;
+        Ok(Some((hits, std::mem::take(&mut l.buf))))
+    };
     let mut found = Vec::new();
     let none = vec![false; wanted.len()];
     // classes.dex alone first pays only when its names end early (Redex layout): then a miss
@@ -1358,7 +1361,7 @@ pub fn decompile(
     // them for good; the OS takes the memory back at exit as it would on drop.
     // shortcut: a second call in the same process keeps the first call's lazy paths; fine for
     // the CLI (one call per run), a long-lived caller would need a reset.
-    let files: &'static [(Vec<(usize, usize)>, Vec<u8>)] = Box::leak(
+    let files: &'static [DexHits] = Box::leak(
         found
             .into_iter()
             .flatten()

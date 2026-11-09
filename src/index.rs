@@ -119,6 +119,9 @@ fn class_refs(dx: &Dex, c: usize, k: u32, out: &mut [Vec<(u32, u32)>; 4]) {
     }
 }
 
+/// Per dex, per ref kind: (id, class) pairs collected from all threads.
+type Parts = Vec<[Vec<(u32, u32)>; 4]>;
+
 /// `classes`: the top-level classes as (dex, class index); their position is the class id.
 pub fn build(
     dexes: &[Dex],
@@ -128,13 +131,11 @@ pub fn build(
 ) -> Index {
     let next = AtomicUsize::new(0);
     // per dex, per kind: (id, class) pairs from all threads
-    let parts: Mutex<Vec<[Vec<(u32, u32)>; 4]>> =
-        Mutex::new((0..dexes.len()).map(|_| Default::default()).collect());
+    let parts: Mutex<Parts> = Mutex::new((0..dexes.len()).map(|_| Default::default()).collect());
     std::thread::scope(|s| {
         for _ in 0..threads.max(1) {
             s.spawn(|| {
-                let mut local: Vec<[Vec<(u32, u32)>; 4]> =
-                    (0..dexes.len()).map(|_| Default::default()).collect();
+                let mut local: Parts = (0..dexes.len()).map(|_| Default::default()).collect();
                 loop {
                     let k = next.fetch_add(1, Ordering::Relaxed);
                     let Some(&(d, c)) = classes.get(k) else { break };

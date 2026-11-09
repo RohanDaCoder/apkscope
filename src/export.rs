@@ -115,10 +115,10 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
             if nest.parent[c].is_some() {
                 continue;
             }
-            if let Ok(desc) = dex.class_descriptor(c) {
-                if seen.insert(desc) {
-                    jobs.push((d, c));
-                }
+            if let Ok(desc) = dex.class_descriptor(c)
+                && seen.insert(desc)
+            {
+                jobs.push((d, c));
             }
         }
     }
@@ -138,10 +138,10 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
         s.spawn(move || {
             let mut made = HashSet::new();
             for (path, text) in rx {
-                if let Some(dir) = path.parent() {
-                    if made.insert(dir.to_path_buf()) {
-                        let _ = fs::create_dir_all(dir);
-                    }
+                if let Some(dir) = path.parent()
+                    && made.insert(dir.to_path_buf())
+                {
+                    let _ = fs::create_dir_all(dir);
                 }
                 if let Err(e) = fs::write(&path, text) {
                     eprintln!("{}: {e}", path.display());

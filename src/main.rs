@@ -233,13 +233,17 @@ fn refs_query(mut args: Vec<String>) -> Result<(quick::Query, bool), String> {
     Ok((q, java))
 }
 
+/// Java context for `refs_text`: decompiles the given classes,
+/// (class, the lines of its text that mention the query).
+type JavaOf<'a> = &'a dyn Fn(&[String]) -> Vec<(String, Option<String>)>;
+
 /// Hits as text or JSON; with `java_of`, each referencing class's decompiled lines that mention
 /// the query (one decompile per class).
 fn refs_text(
     q: &quick::Query,
     hits: &[quick::Ref_],
     json: bool,
-    java_of: Option<&dyn Fn(&[String]) -> Vec<(String, Option<String>)>>,
+    java_of: Option<JavaOf<'_>>,
 ) -> Result<String, String> {
     let mut code: std::collections::HashMap<String, Vec<String>> = Default::default();
     if let Some(java_of) = java_of {

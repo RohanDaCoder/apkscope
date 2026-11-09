@@ -26,6 +26,7 @@ pub fn threads() -> usize {
 }
 
 /// Resident memory of this process, in bytes.
+#[cfg(feature = "gui")]
 pub fn memory_used() -> Option<u64> {
     #[cfg(windows)]
     {
@@ -297,12 +298,11 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     for (d, dx) in dexes.iter().enumerate() {
         let nest = dx.nesting();
         for c in 0..dx.class_count {
-            if nest.parent[c].is_none() {
-                if let Ok(desc) = dx.class_descriptor(c) {
-                    if seen.insert(desc.clone()) {
-                        classes.push((dex::java_name(&desc), d, c));
-                    }
-                }
+            if nest.parent[c].is_none()
+                && let Ok(desc) = dx.class_descriptor(c)
+                && seen.insert(desc.clone())
+            {
+                classes.push((dex::java_name(&desc), d, c));
             }
         }
     }
@@ -319,11 +319,11 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let mut texts = BTreeMap::new();
     let mut files = BTreeMap::new();
     let mut package = String::new();
-    if let Some(m) = apk.read("AndroidManifest.xml") {
-        if let Ok(t) = res::decode_xml(&m, names.as_ref()) {
-            package = attr(&t, "package").unwrap_or_default();
-            texts.insert("AndroidManifest.xml".to_string(), t);
-        }
+    if let Some(m) = apk.read("AndroidManifest.xml")
+        && let Ok(t) = res::decode_xml(&m, names.as_ref())
+    {
+        package = attr(&t, "package").unwrap_or_default();
+        texts.insert("AndroidManifest.xml".to_string(), t);
     }
     if let (Some(t), Some(n)) = (&table, &names) {
         let dec = res::decode_table(t, n);
@@ -400,10 +400,10 @@ impl State {
         k: usize,
         reader: Option<(&cache::Reader, &mut std::fs::File)>,
     ) -> Option<String> {
-        if let Some((r, f)) = reader {
-            if let Some(t) = r.get(f, k) {
-                return Some(t);
-            }
+        if let Some((r, f)) = reader
+            && let Some(t) = r.get(f, k)
+        {
+            return Some(t);
         }
         let (_, d, c) = &self.classes[k];
         java::class(&self.dexes[*d], *c).ok()
@@ -462,6 +462,7 @@ impl State {
 
     /// Raw bytes of any file inside the APK (only names from its own listing).
     /// Edited manifest text -> binary XML, typed like the APK's own manifest.
+    #[cfg(feature = "gui")]
     pub fn encode_manifest(&self, text: &str) -> Result<Vec<u8>, String> {
         let names = self
             .names
@@ -482,6 +483,7 @@ impl State {
     }
 
     /// `minSdkVersion` from the manifest.
+    #[cfg(feature = "gui")]
     pub fn min_sdk(&self) -> Option<u32> {
         let m = self.texts.get("AndroidManifest.xml")?;
         let at = m.find("<uses-sdk")?;
@@ -489,6 +491,7 @@ impl State {
     }
 
     /// Every file in the APK as (name, size, compressed size).
+    #[cfg(feature = "gui")]
     pub fn files_list(&self) -> Vec<(String, u64, u64)> {
         let mut apk = self.apk.lock().unwrap();
         let mut v: Vec<(String, u64, u64)> = self
@@ -508,6 +511,7 @@ impl State {
     }
 
     /// A file inside the APK shown as text: its content when it is text, else a hex dump.
+    #[cfg(feature = "gui")]
     pub fn file_view(&self, name: &str) -> String {
         let Some(d) = self.read_entry(name) else {
             return format!("// {name}: not found");
@@ -552,6 +556,7 @@ impl State {
     }
 
     /// Write every file of the APK under `dir`, skipping names that would escape it.
+    #[cfg(feature = "gui")]
     pub fn extract_all(&self, dir: &std::path::Path) -> Result<usize, String> {
         let mut n = 0;
         for (name, _, _) in self.files_list() {
@@ -723,6 +728,7 @@ impl State {
     }
 
     /// Strings of the app containing `needle` (case-insensitive), with how many classes use each.
+    #[cfg(feature = "gui")]
     pub fn strings(&self, needle: &str, limit: usize) -> Vec<(String, usize)> {
         let low = needle.to_lowercase();
         let idx = self.index.get();
@@ -760,6 +766,7 @@ pub enum Scope {
 }
 
 impl Scope {
+    #[cfg(feature = "gui")]
     pub const ALL: [Scope; 8] = [
         Scope::Code,
         Scope::String,
@@ -771,6 +778,7 @@ impl Scope {
         Scope::Secrets,
     ];
 
+    #[cfg(feature = "gui")]
     pub fn label(self) -> &'static str {
         match self {
             Scope::Class => "Class names",
@@ -799,6 +807,7 @@ impl Scope {
     }
 
     /// API scopes list everything they find; the query only narrows them
+    #[cfg(feature = "gui")]
     pub fn query_optional(self) -> bool {
         matches!(self, Scope::Urls | Scope::Http | Scope::Secrets)
     }
@@ -1174,12 +1183,12 @@ fn scan(st: &State, m: &Matcher, list: &[usize], prog: &Progress) -> Vec<Hit> {
                 });
         }
     });
-    if let Some(w) = writer {
-        if !prog.cancel.load(Ordering::Relaxed) && next.load(Ordering::Relaxed) >= list.len() {
-            if let Some(r) = w.finish() {
-                *st.cache.write().unwrap() = Some(Arc::new(r));
-            }
-        }
+    if let Some(w) = writer
+        && !prog.cancel.load(Ordering::Relaxed)
+        && next.load(Ordering::Relaxed) >= list.len()
+        && let Some(r) = w.finish()
+    {
+        *st.cache.write().unwrap() = Some(Arc::new(r));
     }
     let mut v = found.into_inner().unwrap();
     v.sort();

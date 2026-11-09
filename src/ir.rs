@@ -373,24 +373,28 @@ pub fn lower(
                 // a long/double argument fills two registers; keep only the first
                 let mut a = args();
                 if let (false, Ok((_, _, p))) = (kind == Call::Poly, dex.method_parts(i.idx)) {
-                    let mut k = (kind != Call::Static) as usize;
-                    for t in dex.proto_parts(p).map(|p| p.1).unwrap_or_default() {
-                        if t == "J" || t == "D" {
-                            if k + 1 < a.len() {
-                                a.remove(k + 1);
-                            }
+                    let skip = (kind != Call::Static) as usize;
+                    for (n, t) in dex
+                        .proto_parts(p)
+                        .map(|p| p.1)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let k = skip + n;
+                        if (t == "J" || t == "D") && k + 1 < a.len() {
+                            a.remove(k + 1);
                         }
-                        k += 1;
                     }
                 }
                 let ctor = kind == Call::Direct && dex.method_parts(i.idx)?.1 == "<init>";
                 // `new T` + `T.<init>(v, ...)` -> `v = new T(...)` at the <init>, after its args are computed
-                if let (true, Some(&Reg(recv))) = (ctor, a.first()) {
-                    if let Some((at, t)) = pending_new.remove(&recv) {
-                        out[at] = Stmt::Nop;
-                        out.push(Stmt::Assign(Reg(recv), New(t, i.idx, a[1..].to_vec())));
-                        continue;
-                    }
+                if let (true, Some(&Reg(recv))) = (ctor, a.first())
+                    && let Some((at, t)) = pending_new.remove(&recv)
+                {
+                    out[at] = Stmt::Nop;
+                    out.push(Stmt::Assign(Reg(recv), New(t, i.idx, a[1..].to_vec())));
+                    continue;
                 }
                 Stmt::Do(Invoke(kind, i.idx, a))
             }
@@ -682,12 +686,11 @@ impl<'a> Ctx<'a> {
         for _ in 0..3 {
             for (stmts, cond) in blocks {
                 for s in stmts {
-                    if let Stmt::Assign(Var(d), e) = s {
-                        if self.var_ty(*d).is_none() {
-                            if let Some(t) = self.type_of(e) {
-                                self.set_ty(*d, t);
-                            }
-                        }
+                    if let Stmt::Assign(Var(d), e) = s
+                        && self.var_ty(*d).is_none()
+                        && let Some(t) = self.type_of(e)
+                    {
+                        self.set_ty(*d, t);
                     }
                     self.hint_stmt(s);
                 }
@@ -848,19 +851,20 @@ impl<'a> Ctx<'a> {
                     return format!("field#{f}");
                 };
                 // non-capturing lambda singleton
-                if obj.is_none() && ty == c {
-                    if let Some(l) = self.lambda(&c, &[]) {
-                        return l;
-                    }
+                if obj.is_none()
+                    && ty == c
+                    && let Some(l) = self.lambda(&c, &[])
+                {
+                    return l;
                 }
                 match obj {
                     Some(o) => {
                         let recv = self.atom(o);
                         // synthetic capture field of an inline anonymous class
-                        if recv == "this" {
-                            if let Some(t) = crate::java::capture(*f) {
-                                return t;
-                            }
+                        if recv == "this"
+                            && let Some(t) = crate::java::capture(*f)
+                        {
+                            return t;
                         }
                         format!(
                             "{recv}.{}",
@@ -1170,17 +1174,17 @@ impl<'a> Ctx<'a> {
                     let t = ty.as_deref().map_or("Object".into(), type_ref);
                     return format!("{t} {name} = {};", self.expr(e, ty.as_deref()));
                 }
-                if let Bin(op, _, a, b) = e {
-                    if matches!(&**a, Var(x) if v.root[*x] == r) {
-                        return match (*op, &**b) {
-                            ("+", Lit(1, _)) | ("-", Lit(-1, _)) => format!("{name}++;"),
-                            ("-", Lit(1, _)) | ("+", Lit(-1, _)) => format!("{name}--;"),
-                            ("+", Lit(v, w)) if *v < 0 && *v != i64::MIN => {
-                                format!("{name} -= {};", self.expr(&Lit(-v, *w), ty.as_deref()))
-                            }
-                            _ => format!("{name} {op}= {};", self.expr(b, ty.as_deref())),
-                        };
-                    }
+                if let Bin(op, _, a, b) = e
+                    && matches!(&**a, Var(x) if v.root[*x] == r)
+                {
+                    return match (*op, &**b) {
+                        ("+", Lit(1, _)) | ("-", Lit(-1, _)) => format!("{name}++;"),
+                        ("-", Lit(1, _)) | ("+", Lit(-1, _)) => format!("{name}--;"),
+                        ("+", Lit(v, w)) if *v < 0 && *v != i64::MIN => {
+                            format!("{name} -= {};", self.expr(&Lit(-v, *w), ty.as_deref()))
+                        }
+                        _ => format!("{name} {op}= {};", self.expr(b, ty.as_deref())),
+                    };
                 }
                 format!("{name} = {};", self.expr(e, ty.as_deref()))
             }

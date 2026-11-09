@@ -573,12 +573,12 @@ impl<'a> Reader<'a> {
             };
             at.entry(p as u32).or_default().push(item);
             // the nop just before an aligned payload is padding; the writer re-adds it
-            if p.is_multiple_of(2) && p > 0 {
-                if let Some(v) = at.get_mut(&(p as u32 - 1)) {
-                    if matches!(v.as_slice(), [Item::Ins(i)] if i.op == 0) {
-                        at.remove(&(p as u32 - 1));
-                    }
-                }
+            if p.is_multiple_of(2)
+                && p > 0
+                && let Some(v) = at.get_mut(&(p as u32 - 1))
+                && matches!(v.as_slice(), [Item::Ins(i)] if i.op == 0)
+            {
+                at.remove(&(p as u32 - 1));
             }
         }
 

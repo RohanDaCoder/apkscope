@@ -94,6 +94,11 @@ const FIELDS: usize = 11;
 const TYPEDEFS: usize = 19;
 const IMAGES: usize = 20;
 
+/// A string-literal hit: (address, its index in the string table).
+pub type LitHit = (u64, usize);
+/// A direct call: (address, target address).
+pub type CallHit = (u64, u64);
+
 impl Game {
     fn new(md: &[u8], so: Vec<u8>) -> Result<Game, String> {
         if u(md, 0, 4) != 0xFAB1_1BAF {
@@ -156,12 +161,12 @@ impl Game {
             let mut start = 0;
             for (i, &b) in d.iter().enumerate() {
                 if b == 0 {
-                    if let Ok(n) = std::str::from_utf8(&d[start..i]) {
-                        if n.ends_with(".dll") {
-                            by_name
-                                .entry(n.to_string())
-                                .or_insert(sc.addr + start as u64);
-                        }
+                    if let Ok(n) = std::str::from_utf8(&d[start..i])
+                        && n.ends_with(".dll")
+                    {
+                        by_name
+                            .entry(n.to_string())
+                            .or_insert(sc.addr + start as u64);
                     }
                     start = i + 1;
                 }
@@ -261,15 +266,17 @@ impl Game {
         Some((&self.methods[first], i - first))
     }
 
-    /// String literals and direct calls in `[from, to)`: (address, literal index) and (address, target).
-    pub fn scan(&self, from: u64, to: u64) -> (Vec<(u64, usize)>, Vec<(u64, u64)>) {
+    /// String literals and direct calls in `[from, to)`.
+    pub fn scan(&self, from: u64, to: u64) -> (Vec<LitHit>, Vec<CallHit>) {
         let (mut lits, mut calls) = (Vec::new(), Vec::new());
         let Some(o) = self.off(from) else {
             return (lits, calls);
         };
         let code = self.so.get(o..o + (to - from) as usize).unwrap_or_default();
         let w: Vec<u32> = code
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         for (i, &x) in w.iter().enumerate() {

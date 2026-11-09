@@ -64,15 +64,14 @@ pub fn inject(
     'next: for c in classes {
         let desc = String::from_utf8_lossy(&c.name).into_owned();
         for name in &entries {
-            if let Some(bytes) = apk.read(name) {
-                if crate::dex::Dex::parse(&bytes)
+            if let Some(bytes) = apk.read(name)
+                && crate::dex::Dex::parse(&bytes)
                     .ok()
                     .and_then(|dx| dx.find_class(&desc))
                     .is_some()
-                {
-                    by_dex.entry(name.clone()).or_default().push(c);
-                    continue 'next;
-                }
+            {
+                by_dex.entry(name.clone()).or_default().push(c);
+                continue 'next;
             }
         }
         by_dex.entry("classes.dex".into()).or_default().push(c);

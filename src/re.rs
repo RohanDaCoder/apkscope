@@ -35,10 +35,11 @@ fn in_class(owner: &str, top: &str) -> bool {
 fn wanted_methods(dx: &Dex, top: &str, name: Option<&str>) -> HashSet<u32> {
     let mut out = HashSet::new();
     for id in 0..dx.counts()[3] as u32 {
-        if let Ok((c, n, _)) = dx.method_parts(id) {
-            if in_class(&c, top) && name.is_none_or(|w| w == n) {
-                out.insert(id);
-            }
+        if let Ok((c, n, _)) = dx.method_parts(id)
+            && in_class(&c, top)
+            && name.is_none_or(|w| w == n)
+        {
+            out.insert(id);
         }
     }
     out
@@ -177,12 +178,11 @@ pub fn call_graph(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize) 
         }
         let mut kids = Vec::new();
         bytecode::for_each_ref(insns, |r, idx| {
-            if r == Ref::Method {
-                if let Ok(s) = dx.method_ref(idx) {
-                    if !kids.contains(&s) {
-                        kids.push(s);
-                    }
-                }
+            if r == Ref::Method
+                && let Ok(s) = dx.method_ref(idx)
+                && !kids.contains(&s)
+            {
+                kids.push(s);
             }
         });
         for k in kids {
@@ -256,15 +256,18 @@ pub fn field_access(dexes: &[Dex], class: &str, name: &str) -> Vec<(String, Stri
 /// Where a report line leads: open method `at`, then (optionally) the line in it that mentions
 /// `then` (the call or field use). `method` = the method the line itself names.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg(feature = "gui")]
 pub struct Link {
     pub at: String,
     pub then: Option<String>,
     pub method: Option<String>,
 }
 
+#[cfg(feature = "gui")]
 pub type Line = (String, Option<Link>);
 
 /// `I` -> `int`, `La/b/C$D;` -> `D` (shown names), `[B` -> `byte[]`
+#[cfg(any(test, feature = "gui"))]
 fn short_type(t: &str) -> String {
     match t.strip_prefix('[') {
         Some(inner) => format!("{}[]", short_type(inner)),
@@ -287,6 +290,7 @@ fn short_type(t: &str) -> String {
     }
 }
 
+#[cfg(any(test, feature = "gui"))]
 pub fn split_params(p: &str) -> Vec<String> {
     let (b, mut out, mut i) = (p.as_bytes(), Vec::new(), 0);
     while i < b.len() {
@@ -306,6 +310,7 @@ pub fn split_params(p: &str) -> Vec<String> {
 
 /// Method ref `La/b/C;->m(ILjava/lang/String;)V` as shown in the code:
 /// (`C` with its outer classes, `m(int, String)`, shown method name).
+#[cfg(any(test, feature = "gui"))]
 pub fn pretty(mref: &str) -> (String, String, String) {
     let Some((cls, rest)) = mref.split_once("->") else {
         return (mref.to_string(), String::new(), String::new());
@@ -331,6 +336,7 @@ pub fn pretty(mref: &str) -> (String, String, String) {
 }
 
 /// The text to look for at a call site of `mref`: `name(` (constructors: `new C(`).
+#[cfg(any(test, feature = "gui"))]
 fn call_needle(mref: &str) -> String {
     let (class, _, shown) = pretty(mref);
     if shown.starts_with("new ") {
@@ -341,6 +347,7 @@ fn call_needle(mref: &str) -> String {
 }
 
 /// Callers grouped by class; each line jumps to the call.
+#[cfg(feature = "gui")]
 pub fn callers_report(dexes: &[Dex], class: &str, name: Option<&str>) -> Vec<Line> {
     let rows = callers(dexes, class, name);
     let classes: HashSet<&str> = rows
@@ -407,6 +414,7 @@ pub fn callers_report(dexes: &[Dex], class: &str, name: Option<&str>) -> Vec<Lin
 }
 
 /// Callers, then the callee tree drawn with branches; [lib] = outside the APK.
+#[cfg(feature = "gui")]
 pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize) -> Vec<Line> {
     let mut out = callers_report(dexes, class, name);
     out.push((String::new(), None));
@@ -463,10 +471,10 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         }
         let mut kids = Vec::new();
         bytecode::for_each_ref(insns, |r, idx| {
-            if let (Ref::Method, Ok(s)) = (r, dx.method_ref(idx)) {
-                if !kids.contains(&s) {
-                    kids.push(s);
-                }
+            if let (Ref::Method, Ok(s)) = (r, dx.method_ref(idx))
+                && !kids.contains(&s)
+            {
+                kids.push(s);
             }
         });
         let child_prefix = if parent.is_none() {
@@ -496,6 +504,7 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
     out
 }
 
+#[cfg(feature = "gui")]
 pub fn access_report(dexes: &[Dex], class: &str, field: &str) -> Vec<Line> {
     let rows = field_access(dexes, class, field);
     let shown = field;
@@ -541,6 +550,7 @@ pub fn access_report(dexes: &[Dex], class: &str, field: &str) -> Vec<Line> {
     out
 }
 
+#[cfg(feature = "gui")]
 pub fn decrypt_report(dexes: &[Dex]) -> Vec<Line> {
     let rows = decrypt_all(dexes);
     let mut out: Vec<Line> = vec![
@@ -1212,17 +1222,17 @@ impl<'a> Vm<'a> {
         let insns = bytecode::decode(code.insns).ok()?;
         let units: Vec<u16> = code
             .insns
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         let at: HashMap<u32, usize> = insns.iter().enumerate().map(|(k, i)| (i.off, k)).collect();
         let mut r = vec![V::Null; code.registers as usize];
         let first = (code.registers - code.ins) as usize;
         // wide arguments take two registers; values sit in the first
-        let mut slot = first;
-        for v in args {
-            *r.get_mut(slot)? = v;
-            slot += 1;
+        for (i, v) in args.into_iter().enumerate() {
+            *r.get_mut(first + i)? = v;
         }
         let mut res = V::Null;
         let mut pc = 0usize;
@@ -1649,7 +1659,7 @@ pub fn decrypt_all(dexes: &[Dex]) -> Vec<(String, String, String)> {
                     return;
                 }
                 let Ok(code) = bytecode::decode(insns) else { return };
-                let units: Vec<u16> = insns.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = insns.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
                 let targets: HashSet<u32> = code.iter().filter(|i| matches!(i.op, 0x28..=0x2a | 0x32..=0x3d)).map(|i| (i.off as i64 + i.lit) as u32).collect();
                 let mut known: HashMap<u16, V> = HashMap::new();
                 for i in &code {
@@ -1668,12 +1678,11 @@ pub fn decrypt_all(dexes: &[Dex]) -> Vec<(String, String, String)> {
                             continue;
                         }
                         0x23 => {
-                            if let (Some(V::Int(n)), true) = (known.get(&i.regs[1]).cloned(), dx.type_name(i.idx).is_ok_and(|t| t.len() == 2)) {
-                                if (0..4096).contains(&n) {
+                            if let (Some(V::Int(n)), true) = (known.get(&i.regs[1]).cloned(), dx.type_name(i.idx).is_ok_and(|t| t.len() == 2))
+                                && (0..4096).contains(&n) {
                                     known.insert(i.regs[0], V::Arr(Rc::new(RefCell::new(vec![V::Int(0); n as usize]))));
                                     continue;
                                 }
-                            }
                         }
                         0x26 => {
                             // fill-array-data into a tracked array
@@ -1830,6 +1839,7 @@ pub fn apply_note(n: &mut Notes, key: &str, comment: bool, text: &str) {
 
 /// Real descriptor of a class shown as `shown` (its simple name as printed) inside top-level
 /// class `top`; `top` itself when `shown` is its own name or nothing matches.
+#[cfg(feature = "gui")]
 pub fn nested_class(dexes: &[Dex], top: &str, shown: &str) -> String {
     let prefix = format!("{}$", top.trim_end_matches(';'));
     for dx in dexes {
@@ -1848,6 +1858,7 @@ pub fn nested_class(dexes: &[Dex], top: &str, shown: &str) -> String {
 
 /// Real name of a member of `class` shown as `shown` (after deobfuscation and user renames).
 /// Constructors are shown with the class name and come back as `<init>`.
+#[cfg(feature = "gui")]
 pub fn real_member(dexes: &[Dex], class: &str, shown: &str, method: bool) -> Option<String> {
     for dx in dexes {
         let Some(c) = dx.find_class(class) else {
@@ -1908,30 +1919,28 @@ pub fn export_mapping(dexes: &[Dex], n: &Notes, enigma: bool) -> String {
                 continue;
             };
             for m in &data.methods {
-                if let Ok((_, mn, p)) = dx.method_parts(m.method_idx) {
-                    if is_method && mn == name {
-                        let sig = dx.proto(p).unwrap_or_default();
-                        classes.entry(cls.to_string()).or_default().push((
-                            'm',
-                            mn,
-                            new.clone(),
-                            sig,
-                        ));
-                        found = true;
-                    }
+                if let Ok((_, mn, p)) = dx.method_parts(m.method_idx)
+                    && is_method
+                    && mn == name
+                {
+                    let sig = dx.proto(p).unwrap_or_default();
+                    classes
+                        .entry(cls.to_string())
+                        .or_default()
+                        .push(('m', mn, new.clone(), sig));
+                    found = true;
                 }
             }
             for (f, _) in &data.fields {
-                if let Ok((_, ty, fname)) = dx.field_parts(*f) {
-                    if !is_method && fname == name {
-                        classes.entry(cls.to_string()).or_default().push((
-                            'f',
-                            fname,
-                            new.clone(),
-                            ty,
-                        ));
-                        found = true;
-                    }
+                if let Ok((_, ty, fname)) = dx.field_parts(*f)
+                    && !is_method
+                    && fname == name
+                {
+                    classes
+                        .entry(cls.to_string())
+                        .or_default()
+                        .push(('f', fname, new.clone(), ty));
+                    found = true;
                 }
             }
         }

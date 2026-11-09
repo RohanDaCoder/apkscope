@@ -82,10 +82,12 @@ pub fn parse(d: &[u8]) -> Result<Elf, String> {
                     };
                     let (bind, kind) = (info >> 4, info & 0xf);
                     // defined (not imported), global or weak, function or object
-                    if shndx != 0 && (bind == 1 || bind == 2) && (kind == 1 || kind == 2) {
-                        if let Some(n) = cstr(d, strtab + name as usize).filter(|n| !n.is_empty()) {
-                            exports.push(n);
-                        }
+                    if shndx != 0
+                        && (bind == 1 || bind == 2)
+                        && (kind == 1 || kind == 2)
+                        && let Some(n) = cstr(d, strtab + name as usize).filter(|n| !n.is_empty())
+                    {
+                        exports.push(n);
                     }
                 }
             }
@@ -94,10 +96,10 @@ pub fn parse(d: &[u8]) -> Result<Elf, String> {
                 for k in 0..size / ent {
                     let o = off + k * ent;
                     let (tag, val) = (rd(d, o, w), rd(d, o + w, w));
-                    if tag == Some(1) {
-                        if let Some(n) = val.and_then(|v| cstr(d, strtab + v as usize)) {
-                            needed.push(n);
-                        }
+                    if tag == Some(1)
+                        && let Some(n) = val.and_then(|v| cstr(d, strtab + v as usize))
+                    {
+                        needed.push(n);
                     }
                 }
             }
