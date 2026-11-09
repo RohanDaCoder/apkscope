@@ -11,7 +11,7 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +25,7 @@ jobs:
 
   linux-x86_64:
     needs: [lint]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -40,7 +40,7 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_x86_64
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-x86_64
           path: dist/
@@ -62,7 +62,7 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_aarch64
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-aarch64
           path: dist/
@@ -83,7 +83,7 @@ jobs:
           mkdir -p dist
           cp target/aarch64-apple-darwin/release/apkscope dist/apkscope_macos_aarch64
           cp target/x86_64-apple-darwin/release/apkscope dist/apkscope_macos_x86_64
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-macos
           path: dist/
@@ -100,14 +100,14 @@ jobs:
       - run: |
           mkdir dist
           cp target/Release/apkscope.exe dist/apkscope_windows_x86_64.exe
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-windows
           path: dist/
 
   release:
     needs: [linux-x86_64, linux-aarch64, macos, windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
