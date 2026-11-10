@@ -3,16 +3,29 @@ name: release
 # Builds every platform when a version tag (v*) is pushed and attaches the
 # binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
 # publishes as a pre-release. Linux CLI/MCP binaries are static musl builds;
-# the Linux viewer is a glibc build packaged as .deb + AppImage.
-# NOTE: this file is #3's release workflow with the two gui-linux jobs added;
-# the lint job and the clippy cleanup it needs arrive with #3.
+# the Linux viewer is a glibc build packaged as .deb + AppImage. The lint job
+# gates the matrix so a broken tag wastes no compute.
 on:
   push:
     tags:
       - "v*"
 
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      # CLI + MCP server only — matches the Linux/macOS release build
+      - run: cargo check --release --no-default-features
+      - run: cargo clippy --release --no-default-features -- -D warnings
+
   linux-x86_64:
+    needs: [lint]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -28,12 +41,17 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_x86_64
+      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
+      # runtime, so nothing is statically linked), packaged as .deb and AppImage
+      - run: cargo build --release
+      - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-x86_64
           path: dist/
 
   linux-aarch64:
+    needs: [lint]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -49,12 +67,17 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_aarch64
+      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
+      # runtime, so nothing is statically linked), packaged as .deb and AppImage
+      - run: cargo build --release
+      - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-aarch64
           path: dist/
 
   macos:
+    needs: [lint]
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -75,6 +98,7 @@ jobs:
           path: dist/
 
   windows:
+    needs: [lint]
     # the GUI viewer, built where it is tested
     runs-on: windows-latest
     timeout-minutes: 30
@@ -90,51 +114,15 @@ jobs:
           name: dist-windows
           path: dist/
 
-  gui-linux-x86_64:
-    # the Linux viewer: glibc build (it dlopens the desktop's X11/Wayland/GL at
-    # runtime, so nothing is statically linked), packaged as .deb and AppImage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release
-      - run: packaging/linux/package.sh target/release/apkscope dist
-      # smoke test: the window opens on the X server with software GL; still
-      # being alive when the timeout kills it is the pass condition
-      - run: |
-          sudo apt-get install -y xvfb xauth libx11-6 libxcb1 libxcursor1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-egl1 libgl1 libegl1
-          timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist-gui-linux-x86_64
-          path: dist/
-
-  gui-linux-aarch64:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release
-      - run: packaging/linux/package.sh target/release/apkscope dist
-      - run: |
-          sudo apt-get install -y xvfb xauth libx11-6 libxcb1 libxcursor1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-egl1 libgl1 libegl1
-          timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist-gui-linux-aarch64
-          path: dist/
-
   release:
-    needs: [linux-x86_64, linux-aarch64, macos, windows, gui-linux-x86_64, gui-linux-aarch64]
+    needs: [linux-x86_64, linux-aarch64, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true

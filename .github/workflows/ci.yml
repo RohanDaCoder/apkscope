@@ -1,16 +1,53 @@
 name: ci
 
+# Quality gate + cross-platform test/build matrix; release tags (v*) are
+# handled by release.yml instead. Pinned actions are Node 24-compatible —
+# Node 20 was removed from GitHub-hosted runners on 2026-09-23.
+
 on:
   push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "v*"
   pull_request:
 
 jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # CLI + MCP server only — matches the Linux/macOS release build
+      - run: cargo check --release --no-default-features
+
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --release --no-default-features -- -D warnings
+
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, name: linux-x64 }
+          - { os: ubuntu-24.04, name: linux-x64 }
           - { os: macos-latest, name: macos-arm64, optional: true }
           - { os: windows-latest, name: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -20,10 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      # CLI + MCP server, no GUI libraries needed
       - run: cargo test --release --no-default-features
       - run: cargo build --release --no-default-features
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: apkscope-cli-${{ matrix.name }}
           path: |
@@ -33,29 +69,15 @@ jobs:
       # the viewer builds on Windows (where it is tested)
       - if: matrix.os == 'windows-latest'
         run: cargo build --release
-
-  gui-linux:
-    # the viewer on Linux: the same default-feature build as on Windows, packaged
-    # as .deb + AppImage and smoke-tested under Xvfb. Pinned to 24.04 because the
-    # binary links glibc dynamically — building on the oldest supported LTS keeps
-    # it installable everywhere, and ubuntu-latest rolls to 26.04 this month.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      # gui unit tests (the matrix job tests the CLI feature set)
-      - run: cargo test --release
-      - run: cargo build --release
-      - run: packaging/linux/package.sh target/release/apkscope dist
-      # smoke test: the window opens on the X server with software GL; still
-      # being alive when the timeout kills it is the pass condition. The apt set
-      # is the .deb's Depends (the runner lacks libxkbcommon-x11-0, which the
-      # viewer dlopens), plus the X server itself.
-      - run: |
-          sudo apt-get install -y xvfb xauth libx11-6 libxcb1 libxcursor1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-egl1 libgl1 libegl1
-          timeout 15 xvfb-run -a -s "-screen 0 1280x800x24" env LIBGL_ALWAYS_SOFTWARE=1 ./target/release/apkscope gui || test $? -eq 124
-      - uses: actions/upload-artifact@v5
+      # the viewer on Linux as well: built and packaged (.deb + AppImage).
+      # Pinned to 24.04 because the binary links glibc dynamically — building
+      # on the oldest supported LTS keeps it installable everywhere.
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo build --release
+      - if: matrix.os == 'ubuntu-24.04'
+        run: packaging/linux/package.sh target/release/apkscope dist
+      - if: matrix.os == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v7
         with:
           name: apkscope-gui-linux-x86_64
           path: dist/

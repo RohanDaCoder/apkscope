@@ -41,16 +41,25 @@ fn lazy_path(desc: &str) -> Option<String> {
     if let Some(p) = MEMO.lock().unwrap().as_ref().and_then(|m| m.get(&h)) {
         return Some(p.to_string());
     }
-    let (dex, c) = dexes.iter().find_map(|d| d.find_class(desc).map(|c| (d, c)))?;
+    let (dex, c) = dexes
+        .iter()
+        .find_map(|d| d.find_class(desc).map(|c| (d, c)))?;
     let renamed = |d: &str| crate::deobf::class(d).unwrap_or(d).to_string();
     let p = match dex.parent_of(c) {
         Some(o) => {
             let odesc = dex.class_descriptor(o).unwrap_or_default();
-            format!("{}.{}", lazy_path(&odesc).unwrap_or_else(|| top_level(&odesc)), crate::java::inner_name(&renamed(desc), &renamed(&odesc)))
+            format!(
+                "{}.{}",
+                lazy_path(&odesc).unwrap_or_else(|| top_level(&odesc)),
+                crate::java::inner_name(&renamed(desc), &renamed(&odesc))
+            )
         }
         None => top_level(desc),
     };
-    MEMO.lock().unwrap().get_or_insert_with(HashMap::new).insert(h, p.clone().into_boxed_str());
+    MEMO.lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(h, p.clone().into_boxed_str());
     Some(p)
 }
 
@@ -69,12 +78,16 @@ fn lazy_declared(own: &str) -> Option<Vec<Box<str>>> {
     let mut names = BTreeSet::new();
     for dex in dexes.iter() {
         for k in 0..dex.class_count {
-            let Ok(d) = dex.class_desc_bytes(k) else { continue };
+            let Ok(d) = dex.class_desc_bytes(k) else {
+                continue;
+            };
             let utf8 = std::str::from_utf8(d).is_ok();
             if utf8 && !(d == top.as_bytes() || d.starts_with(prefix.as_bytes())) {
                 continue;
             }
-            let Ok(desc) = dex.class_descriptor(k) else { continue };
+            let Ok(desc) = dex.class_descriptor(k) else {
+                continue;
+            };
             if !(desc == top || desc.starts_with(&prefix)) {
                 continue;
             }
@@ -97,7 +110,11 @@ pub fn init(dexes: &[crate::dex::Dex]) {
         let p = match dex.nesting().parent[c] {
             Some(o) => {
                 let odesc = dex.class_descriptor(o).unwrap_or_default();
-                format!("{}.{}", path(dex, o, memo), crate::java::inner_name(&renamed(&desc), &renamed(&odesc)))
+                format!(
+                    "{}.{}",
+                    path(dex, o, memo),
+                    crate::java::inner_name(&renamed(&desc), &renamed(&odesc))
+                )
             }
             None => top_level(&desc),
         };
@@ -114,10 +131,27 @@ pub fn init(dexes: &[crate::dex::Dex]) {
     for p in memo.values() {
         let (pkg, cls) = p.split_once('/').unwrap_or(("", p));
         let top = cls.split('.').next().unwrap_or(cls);
-        declared.entry(format!("{pkg}/{top}")).or_default().insert(parts(p).0);
+        declared
+            .entry(format!("{pkg}/{top}"))
+            .or_default()
+            .insert(parts(p).0);
     }
-    let _ = DECLARED.set(declared.into_iter().map(|(k, v)| (crate::dex::name_hash(&k), v.into_iter().map(String::into_boxed_str).collect())).collect());
-    let _ = PATHS.set(memo.iter().map(|(k, v)| (crate::dex::name_hash(k), v.clone().into_boxed_str())).collect());
+    let _ = DECLARED.set(
+        declared
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    crate::dex::name_hash(&k),
+                    v.into_iter().map(String::into_boxed_str).collect(),
+                )
+            })
+            .collect(),
+    );
+    let _ = PATHS.set(
+        memo.iter()
+            .map(|(k, v)| (crate::dex::name_hash(k), v.clone().into_boxed_str()))
+            .collect(),
+    );
 }
 
 /// `pkg/Name` keeping any `$` in the name (the class has no outer class in the APK)
@@ -131,13 +165,16 @@ fn top_level(desc: &str) -> String {
 
 /// Source path of a class: from the APK when known, else (framework classes) every `$` nests.
 pub fn source_path(desc: &str) -> String {
-    if let Some(p) = PATHS.get().and_then(|m| m.get(&crate::dex::name_hash(desc))) {
+    if let Some(p) = PATHS
+        .get()
+        .and_then(|m| m.get(&crate::dex::name_hash(desc)))
+    {
         return p.to_string();
     }
-    if PATHS.get().is_none() {
-        if let Some(p) = lazy_path(desc) {
-            return p;
-        }
+    if PATHS.get().is_none()
+        && let Some(p) = lazy_path(desc)
+    {
+        return p;
     }
     let t = top_level(desc);
     let (pkg, cls) = t.split_once('/').unwrap_or(("", &t));
@@ -159,7 +196,11 @@ pub fn type_ref(desc: &str) -> String {
 fn parts(path: &str) -> (String, String, String) {
     let (pkg, cls) = path.split_once('/').unwrap_or(("", path));
     let simple = cls.rsplit('.').next().unwrap_or(cls).to_string();
-    let dotted = if pkg.is_empty() { cls.to_string() } else { format!("{pkg}.{cls}") };
+    let dotted = if pkg.is_empty() {
+        cls.to_string()
+    } else {
+        format!("{pkg}.{cls}")
+    };
     (simple, dotted, pkg.to_string())
 }
 
@@ -170,9 +211,15 @@ pub fn resolve(text: &str, pkg: &str, own: &str) -> String {
     let mut by_simple: HashMap<String, BTreeMap<String, usize>> = HashMap::new();
     let mut rest = text;
     while let Some(i) = rest.find(OPEN) {
-        let Some(j) = rest[i..].find(CLOSE) else { break };
+        let Some(j) = rest[i..].find(CLOSE) else {
+            break;
+        };
         let full = &rest[i + 1..i + j];
-        *by_simple.entry(parts(full).0).or_default().entry(full.to_string()).or_default() += 1;
+        *by_simple
+            .entry(parts(full).0)
+            .or_default()
+            .entry(full.to_string())
+            .or_default() += 1;
         rest = &rest[i + j + 1..];
     }
     let own_prefix = format!("{own}.");
@@ -201,7 +248,11 @@ pub fn resolve(text: &str, pkg: &str, own: &str) -> String {
     let mut winner: HashMap<String, String> = HashMap::new();
     let mut imports = BTreeSet::new();
     for (simple, fulls) in &by_simple {
-        let best = fulls.iter().min_by_key(|(f, n)| (rank(f), std::cmp::Reverse(**n), (*f).clone())).map(|(f, _)| f.clone()).unwrap();
+        let best = fulls
+            .iter()
+            .min_by_key(|(f, n)| (rank(f), std::cmp::Reverse(**n), (*f).clone()))
+            .map(|(f, _)| f.clone())
+            .unwrap();
         if rank(&best) != 0 && declared.is_some_and(|d| d.iter().any(|n| **n == **simple)) {
             continue;
         }
@@ -214,10 +265,16 @@ pub fn resolve(text: &str, pkg: &str, own: &str) -> String {
     let mut rest = text;
     while let Some(i) = rest.find(OPEN) {
         out += &rest[..i];
-        let Some(j) = rest[i..].find(CLOSE) else { break };
+        let Some(j) = rest[i..].find(CLOSE) else {
+            break;
+        };
         let full = &rest[i + 1..i + j];
         let (simple, dotted, _) = parts(full);
-        out += if winner.get(&simple).is_some_and(|w| w == full) { &simple } else { &dotted };
+        out += if winner.get(&simple).is_some_and(|w| w == full) {
+            &simple
+        } else {
+            &dotted
+        };
         rest = &rest[i + j + 1..];
     }
     out += rest;
@@ -241,29 +298,58 @@ mod tests {
 
     #[test]
     fn framework_paths_nest_on_dollar() {
-        assert_eq!(source_path("Landroid/os/Parcelable$Creator;"), "android.os/Parcelable.Creator");
+        assert_eq!(
+            source_path("Landroid/os/Parcelable$Creator;"),
+            "android.os/Parcelable.Creator"
+        );
     }
 
     #[test]
     fn imports_and_clashes() {
-        let text = format!("package a.b;\n\nclass Foo {{\n    {} x; {} y; {} z; {} w; {} q;\n}}\n", m("java.util/List"), m("a.b/Foo.Inner"), m("c.d/Item"), m("e.f/Item"), m("java.lang/String"));
+        let text = format!(
+            "package a.b;\n\nclass Foo {{\n    {} x; {} y; {} z; {} w; {} q;\n}}\n",
+            m("java.util/List"),
+            m("a.b/Foo.Inner"),
+            m("c.d/Item"),
+            m("e.f/Item"),
+            m("java.lang/String")
+        );
         let out = resolve(&text, "a.b", "a.b/Foo");
-        assert!(out.starts_with("package a.b;\n\nimport c.d.Item;\nimport java.util.List;\n\nclass Foo"), "{out}");
+        assert!(
+            out.starts_with(
+                "package a.b;\n\nimport c.d.Item;\nimport java.util.List;\n\nclass Foo"
+            ),
+            "{out}"
+        );
         // one Item is imported, the other stays fully qualified; nested and java.lang need no import
-        assert!(out.contains("List x; Inner y; Item z; e.f.Item w; String q;"), "{out}");
+        assert!(
+            out.contains("List x; Inner y; Item z; e.f.Item w; String q;"),
+            "{out}"
+        );
     }
 
     #[test]
     fn declared_nested_name_shadows_supertype() {
-        DECLARED.get_or_init(|| HashMap::from([(crate::dex::name_hash("a.b/Foo"), vec!["Foo".into(), "Factory".into()].into_boxed_slice())]));
+        DECLARED.get_or_init(|| {
+            HashMap::from([(
+                crate::dex::name_hash("a.b/Foo"),
+                vec!["Foo".into(), "Factory".into()].into_boxed_slice(),
+            )])
+        });
         // `class Factory implements Factory` would be cyclic: the supertype must stay qualified
-        let text = format!("package a.b;
+        let text = format!(
+            "package a.b;
 
 class Foo {{
     static class Factory implements {} {{}}
 }}
-", m("c.d/Bar.Factory"));
+",
+            m("c.d/Bar.Factory")
+        );
         let out = resolve(&text, "a.b", "a.b/Foo");
-        assert!(out.contains("implements c.d.Bar.Factory {}") && !out.contains("import"), "{out}");
+        assert!(
+            out.contains("implements c.d.Bar.Factory {}") && !out.contains("import"),
+            "{out}"
+        );
     }
 }

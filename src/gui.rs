@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, RichText, Stroke, TextFormat, text::LayoutJob};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Margin, RichText, Stroke, TextFormat, text::LayoutJob,
+};
 
 use crate::{apksign, arsc, cache, rebuild, smali};
 
@@ -43,10 +45,70 @@ impl Theme {
     fn palette(self) -> Palette {
         let c = Color32::from_rgb;
         match self {
-            Theme::Dark => Palette { bg: c(24, 25, 28), panel: c(32, 33, 37), accent: c(77, 144, 254), text: c(220, 222, 226), dim: c(140, 144, 150), code: [c(212, 212, 212), c(106, 153, 85), c(206, 145, 120), c(86, 156, 214), c(181, 206, 168), c(220, 160, 90)], mark: c(78, 66, 22) },
-            Theme::Midnight => Palette { bg: c(13, 17, 23), panel: c(22, 27, 34), accent: c(88, 166, 255), text: c(201, 209, 217), dim: c(125, 133, 144), code: [c(201, 209, 217), c(139, 148, 158), c(165, 214, 255), c(255, 123, 114), c(121, 192, 255), c(255, 166, 87)], mark: c(56, 52, 20) },
-            Theme::Light => Palette { bg: c(250, 250, 251), panel: c(240, 241, 244), accent: c(37, 99, 235), text: c(28, 30, 34), dim: c(100, 104, 112), code: [c(30, 30, 30), c(0, 128, 0), c(163, 21, 21), c(0, 0, 220), c(9, 134, 88), c(170, 90, 0)], mark: c(255, 236, 150) },
-            Theme::Solarized => Palette { bg: c(253, 246, 227), panel: c(238, 232, 213), accent: c(38, 139, 210), text: c(88, 110, 117), dim: c(147, 161, 161), code: [c(88, 110, 117), c(147, 161, 161), c(42, 161, 152), c(133, 153, 0), c(211, 54, 130), c(203, 75, 22)], mark: c(240, 220, 160) },
+            Theme::Dark => Palette {
+                bg: c(24, 25, 28),
+                panel: c(32, 33, 37),
+                accent: c(77, 144, 254),
+                text: c(220, 222, 226),
+                dim: c(140, 144, 150),
+                code: [
+                    c(212, 212, 212),
+                    c(106, 153, 85),
+                    c(206, 145, 120),
+                    c(86, 156, 214),
+                    c(181, 206, 168),
+                    c(220, 160, 90),
+                ],
+                mark: c(78, 66, 22),
+            },
+            Theme::Midnight => Palette {
+                bg: c(13, 17, 23),
+                panel: c(22, 27, 34),
+                accent: c(88, 166, 255),
+                text: c(201, 209, 217),
+                dim: c(125, 133, 144),
+                code: [
+                    c(201, 209, 217),
+                    c(139, 148, 158),
+                    c(165, 214, 255),
+                    c(255, 123, 114),
+                    c(121, 192, 255),
+                    c(255, 166, 87),
+                ],
+                mark: c(56, 52, 20),
+            },
+            Theme::Light => Palette {
+                bg: c(250, 250, 251),
+                panel: c(240, 241, 244),
+                accent: c(37, 99, 235),
+                text: c(28, 30, 34),
+                dim: c(100, 104, 112),
+                code: [
+                    c(30, 30, 30),
+                    c(0, 128, 0),
+                    c(163, 21, 21),
+                    c(0, 0, 220),
+                    c(9, 134, 88),
+                    c(170, 90, 0),
+                ],
+                mark: c(255, 236, 150),
+            },
+            Theme::Solarized => Palette {
+                bg: c(253, 246, 227),
+                panel: c(238, 232, 213),
+                accent: c(38, 139, 210),
+                text: c(88, 110, 117),
+                dim: c(147, 161, 161),
+                code: [
+                    c(88, 110, 117),
+                    c(147, 161, 161),
+                    c(42, 161, 152),
+                    c(133, 153, 0),
+                    c(211, 54, 130),
+                    c(203, 75, 22),
+                ],
+                mark: c(240, 220, 160),
+            },
         }
     }
 }
@@ -77,23 +139,44 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: Theme::Dark, code_font: 13.0, ui_scale: 1.0, deobf: true, threads: 0, use_cache: true, export_ctx: 3, export_method: false }
+        Settings {
+            theme: Theme::Dark,
+            code_font: 13.0,
+            ui_scale: 1.0,
+            deobf: true,
+            threads: 0,
+            use_cache: true,
+            export_ctx: 3,
+            export_method: false,
+        }
     }
 }
 
 impl Settings {
     fn file() -> std::path::PathBuf {
-        let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("XDG_CONFIG_HOME")).map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let base = std::env::var_os("APPDATA")
+            .or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
         base.join("apkscope").join("settings.txt")
     }
 
     fn load() -> Settings {
         let mut s = Settings::default();
-        let Ok(text) = std::fs::read_to_string(Self::file()) else { return s };
+        let Ok(text) = std::fs::read_to_string(Self::file()) else {
+            return s;
+        };
         for line in text.lines() {
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             match k.trim() {
-                "theme" => s.theme = Theme::ALL.into_iter().find(|t| t.name() == v.trim()).unwrap_or(s.theme),
+                "theme" => {
+                    s.theme = Theme::ALL
+                        .into_iter()
+                        .find(|t| t.name() == v.trim())
+                        .unwrap_or(s.theme)
+                }
                 "code_font" => s.code_font = v.trim().parse().unwrap_or(s.code_font),
                 "ui_scale" => s.ui_scale = v.trim().parse().unwrap_or(s.ui_scale),
                 "deobf" => s.deobf = v.trim() == "true",
@@ -232,7 +315,21 @@ struct Doc {
 
 impl Doc {
     fn new(open: Open) -> Doc {
-        Doc { open, view: View::Java, text: None, links: None, mark: None, scroll_pending: false, job: None, sel: None, find: String::new(), editing: None, find_on_load: None, menu_at: None, kb_menu: false }
+        Doc {
+            open,
+            view: View::Java,
+            text: None,
+            links: None,
+            mark: None,
+            scroll_pending: false,
+            job: None,
+            sel: None,
+            find: String::new(),
+            editing: None,
+            find_on_load: None,
+            menu_at: None,
+            kb_menu: false,
+        }
     }
 }
 
@@ -276,22 +373,47 @@ fn java_res() -> &'static [regex::Regex; 3] {
     static RE: OnceLock<[regex::Regex; 3]> = OnceLock::new();
     RE.get_or_init(|| {
         [
-            regex::Regex::new(r"^(\s*)(?:[\w@]+\s+)*(?:class|interface|enum|@interface)\s+([\w$]+)").unwrap(),
-            regex::Regex::new(r"^(\s+)(?:[\w$<>\[\],.?@]+\s+)*?([\w$]+)\((.*)\)\s*(?:throws [^{;]+)?\s*[{;]\s*$").unwrap(),
-            regex::Regex::new(r"^(\s+)(?:[\w$<>\[\],.?]+\s+)+([\w$]+)(?: = .*)?;(?:\s*//.*)?$").unwrap(),
+            regex::Regex::new(
+                r"^(\s*)(?:[\w@]+\s+)*(?:class|interface|enum|@interface)\s+([\w$]+)",
+            )
+            .unwrap(),
+            regex::Regex::new(
+                r"^(\s+)(?:[\w$<>\[\],.?@]+\s+)*?([\w$]+)\((.*)\)\s*(?:throws [^{;]+)?\s*[{;]\s*$",
+            )
+            .unwrap(),
+            regex::Regex::new(r"^(\s+)(?:[\w$<>\[\],.?]+\s+)+([\w$]+)(?: = .*)?;(?:\s*//.*)?$")
+                .unwrap(),
         ]
     })
 }
 
-const NOT_DECL: [&str; 9] = ["if", "while", "for", "switch", "catch", "synchronized", "return", "new", "super"];
+const NOT_DECL: [&str; 9] = [
+    "if",
+    "while",
+    "for",
+    "switch",
+    "catch",
+    "synchronized",
+    "return",
+    "new",
+    "super",
+];
 
 /// A method_re match is a declaration, not a call statement: a type or modifier comes first.
 fn is_decl(l: &str, c: &regex::Captures) -> bool {
     let pre = l[..c.get(2).map_or(0, |m| m.start())].trim();
     let first = pre.split_whitespace().next().unwrap_or("");
     // a constructor without modifiers: `Name(args) {`
-    let ctor = pre.is_empty() && c[2].starts_with(|ch: char| ch.is_uppercase()) && l.trim_end().ends_with('{');
-    (ctor || !pre.is_empty()) && !pre.ends_with('.') && !NOT_DECL.contains(&&c[2]) && !NOT_DECL.contains(&first) && first != "throw" && first != "else" && !l.contains(" = ")
+    let ctor = pre.is_empty()
+        && c[2].starts_with(|ch: char| ch.is_uppercase())
+        && l.trim_end().ends_with('{');
+    (ctor || !pre.is_empty())
+        && !pre.ends_with('.')
+        && !NOT_DECL.contains(&&c[2])
+        && !NOT_DECL.contains(&first)
+        && first != "throw"
+        && first != "else"
+        && !l.contains(" = ")
 }
 
 fn indent(s: &str) -> usize {
@@ -325,7 +447,10 @@ fn member_at(text: &str, at: usize) -> Option<(Vec<String>, Option<(bool, String
     let mut chain = Vec::new();
     let mut want = own_indent.checked_sub(4)?;
     for k in (0..=at).rev() {
-        if let Some(c) = class_re.captures(lines[k]).filter(|_| indent(lines[k]) == want) {
+        if let Some(c) = class_re
+            .captures(lines[k])
+            .filter(|_| indent(lines[k]) == want)
+        {
             chain.push(c[2].to_string());
             if want == 0 {
                 break;
@@ -344,7 +469,10 @@ fn classes_around(text: &str, at: usize) -> Vec<String> {
     let mut cur = lines.get(at).map_or(0, |l| indent(l)) + 1;
     let mut chain = Vec::new();
     for k in (0..=at.min(lines.len().saturating_sub(1))).rev() {
-        if let Some(c) = class_re.captures(lines[k]).filter(|_| indent(lines[k]) < cur) {
+        if let Some(c) = class_re
+            .captures(lines[k])
+            .filter(|_| indent(lines[k]) < cur)
+        {
             chain.push(c[2].to_string());
             cur = indent(lines[k]);
             if cur == 0 {
@@ -365,7 +493,11 @@ fn find_decl(text: &str, name: &str, nargs: Option<usize>) -> Option<usize> {
         if &c[2] != name || !is_decl(l, &c) {
             continue;
         }
-        let n = if c[3].trim().is_empty() { 0 } else { c[3].matches(',').count() + 1 };
+        let n = if c[3].trim().is_empty() {
+            0
+        } else {
+            c[3].matches(',').count() + 1
+        };
         if nargs.is_none_or(|w| w == n) {
             return Some(k + 1);
         }
@@ -382,7 +514,12 @@ fn locate(text: &str, t: &Target) -> Option<usize> {
             // stay inside the method: stop at the next line indented like its declaration
             let lines: Vec<&str> = text.lines().collect();
             let ind = indent(lines[d - 1]);
-            let hit = lines.iter().enumerate().skip(d).take_while(|(_, l)| l.trim().is_empty() || indent(l) > ind || l.trim() == "}").find(|(_, l)| l.contains(w.as_str()));
+            let hit = lines
+                .iter()
+                .enumerate()
+                .skip(d)
+                .take_while(|(_, l)| l.trim().is_empty() || indent(l) > ind || l.trim() == "}")
+                .find(|(_, l)| l.contains(w.as_str()));
             Some(hit.map_or(d, |(k, _)| k + 1))
         }
         (Some(w), None) => find_next(text, w, 0),
@@ -412,7 +549,18 @@ fn word_at(text: &str, line: usize, col: usize) -> Option<(String, bool, bool, O
     let call = l.get(e) == Some(&'(');
     let before: String = l[..s].iter().collect();
     let is_new = before.ends_with("new ");
-    let recv = before.strip_suffix('.').map(|b| b.chars().rev().take_while(|&c| w(c)).collect::<Vec<_>>().into_iter().rev().collect::<String>()).filter(|r| !r.is_empty());
+    let recv = before
+        .strip_suffix('.')
+        .map(|b| {
+            b.chars()
+                .rev()
+                .take_while(|&c| w(c))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+        })
+        .filter(|r| !r.is_empty());
     Some((word, call, is_new, recv))
 }
 
@@ -421,7 +569,11 @@ fn word_at(text: &str, line: usize, col: usize) -> Option<(String, bool, bool, O
 fn resolve_class(st: &State, text: &str, top: &str, simple: &str) -> Option<String> {
     let has = |n: &str| st.classes.binary_search_by(|c| c.0.as_str().cmp(n)).is_ok();
     let suffix = format!(".{simple};");
-    if let Some(imp) = text.lines().take_while(|l| !l.contains(" class ") && !l.contains("interface ")).find(|l| l.starts_with("import ") && l.ends_with(&suffix)) {
+    if let Some(imp) = text
+        .lines()
+        .take_while(|l| !l.contains(" class ") && !l.contains("interface "))
+        .find(|l| l.starts_with("import ") && l.ends_with(&suffix))
+    {
         let n = imp.trim_start_matches("import ").trim_end_matches(';');
         if has(n) {
             return Some(n.to_string());
@@ -431,7 +583,10 @@ fn resolve_class(st: &State, text: &str, top: &str, simple: &str) -> Option<Stri
     if has(&same) {
         return Some(same);
     }
-    let mut it = st.classes.iter().filter(|c| c.0.rsplit('.').next() == Some(simple));
+    let mut it = st
+        .classes
+        .iter()
+        .filter(|c| c.0.rsplit('.').next() == Some(simple));
     match (it.next(), it.next()) {
         (Some(c), None) => Some(c.0.clone()),
         _ => None,
@@ -442,7 +597,11 @@ fn resolve_class(st: &State, text: &str, top: &str, simple: &str) -> Option<Stri
 fn owner_desc(st: &State, top: &str, chain: &[String]) -> Option<String> {
     let &(_, d, c) = st.classes.iter().find(|x| x.0 == top)?;
     let t = st.dexes[d].class_descriptor(c).ok()?;
-    Some(if chain.len() > 1 { crate::re::nested_class(&st.dexes, &t, chain.last()?) } else { t })
+    Some(if chain.len() > 1 {
+        crate::re::nested_class(&st.dexes, &t, chain.last()?)
+    } else {
+        t
+    })
 }
 
 fn desc_of(st: &State, java: &str) -> Option<String> {
@@ -458,15 +617,26 @@ fn definition(st: &State, top: &str, text: &str, line: usize, col: usize) -> Opt
         if in_file {
             return find_decl(text, &word, None).map(Act::Line);
         }
-        let cls = recv.as_deref().and_then(|r| resolve_class(st, text, top, r))?;
-        return Some(Act::OpenClass(cls, Some(Target { decl: Some((word, None)), then: None })));
+        let cls = recv
+            .as_deref()
+            .and_then(|r| resolve_class(st, text, top, r))?;
+        return Some(Act::OpenClass(
+            cls,
+            Some(Target {
+                decl: Some((word, None)),
+                then: None,
+            }),
+        ));
     }
     if word.starts_with(|c: char| c.is_uppercase()) {
         if let Some(c) = resolve_class(st, text, top, &word) {
             return Some(Act::OpenClass(c, None));
         }
         // a nested class of this file
-        return text.lines().position(|l| java_res()[0].captures(l).is_some_and(|c| c[2] == word)).map(|k| Act::Line(k + 1));
+        return text
+            .lines()
+            .position(|l| java_res()[0].captures(l).is_some_and(|c| c[2] == word))
+            .map(|k| Act::Line(k + 1));
     }
     None
 }
@@ -482,16 +652,40 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
     };
     let st = st?;
     if let Open::Report(_) = &doc.open {
-        let link = doc.links.as_ref().and_then(|l| l.get(at).cloned().flatten());
+        let link = doc
+            .links
+            .as_ref()
+            .and_then(|l| l.get(at).cloned().flatten());
         match link {
             Some(l) => {
                 if l.then.is_some() {
-                    pick(ui, "Go to the call", Act::GoTo(Link { method: None, ..l.clone() }));
+                    pick(
+                        ui,
+                        "Go to the call",
+                        Act::GoTo(Link {
+                            method: None,
+                            ..l.clone()
+                        }),
+                    );
                 }
                 if let Some(m) = &l.method {
-                    pick(ui, "Open this method", Act::GoTo(Link { at: m.clone(), then: None, method: None }));
-                    if let Some((c, name)) = m.split_once("->").map(|(c, r)| (c.to_string(), r.split('(').next().unwrap_or("").to_string())) {
-                        pick(ui, "Its callers", Act::Callers(c.clone(), Some(name.clone())));
+                    pick(
+                        ui,
+                        "Open this method",
+                        Act::GoTo(Link {
+                            at: m.clone(),
+                            then: None,
+                            method: None,
+                        }),
+                    );
+                    if let Some((c, name)) = m.split_once("->").map(|(c, r)| {
+                        (c.to_string(), r.split('(').next().unwrap_or("").to_string())
+                    }) {
+                        pick(
+                            ui,
+                            "Its callers",
+                            Act::Callers(c.clone(), Some(name.clone())),
+                        );
                         pick(ui, "Its call graph", Act::Graph(c, Some(name)));
                     }
                 }
@@ -514,15 +708,33 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
     // the word under the cursor: a class, a call or a name
     let decl = member_at(text, at);
     if let Some((word, call, is_new, recv)) = word_at(text, at, col) {
-        let is_decl_name = decl.as_ref().is_some_and(|(c, m)| m.as_ref().map_or(c.last() == Some(&word), |m| m.1 == word));
+        let is_decl_name = decl
+            .as_ref()
+            .is_some_and(|(c, m)| m.as_ref().map_or(c.last() == Some(&word), |m| m.1 == word));
         if !is_decl_name {
-            let class = if word.starts_with(|c: char| c.is_uppercase()) && !call || is_new { resolve_class(st, text, top, &word) } else { None };
+            let class = if word.starts_with(|c: char| c.is_uppercase()) && !call || is_new {
+                resolve_class(st, text, top, &word)
+            } else {
+                None
+            };
             if let Some(cls) = &class {
                 ui.label(RichText::new(format!("class {word}")).strong());
-                pick(ui, "Open class   (Ctrl+click)", Act::OpenClass(cls.clone(), None));
+                pick(
+                    ui,
+                    "Open class   (Ctrl+click)",
+                    Act::OpenClass(cls.clone(), None),
+                );
                 if let Some(d) = desc_of(st, cls) {
-                    pick(ui, &format!("Where {word} is created (new {word})"), Act::Callers(d.clone(), Some("<init>".into())));
-                    pick(ui, &format!("Callers of any {word} method"), Act::Callers(d, None));
+                    pick(
+                        ui,
+                        &format!("Where {word} is created (new {word})"),
+                        Act::Callers(d.clone(), Some("<init>".into())),
+                    );
+                    pick(
+                        ui,
+                        &format!("Callers of any {word} method"),
+                        Act::Callers(d, None),
+                    );
                 }
                 pick(ui, "Find usages", Act::Usages(word.clone()));
                 ui.separator();
@@ -532,14 +744,20 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
                     None | Some("this" | "super") => owner_desc(st, top, &classes_around(text, at)),
                     Some(r) => resolve_class(st, text, top, r).and_then(|c| desc_of(st, &c)),
                 };
-                let real = owner.as_ref().and_then(|o| crate::re::real_member(&st.dexes, o, &word, true).map(|n| (o.clone(), n)));
+                let real = owner.as_ref().and_then(|o| {
+                    crate::re::real_member(&st.dexes, o, &word, true).map(|n| (o.clone(), n))
+                });
                 if let Some(a) = definition(st, top, text, at, col) {
                     pick(ui, "Go to definition   (Ctrl+click)", a);
                 }
                 if let Some((o, n)) = real {
                     pick(ui, "Callers", Act::Callers(o.clone(), Some(n.clone())));
                     pick(ui, "Call graph", Act::Graph(o.clone(), Some(n.clone())));
-                    pick(ui, "Hook live (Frida)", Act::LiveHook(o.clone(), Some(n.clone())));
+                    pick(
+                        ui,
+                        "Hook live (Frida)",
+                        Act::LiveHook(o.clone(), Some(n.clone())),
+                    );
                     pick(ui, "Frida hook (copy)", Act::Frida(o, Some(n)));
                 }
                 pick(ui, "Find usages", Act::Usages(word.clone()));
@@ -547,7 +765,9 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
             } else if !KEYWORDS.contains(&word.as_str()) {
                 ui.label(RichText::new(word.as_str()).strong());
                 let owner = owner_desc(st, top, &classes_around(text, at));
-                if let Some(o) = owner.filter(|o| crate::re::real_member(&st.dexes, o, &word, false).is_some()) {
+                if let Some(o) =
+                    owner.filter(|o| crate::re::real_member(&st.dexes, o, &word, false).is_some())
+                {
                     let n = crate::re::real_member(&st.dexes, &o, &word, false).unwrap_or_default();
                     pick(ui, "Reads & writes of this field", Act::Access(o, n));
                 }
@@ -564,25 +784,87 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
         return out;
     };
     let owner = owner_desc(st, top, &chain)?;
-    let real = member.as_ref().and_then(|(m, n)| crate::re::real_member(&st.dexes, &owner, n, *m).map(|r| (*m, r, n.clone())));
+    let real = member.as_ref().and_then(|(m, n)| {
+        crate::re::real_member(&st.dexes, &owner, n, *m).map(|r| (*m, r, n.clone()))
+    });
     match &real {
         Some((true, name, shown)) => {
             ui.label(RichText::new(format!("method {shown}()")).strong());
-            pick(ui, "Callers", Act::Callers(owner.clone(), Some(name.clone())));
-            pick(ui, "Call graph", Act::Graph(owner.clone(), Some(name.clone())));
-            pick(ui, if line.contains("WARNING") { "Show this method in Smali" } else { "Show Smali" }, Act::Smali(top.clone(), name.clone()));
-            pick(ui, "Hook live (Frida)", Act::LiveHook(owner.clone(), Some(name.clone())));
-            pick(ui, "Frida hook (copy)", Act::Frida(owner.clone(), Some(name.clone())));
+            pick(
+                ui,
+                "Callers",
+                Act::Callers(owner.clone(), Some(name.clone())),
+            );
+            pick(
+                ui,
+                "Call graph",
+                Act::Graph(owner.clone(), Some(name.clone())),
+            );
+            pick(
+                ui,
+                if line.contains("WARNING") {
+                    "Show this method in Smali"
+                } else {
+                    "Show Smali"
+                },
+                Act::Smali(top.clone(), name.clone()),
+            );
+            pick(
+                ui,
+                "Hook live (Frida)",
+                Act::LiveHook(owner.clone(), Some(name.clone())),
+            );
+            pick(
+                ui,
+                "Frida hook (copy)",
+                Act::Frida(owner.clone(), Some(name.clone())),
+            );
             ui.separator();
-            pick(ui, "Rename…", Act::Note(format!("{owner}->{name}()"), false, format!("Rename method {shown}")));
-            pick(ui, "Comment…", Act::Note(format!("{owner}->{name}()"), true, format!("Comment on {shown}()")));
+            pick(
+                ui,
+                "Rename…",
+                Act::Note(
+                    format!("{owner}->{name}()"),
+                    false,
+                    format!("Rename method {shown}"),
+                ),
+            );
+            pick(
+                ui,
+                "Comment…",
+                Act::Note(
+                    format!("{owner}->{name}()"),
+                    true,
+                    format!("Comment on {shown}()"),
+                ),
+            );
         }
         Some((false, name, shown)) => {
             ui.label(RichText::new(format!("field {shown}")).strong());
-            pick(ui, "Reads & writes", Act::Access(owner.clone(), name.clone()));
+            pick(
+                ui,
+                "Reads & writes",
+                Act::Access(owner.clone(), name.clone()),
+            );
             ui.separator();
-            pick(ui, "Rename…", Act::Note(format!("{owner}->{name}"), false, format!("Rename field {shown}")));
-            pick(ui, "Comment…", Act::Note(format!("{owner}->{name}"), true, format!("Comment on {shown}")));
+            pick(
+                ui,
+                "Rename…",
+                Act::Note(
+                    format!("{owner}->{name}"),
+                    false,
+                    format!("Rename field {shown}"),
+                ),
+            );
+            pick(
+                ui,
+                "Comment…",
+                Act::Note(
+                    format!("{owner}->{name}"),
+                    true,
+                    format!("Comment on {shown}"),
+                ),
+            );
         }
         None if member.is_some() => {
             ui.label("Not found in the DEX (synthetic or inlined code)");
@@ -590,13 +872,41 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
         None => {
             let shown = chain.last().cloned().unwrap_or_default();
             ui.label(RichText::new(format!("class {shown}")).strong());
-            pick(ui, &format!("Where {shown} is created"), Act::Callers(owner.clone(), Some("<init>".into())));
-            pick(ui, "Callers (any method)", Act::Callers(owner.clone(), None));
-            pick(ui, "Hook all methods live (Frida)", Act::LiveHook(owner.clone(), None));
-            pick(ui, "Frida hooks (all methods, copy)", Act::Frida(owner.clone(), None));
+            pick(
+                ui,
+                &format!("Where {shown} is created"),
+                Act::Callers(owner.clone(), Some("<init>".into())),
+            );
+            pick(
+                ui,
+                "Callers (any method)",
+                Act::Callers(owner.clone(), None),
+            );
+            pick(
+                ui,
+                "Hook all methods live (Frida)",
+                Act::LiveHook(owner.clone(), None),
+            );
+            pick(
+                ui,
+                "Frida hooks (all methods, copy)",
+                Act::Frida(owner.clone(), None),
+            );
             ui.separator();
-            pick(ui, "Rename…", Act::Note(owner.clone(), false, format!("Rename class {shown} (a short name keeps the package)")));
-            pick(ui, "Comment…", Act::Note(owner.clone(), true, format!("Comment on class {shown}")));
+            pick(
+                ui,
+                "Rename…",
+                Act::Note(
+                    owner.clone(),
+                    false,
+                    format!("Rename class {shown} (a short name keeps the package)"),
+                ),
+            );
+            pick(
+                ui,
+                "Comment…",
+                Act::Note(owner.clone(), true, format!("Comment on class {shown}")),
+            );
         }
     }
     out
@@ -710,7 +1020,11 @@ pub struct App {
 
 /// One-line text box whose hint is also its name for screen readers.
 fn edit(ui: &mut egui::Ui, buf: &mut String, hint: &str, width: f32) -> egui::Response {
-    let r = ui.add(egui::TextEdit::singleline(buf).hint_text(hint).desired_width(width));
+    let r = ui.add(
+        egui::TextEdit::singleline(buf)
+            .hint_text(hint)
+            .desired_width(width),
+    );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, hint));
     r
 }
@@ -719,13 +1033,19 @@ fn edit(ui: &mut egui::Ui, buf: &mut String, hint: &str, width: f32) -> egui::Re
 fn spawn(tx: &mpsc::Sender<Msg>, what: &'static str, f: impl FnOnce() + Send + 'static) {
     let mine = tx.clone();
     // decompiling recurses per nesting level
-    let ok = std::thread::Builder::new().stack_size(256 << 20).spawn(move || {
-        let tx = mine;
-        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-            let why = e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into());
-            let _ = tx.send(Msg::Failed(what, why));
-        }
-    });
+    let ok = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            let tx = mine;
+            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+                let why = e
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| e.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown error".into());
+                let _ = tx.send(Msg::Failed(what, why));
+            }
+        });
     if let Err(e) = ok {
         let _ = tx.send(Msg::Failed(what, e.to_string()));
     }
@@ -854,13 +1174,21 @@ impl App {
                 Open::File(p) => Some(st.file_view(p)),
                 Open::Report(_) => None,
             };
-            let _ = tx.send(Msg::Text(what, view, text.unwrap_or_else(|| "// not found".into())));
+            let _ = tx.send(Msg::Text(
+                what,
+                view,
+                text.unwrap_or_else(|| "// not found".into()),
+            ));
         });
     }
 
     /// Open a generated report in its own tab, computed off the UI thread. Lines with a link
     /// jump to the code when clicked.
-    fn report(&mut self, title: String, f: impl FnOnce(&'static State) -> Vec<Line> + Send + 'static) {
+    fn report(
+        &mut self,
+        title: String,
+        f: impl FnOnce(&'static State) -> Vec<Line> + Send + 'static,
+    ) {
         let Some(st) = self.st else { return };
         self.push_nav();
         let open = Open::Report(title);
@@ -885,7 +1213,11 @@ impl App {
     }
 
     fn nav(&mut self, forward: bool) {
-        let (from, to) = if forward { (&mut self.fwd, &mut self.back) } else { (&mut self.back, &mut self.fwd) };
+        let (from, to) = if forward {
+            (&mut self.fwd, &mut self.back)
+        } else {
+            (&mut self.back, &mut self.fwd)
+        };
         let Some((o, v, m)) = from.pop() else { return };
         if let Some(d) = self.docs.get(self.active) {
             to.push((d.open.clone(), d.view, d.mark));
@@ -899,27 +1231,50 @@ impl App {
     /// Open a link's method, at the call or field use it points to.
     fn go_to(&mut self, l: &Link) {
         let Some(st) = self.st else { return };
-        let Some((desc, rest)) = l.at.split_once("->") else { return };
-        let top = desc.find('$').map_or(desc.to_string(), |k| format!("{};", &desc[..k]));
-        let Some(n) = st.classes.iter().find(|x| st.dexes[x.1].class_descriptor(x.2).ok().as_deref() == Some(top.as_str())).map(|x| x.0.clone()) else {
-            self.toast(format!("{} is not in this APK", crate::dex::java_name(desc)));
+        let Some((desc, rest)) = l.at.split_once("->") else {
+            return;
+        };
+        let top = desc
+            .find('$')
+            .map_or(desc.to_string(), |k| format!("{};", &desc[..k]));
+        let Some(n) = st
+            .classes
+            .iter()
+            .find(|x| st.dexes[x.1].class_descriptor(x.2).ok().as_deref() == Some(top.as_str()))
+            .map(|x| x.0.clone())
+        else {
+            self.toast(format!(
+                "{} is not in this APK",
+                crate::dex::java_name(desc)
+            ));
             return;
         };
         let name = rest.split('(').next().unwrap_or("");
         let shown = match name {
-            "<init>" => crate::dex::java_name(desc).rsplit(['.', '$']).next().unwrap_or("").to_string(),
+            "<init>" => crate::dex::java_name(desc)
+                .rsplit(['.', '$'])
+                .next()
+                .unwrap_or("")
+                .to_string(),
             n => crate::deobf::method(desc, n).unwrap_or_else(|| n.to_string()),
         };
-        let nargs = rest.split_once('(').map(|x| crate::re::split_params(x.1.split(')').next().unwrap_or("")).len());
+        let nargs = rest
+            .split_once('(')
+            .map(|x| crate::re::split_params(x.1.split(')').next().unwrap_or("")).len());
         let decl = (name != "<clinit>").then_some((shown, nargs));
         self.push_nav();
         self.open(Open::Class(n), Some(View::Java), None);
-        self.find_in_active(Target { decl, then: l.then.clone() });
+        self.find_in_active(Target {
+            decl,
+            then: l.then.clone(),
+        });
     }
 
     /// Jump to a target in the active tab now, or once its text arrives.
     fn find_in_active(&mut self, t: Target) {
-        let Some(d) = self.docs.get_mut(self.active) else { return };
+        let Some(d) = self.docs.get_mut(self.active) else {
+            return;
+        };
         match &d.text {
             Some(text) => {
                 if let Some(l) = locate(text, &t) {
@@ -959,24 +1314,46 @@ impl App {
             self.open(o, Some(v), None);
         }
         self.active = active.min(self.docs.len().saturating_sub(1));
-        self.toast(format!("Saved to {}", crate::re::project_file(&st.path).display()));
+        self.toast(format!(
+            "Saved to {}",
+            crate::re::project_file(&st.path).display()
+        ));
     }
 
     /// Carry out a context-menu choice.
     fn act(&mut self, a: Act, ctx: &egui::Context) {
         let Some(st) = self.st else { return };
-        let short = |c: &str, m: &Option<String>| format!("{}{}", crate::dex::java_name(c).rsplit('.').next().unwrap_or(""), m.as_ref().map(|m| format!(".{m}")).unwrap_or_default());
+        let short = |c: &str, m: &Option<String>| {
+            format!(
+                "{}{}",
+                crate::dex::java_name(c).rsplit('.').next().unwrap_or(""),
+                m.as_ref().map(|m| format!(".{m}")).unwrap_or_default()
+            )
+        };
         match a {
             Act::Callers(c, m) => {
-                let title = if m.as_deref() == Some("<init>") { format!("new {}", short(&c, &None)) } else { format!("Callers {}", short(&c, &m)) };
-                self.report(title, move |st| crate::re::callers_report(&st.dexes, &c, m.as_deref()))
+                let title = if m.as_deref() == Some("<init>") {
+                    format!("new {}", short(&c, &None))
+                } else {
+                    format!("Callers {}", short(&c, &m))
+                };
+                self.report(title, move |st| {
+                    crate::re::callers_report(&st.dexes, &c, m.as_deref())
+                })
             }
-            Act::Graph(c, m) => self.report(format!("Graph {}", short(&c, &m)), move |st| crate::re::graph_report(&st.dexes, &c, m.as_deref(), 3)),
-            Act::Access(c, f) => self.report(format!("Access {}", short(&c, &Some(f.clone()))), move |st| crate::re::access_report(&st.dexes, &c, &f)),
+            Act::Graph(c, m) => self.report(format!("Graph {}", short(&c, &m)), move |st| {
+                crate::re::graph_report(&st.dexes, &c, m.as_deref(), 3)
+            }),
+            Act::Access(c, f) => self.report(
+                format!("Access {}", short(&c, &Some(f.clone()))),
+                move |st| crate::re::access_report(&st.dexes, &c, &f),
+            ),
             Act::Frida(c, m) => match crate::re::frida(&st.dexes, &c, m.as_deref(), false) {
                 Ok(js) => {
                     ctx.copy_text(js.clone());
-                    self.report(format!("Frida {}", short(&c, &m)), move |_| js.lines().map(|l| (l.to_string(), None)).collect());
+                    self.report(format!("Frida {}", short(&c, &m)), move |_| {
+                        js.lines().map(|l| (l.to_string(), None)).collect()
+                    });
                     self.toast("Frida script copied to the clipboard");
                 }
                 Err(e) => self.toast(e),
@@ -988,7 +1365,10 @@ impl App {
             Act::Smali(class_name, method) => {
                 self.push_nav();
                 self.open(Open::Class(class_name), Some(View::Smali), None);
-                self.find_in_active(Target { decl: None, then: Some(format!(" {method}(")) });
+                self.find_in_active(Target {
+                    decl: None,
+                    then: Some(format!(" {method}(")),
+                });
             }
             Act::OpenClass(name, target) => {
                 self.push_nav();
@@ -1009,16 +1389,37 @@ impl App {
             Act::Note(key, comment, label) => {
                 let n = crate::deobf::notes();
                 let class = !key.contains("->");
-                let cur = if comment { n.comments.get(&key) } else if class { n.classes.get(&key) } else { n.members.get(&key) };
-                let text = cur.map(|v| if !comment && class { crate::dex::java_name(v) } else { v.clone() }).unwrap_or_default();
-                self.note_dlg = Some(NoteDlg { key, comment, label, text });
+                let cur = if comment {
+                    n.comments.get(&key)
+                } else if class {
+                    n.classes.get(&key)
+                } else {
+                    n.members.get(&key)
+                };
+                let text = cur
+                    .map(|v| {
+                        if !comment && class {
+                            crate::dex::java_name(v)
+                        } else {
+                            v.clone()
+                        }
+                    })
+                    .unwrap_or_default();
+                self.note_dlg = Some(NoteDlg {
+                    key,
+                    comment,
+                    label,
+                    text,
+                });
             }
             Act::GoTo(l) => self.go_to(&l),
         }
     }
 
     fn note_window(&mut self, ctx: &egui::Context) {
-        let Some(dlg) = &mut self.note_dlg else { return };
+        let Some(dlg) = &mut self.note_dlg else {
+            return;
+        };
         let mut done = None;
         let mut open = true;
         egui::Window::new(if dlg.comment { "Comment" } else { "Rename" }).collapsible(false).open(&mut open).show(ctx, |ui| {
@@ -1075,7 +1476,11 @@ impl App {
         self.folded.clear();
         self.hits_filter.clear();
         self.hits.clear();
-        self.hits_title = if self.query.is_empty() { self.scope.label().to_string() } else { format!("{}: \"{}\"", self.scope.label(), self.query) };
+        self.hits_title = if self.query.is_empty() {
+            self.scope.label().to_string()
+        } else {
+            format!("{}: \"{}\"", self.scope.label(), self.query)
+        };
         if self.app_only {
             self.hits_title += " (app code only)";
         }
@@ -1094,7 +1499,9 @@ impl App {
         if let Some(p) = self.prog.take() {
             p.cancel.store(true, Ordering::Relaxed);
             self.search_id += 1;
-            self.hits_secs = self.search_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+            self.hits_secs = self
+                .search_started
+                .map_or(0.0, |t| t.elapsed().as_secs_f32());
             self.hits_title += " (cancelled)";
         }
     }
@@ -1113,8 +1520,17 @@ impl App {
             match m {
                 Msg::Loaded(Ok(st)) => {
                     let st: &'static State = Box::leak(Box::new(st));
-                    for (k, o) in [Origin::App, Origin::Other, Origin::Library].into_iter().enumerate() {
-                        let mine: Vec<&String> = st.classes.iter().zip(&st.origin).filter(|x| *x.1 == o).map(|x| &x.0 .0).collect();
+                    for (k, o) in [Origin::App, Origin::Other, Origin::Library]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let mine: Vec<&String> = st
+                            .classes
+                            .iter()
+                            .zip(&st.origin)
+                            .filter(|x| *x.1 == o)
+                            .map(|x| &x.0.0)
+                            .collect();
                         self.counts[k] = mine.len();
                         self.trees[k] = tree(mine.into_iter());
                     }
@@ -1131,7 +1547,11 @@ impl App {
                     self.path.clear();
                 }
                 Msg::Text(open, view, text) => {
-                    if let Some(d) = self.docs.iter_mut().find(|d| d.open == open && d.view == view) {
+                    if let Some(d) = self
+                        .docs
+                        .iter_mut()
+                        .find(|d| d.open == open && d.view == view)
+                    {
                         if let Some(l) = d.find_on_load.take().and_then(|t| locate(&text, &t)) {
                             d.mark = Some(l);
                             d.scroll_pending = true;
@@ -1153,10 +1573,14 @@ impl App {
                     self.hits = h;
                     // stable: lines stay in order within a class
                     self.hits.sort_by(|a, b| a.0.cmp(&b.0));
-                    self.hits_secs = self.search_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+                    self.hits_secs = self
+                        .search_started
+                        .map_or(0.0, |t| t.elapsed().as_secs_f32());
                 }
                 Msg::Hits(..) => {}
-                Msg::Strings(q, v) if self.strings_for.as_deref() == Some(q.as_str()) => self.strings = v,
+                Msg::Strings(q, v) if self.strings_for.as_deref() == Some(q.as_str()) => {
+                    self.strings = v
+                }
                 Msg::Strings(..) => {}
                 Msg::Saved(Ok(s)) => self.toast(s),
                 Msg::Saved(Err(e)) => self.toast(format!("Export failed: {e}")),
@@ -1193,7 +1617,11 @@ impl App {
         }
         self.styled = Some(key);
         let p = self.set.theme.palette();
-        let mut v = if self.set.theme.dark() { egui::Visuals::dark() } else { egui::Visuals::light() };
+        let mut v = if self.set.theme.dark() {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
         v.panel_fill = p.panel;
         v.window_fill = p.panel;
         v.extreme_bg_color = p.bg;
@@ -1204,7 +1632,13 @@ impl App {
         v.selection.stroke = Stroke::new(1.0_f32, p.accent);
         v.window_corner_radius = CornerRadius::same(10);
         v.menu_corner_radius = CornerRadius::same(8);
-        for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.noninteractive] {
+        for w in [
+            &mut v.widgets.inactive,
+            &mut v.widgets.hovered,
+            &mut v.widgets.active,
+            &mut v.widgets.open,
+            &mut v.widgets.noninteractive,
+        ] {
             w.corner_radius = CornerRadius::same(6);
         }
         // a hairline so text fields stand out from the panel they sit on
@@ -1223,9 +1657,17 @@ impl App {
     fn side_panel(&mut self, ui: &mut egui::Ui) {
         let p = self.set.theme.palette();
         ui.horizontal(|ui| {
-            for (s, n) in [(Side::Classes, "Classes"), (Side::Resources, "Resources"), (Side::Strings, "Strings"), (Side::Native, "Native"), (Side::Files, "Files")] {
+            for (s, n) in [
+                (Side::Classes, "Classes"),
+                (Side::Resources, "Resources"),
+                (Side::Strings, "Strings"),
+                (Side::Native, "Native"),
+                (Side::Files, "Files"),
+            ] {
                 let sel = self.side == s;
-                let t = RichText::new(n).strong().color(if sel { p.accent } else { p.dim });
+                let t = RichText::new(n)
+                    .strong()
+                    .color(if sel { p.accent } else { p.dim });
                 if ui.add(egui::Button::new(t).frame(false)).clicked() {
                     self.side = s;
                 }
@@ -1241,11 +1683,17 @@ impl App {
             let cur = self.docs.get(self.active).map(|d| d.open.clone());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{} files", files.len())).color(p.dim));
-                if ui.button("Extract all…").on_hover_text("Write every file of the APK to a folder").clicked() {
+                if ui
+                    .button("Extract all…")
+                    .on_hover_text("Write every file of the APK to a folder")
+                    .clicked()
+                {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         let tx = self.tx.clone();
                         spawn(&self.tx, "save", move || {
-                            let r = st.extract_all(&dir).map(|n| format!("Extracted {n} files to {}", dir.display()));
+                            let r = st
+                                .extract_all(&dir)
+                                .map(|n| format!("Extracted {n} files to {}", dir.display()));
                             let _ = tx.send(Msg::Saved(r));
                         });
                     }
@@ -1253,23 +1701,50 @@ impl App {
             });
             let mut verify = false;
             ui.horizontal(|ui| {
-                if ui.button("Add file…").on_hover_text("Put a new file into the APK when you build").clicked() {
+                if ui
+                    .button("Add file…")
+                    .on_hover_text("Put a new file into the APK when you build")
+                    .clicked()
+                {
                     if let Some(f) = rfd::FileDialog::new().pick_file() {
                         match std::fs::read(&f) {
                             Ok(b) => {
-                                let name = f.file_name().map_or("file".into(), |n| n.to_string_lossy().into_owned());
+                                let name = f
+                                    .file_name()
+                                    .map_or("file".into(), |n| n.to_string_lossy().into_owned());
                                 self.adding = Some((format!("assets/{name}"), b));
                             }
-                            Err(e) => self.toast = Some((format!("Can't read {}: {e}", f.display()), std::time::Instant::now())),
+                            Err(e) => {
+                                self.toast = Some((
+                                    format!("Can't read {}: {e}", f.display()),
+                                    std::time::Instant::now(),
+                                ))
+                            }
                         }
                     }
                 }
                 let n = self.edits.len();
-                let build = ui.add_enabled(n > 0, egui::Button::new(RichText::new(format!("Build & sign ({n})")).strong()).fill(p.accent.gamma_multiply(0.55)));
-                if build.on_hover_text("Write a new APK with your changes, zipaligned and signed (v2 + v3)").clicked() {
-                    self.build = Some(BuildDlg { own_key: false, key: String::new(), cert: String::new() });
+                let build = ui.add_enabled(
+                    n > 0,
+                    egui::Button::new(RichText::new(format!("Build & sign ({n})")).strong())
+                        .fill(p.accent.gamma_multiply(0.55)),
+                );
+                if build
+                    .on_hover_text(
+                        "Write a new APK with your changes, zipaligned and signed (v2 + v3)",
+                    )
+                    .clicked()
+                {
+                    self.build = Some(BuildDlg {
+                        own_key: false,
+                        key: String::new(),
+                        cert: String::new(),
+                    });
                 }
-                verify = ui.button("Verify signature").on_hover_text("Check this APK's v2/v3 signatures").clicked();
+                verify = ui
+                    .button("Verify signature")
+                    .on_hover_text("Check this APK's v2/v3 signatures")
+                    .clicked();
             });
             if verify {
                 let (tx, file) = (self.tx.clone(), st.file.clone());
@@ -1280,11 +1755,20 @@ impl App {
             }
             if !self.edits.is_empty() {
                 let mut undo = None;
-                egui::CollapsingHeader::new(RichText::new(format!("Changes ({})", self.edits.len())).strong().color(p.accent)).id_salt("changes").default_open(true).show(ui, |ui| {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("Changes ({})", self.edits.len()))
+                        .strong()
+                        .color(p.accent),
+                )
+                .id_salt("changes")
+                .default_open(true)
+                .show(ui, |ui| {
                     for (name, new) in &self.edits {
                         ui.horizontal(|ui| {
                             let what = match new {
-                                Some(b) if files.iter().any(|f| &f.0 == name) => format!("replace  {name}  ({})", mb(b.len() as u64)),
+                                Some(b) if files.iter().any(|f| &f.0 == name) => {
+                                    format!("replace  {name}  ({})", mb(b.len() as u64))
+                                }
                                 Some(b) => format!("add  {name}  ({})", mb(b.len() as u64)),
                                 None => format!("delete  {name}"),
                             };
@@ -1303,32 +1787,56 @@ impl App {
             ui.separator();
             let filter = self.filter.to_lowercase();
             let mut go = None;
-            egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                let mut dirs: BTreeMap<&str, Vec<&(String, u64, u64)>> = BTreeMap::new();
-                for f in files.iter().filter(|f| filter.is_empty() || f.0.to_lowercase().contains(&filter)) {
-                    dirs.entry(f.0.rsplit_once('/').map_or("", |x| x.0)).or_default().push(f);
-                }
-                for (dir, list) in dirs {
-                    let mut row = |ui: &mut egui::Ui, f: &(String, u64, u64)| {
-                        let name = f.0.rsplit('/').next().unwrap_or(&f.0);
-                        let open = if f.0.ends_with(".so") { Open::Native(f.0.clone()) } else { Open::File(f.0.clone()) };
-                        // pending changes show in the list too
-                        let mark = match self.edits.get(&f.0) {
-                            Some(Some(_)) => "  (replaced)",
-                            Some(None) => "  (deleted)",
-                            None => "",
-                        };
-                        if ui.selectable_label(cur.as_ref() == Some(&open), format!("{name}   {}{mark}", mb(f.1))).on_hover_text(format!("{}\n{} bytes, {} compressed", f.0, f.1, f.2)).clicked() {
-                            go = Some(open);
-                        }
-                    };
-                    if dir.is_empty() {
-                        list.into_iter().for_each(|f| row(ui, f));
-                    } else {
-                        egui::CollapsingHeader::new(format!("{dir}  ({})", list.len())).id_salt(("files", dir)).default_open(!filter.is_empty()).show(ui, |ui| list.into_iter().for_each(|f| row(ui, f)));
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    let mut dirs: BTreeMap<&str, Vec<&(String, u64, u64)>> = BTreeMap::new();
+                    for f in files
+                        .iter()
+                        .filter(|f| filter.is_empty() || f.0.to_lowercase().contains(&filter))
+                    {
+                        dirs.entry(f.0.rsplit_once('/').map_or("", |x| x.0))
+                            .or_default()
+                            .push(f);
                     }
-                }
-            });
+                    for (dir, list) in dirs {
+                        let mut row = |ui: &mut egui::Ui, f: &(String, u64, u64)| {
+                            let name = f.0.rsplit('/').next().unwrap_or(&f.0);
+                            let open = if f.0.ends_with(".so") {
+                                Open::Native(f.0.clone())
+                            } else {
+                                Open::File(f.0.clone())
+                            };
+                            // pending changes show in the list too
+                            let mark = match self.edits.get(&f.0) {
+                                Some(Some(_)) => "  (replaced)",
+                                Some(None) => "  (deleted)",
+                                None => "",
+                            };
+                            if ui
+                                .selectable_label(
+                                    cur.as_ref() == Some(&open),
+                                    format!("{name}   {}{mark}", mb(f.1)),
+                                )
+                                .on_hover_text(format!(
+                                    "{}\n{} bytes, {} compressed",
+                                    f.0, f.1, f.2
+                                ))
+                                .clicked()
+                            {
+                                go = Some(open);
+                            }
+                        };
+                        if dir.is_empty() {
+                            list.into_iter().for_each(|f| row(ui, f));
+                        } else {
+                            egui::CollapsingHeader::new(format!("{dir}  ({})", list.len()))
+                                .id_salt(("files", dir))
+                                .default_open(!filter.is_empty())
+                                .show(ui, |ui| list.into_iter().for_each(|f| row(ui, f)));
+                        }
+                    }
+                });
             if let Some(o) = go {
                 self.open(o, None, None);
             }
@@ -1344,22 +1852,42 @@ impl App {
                 return;
             }
             let mut go = None;
-            egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                let mut abis: Vec<&str> = libs.iter().map(|l| l.0.split('/').nth(1).unwrap_or("")).collect();
-                abis.dedup();
-                for abi in abis {
-                    let mine: Vec<&(String, u64)> = libs.iter().filter(|l| l.0.split('/').nth(1) == Some(abi)).collect();
-                    let total: u64 = mine.iter().map(|l| l.1).sum();
-                    egui::CollapsingHeader::new(RichText::new(format!("{abi}  ({}, {})", mine.len(), mb(total))).strong()).id_salt(("abi", abi)).default_open(abi == "arm64-v8a").show(ui, |ui| {
-                        for (path, size) in mine {
-                            let name = path.rsplit('/').next().unwrap_or(path);
-                            if ui.selectable_label(cur.as_ref() == Some(&Open::Native(path.clone())), format!("{name}   {}", mb(*size))).clicked() {
-                                go = Some(path.clone());
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    let mut abis: Vec<&str> = libs
+                        .iter()
+                        .map(|l| l.0.split('/').nth(1).unwrap_or(""))
+                        .collect();
+                    abis.dedup();
+                    for abi in abis {
+                        let mine: Vec<&(String, u64)> = libs
+                            .iter()
+                            .filter(|l| l.0.split('/').nth(1) == Some(abi))
+                            .collect();
+                        let total: u64 = mine.iter().map(|l| l.1).sum();
+                        egui::CollapsingHeader::new(
+                            RichText::new(format!("{abi}  ({}, {})", mine.len(), mb(total)))
+                                .strong(),
+                        )
+                        .id_salt(("abi", abi))
+                        .default_open(abi == "arm64-v8a")
+                        .show(ui, |ui| {
+                            for (path, size) in mine {
+                                let name = path.rsplit('/').next().unwrap_or(path);
+                                if ui
+                                    .selectable_label(
+                                        cur.as_ref() == Some(&Open::Native(path.clone())),
+                                        format!("{name}   {}", mb(*size)),
+                                    )
+                                    .clicked()
+                                {
+                                    go = Some(path.clone());
+                                }
                             }
-                        }
-                    });
-                }
-            });
+                        });
+                    }
+                });
             if let Some(path) = go {
                 self.open(Open::Native(path), None, None);
             }
@@ -1378,37 +1906,94 @@ impl App {
                     let _ = tx.send(Msg::Strings(key, v));
                 });
             }
-            let more = if self.strings.len() >= session::LIMIT { format!("first {}", session::LIMIT) } else { self.strings.len().to_string() };
-            ui.label(RichText::new(format!("{more} strings{}. Click one to find where it's used.", if st.index.get().is_some() { " (number = classes using it)" } else { "" })).small().color(p.dim));
+            let more = if self.strings.len() >= session::LIMIT {
+                format!("first {}", session::LIMIT)
+            } else {
+                self.strings.len().to_string()
+            };
+            ui.label(
+                RichText::new(format!(
+                    "{more} strings{}. Click one to find where it's used.",
+                    if st.index.get().is_some() {
+                        " (number = classes using it)"
+                    } else {
+                        ""
+                    }
+                ))
+                .small()
+                .color(p.dim),
+            );
             ui.separator();
             let mut go = None;
             let row = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
-            egui::ScrollArea::vertical().auto_shrink(false).show_rows(ui, row, self.strings.len(), |ui, rows| {
-                for (s, n) in &self.strings[rows] {
-                    let shown: String = s.chars().take(120).collect();
-                    let label = if st.index.get().is_some() { format!("{n:>4}   {shown}") } else { shown };
-                    let r = ui.add(egui::Label::new(label).truncate().sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if r.on_hover_text(s).clicked() {
-                        go = Some(s.clone());
+            egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+                ui,
+                row,
+                self.strings.len(),
+                |ui, rows| {
+                    for (s, n) in &self.strings[rows] {
+                        let shown: String = s.chars().take(120).collect();
+                        let label = if st.index.get().is_some() {
+                            format!("{n:>4}   {shown}")
+                        } else {
+                            shown
+                        };
+                        let r = ui
+                            .add(
+                                egui::Label::new(label)
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if r.on_hover_text(s).clicked() {
+                            go = Some(s.clone());
+                        }
                     }
-                }
-            });
+                },
+            );
             if let Some(s) = go {
                 self.usages_of(&s);
             }
             return;
         }
-        let hint = if self.side == Side::Classes { "Filter classes…" } else { "Filter resources…" };
+        let hint = if self.side == Side::Classes {
+            "Filter classes…"
+        } else {
+            "Filter resources…"
+        };
         edit(ui, &mut self.filter, hint, f32::INFINITY);
-        if self.side == Side::Resources && ui.button("Edit strings…").on_hover_text("Change string resources (app name, texts, URLs in strings.xml)").clicked() {
+        if self.side == Side::Resources
+            && ui
+                .button("Edit strings…")
+                .on_hover_text("Change string resources (app name, texts, URLs in strings.xml)")
+                .clicked()
+        {
             let base = match self.edits.get("resources.arsc") {
                 Some(Some(b)) => Some(b.clone()),
                 _ => st.read_entry("resources.arsc"),
             };
             match base.map(|b| arsc::strings(&b).map(|all| (b, all))) {
-                Some(Ok((base, all))) => self.strings_dlg = Some(StringsDlg { base, all, config: String::new(), filter: String::new(), changes: Default::default() }),
-                Some(Err(e)) => self.toast = Some((format!("Can't edit strings: {e}"), std::time::Instant::now())),
-                None => self.toast = Some(("This APK has no resources.arsc".into(), std::time::Instant::now())),
+                Some(Ok((base, all))) => {
+                    self.strings_dlg = Some(StringsDlg {
+                        base,
+                        all,
+                        config: String::new(),
+                        filter: String::new(),
+                        changes: Default::default(),
+                    })
+                }
+                Some(Err(e)) => {
+                    self.toast = Some((
+                        format!("Can't edit strings: {e}"),
+                        std::time::Instant::now(),
+                    ))
+                }
+                None => {
+                    self.toast = Some((
+                        "This APK has no resources.arsc".into(),
+                        std::time::Instant::now(),
+                    ))
+                }
             }
         }
         if self.side == Side::Classes {
@@ -1418,55 +2003,91 @@ impl App {
         let cur = self.docs.get(self.active).map(|d| d.open.clone());
         let filter = self.filter.to_lowercase();
         let mut go = None;
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| match self.side {
-            Side::Classes if filter.len() >= 2 => {
-                let shown = st.classes.iter().zip(&st.origin).filter(|(c, o)| (self.show_libs || **o != Origin::Library) && c.0.to_lowercase().contains(&filter));
-                for ((n, _, _), _) in shown.take(session::LIMIT) {
-                    if ui.selectable_label(cur.as_ref() == Some(&Open::Class(n.clone())), n).clicked() {
-                        go = Some(Open::Class(n.clone()));
-                    }
-                }
-            }
-            Side::Classes => {
-                if ui.selectable_label(cur.as_ref() == Some(&Open::Overview), RichText::new("Overview").strong()).clicked() {
-                    go = Some(Open::Overview);
-                }
-                let mut clicked = None;
-                let names = [format!("App code · {}", st.package), "Other code (unknown or obfuscated packages)".to_string(), "Libraries & SDKs".to_string()];
-                for k in 0..3 {
-                    if self.counts[k] == 0 || (k == 2 && !self.show_libs) {
-                        continue;
-                    }
-                    let head = RichText::new(format!("{}  ({})", names[k], self.counts[k])).strong().color(if k == 0 { p.accent } else { p.text });
-                    egui::CollapsingHeader::new(head).id_salt(("origin", k)).default_open(k < 2).show(ui, |ui| node(ui, &self.trees[k], "", &cur, &mut clicked));
-                }
-                if self.counts[2] > 0 && !self.show_libs {
-                    ui.label(RichText::new(format!("{} library classes hidden", self.counts[2])).small().color(p.dim));
-                }
-                if clicked.is_some() {
-                    go = clicked.map(Open::Class);
-                }
-            }
-            _ => {
-                for (dir, paths) in &self.res {
-                    let shown: Vec<&String> = paths.iter().filter(|p| filter.is_empty() || p.to_lowercase().contains(&filter)).collect();
-                    if shown.is_empty() {
-                        continue;
-                    }
-                    let mut leaf = |ui: &mut egui::Ui, p: &String| {
-                        let name = p.rsplit('/').next().unwrap_or(p);
-                        if ui.selectable_label(cur.as_ref() == Some(&Open::Res(p.clone())), name).clicked() {
-                            go = Some(Open::Res(p.clone()));
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| match self.side {
+                Side::Classes if filter.len() >= 2 => {
+                    let shown = st.classes.iter().zip(&st.origin).filter(|(c, o)| {
+                        (self.show_libs || **o != Origin::Library)
+                            && c.0.to_lowercase().contains(&filter)
+                    });
+                    for ((n, _, _), _) in shown.take(session::LIMIT) {
+                        if ui
+                            .selectable_label(cur.as_ref() == Some(&Open::Class(n.clone())), n)
+                            .clicked()
+                        {
+                            go = Some(Open::Class(n.clone()));
                         }
-                    };
-                    if dir.is_empty() {
-                        shown.into_iter().for_each(|p| leaf(ui, p));
-                    } else {
-                        egui::CollapsingHeader::new(format!("{dir}  ({})", shown.len())).id_salt(dir).default_open(!filter.is_empty()).show(ui, |ui| shown.into_iter().for_each(|p| leaf(ui, p)));
                     }
                 }
-            }
-        });
+                Side::Classes => {
+                    if ui
+                        .selectable_label(
+                            cur.as_ref() == Some(&Open::Overview),
+                            RichText::new("Overview").strong(),
+                        )
+                        .clicked()
+                    {
+                        go = Some(Open::Overview);
+                    }
+                    let mut clicked = None;
+                    let names = [
+                        format!("App code · {}", st.package),
+                        "Other code (unknown or obfuscated packages)".to_string(),
+                        "Libraries & SDKs".to_string(),
+                    ];
+                    for k in 0..3 {
+                        if self.counts[k] == 0 || (k == 2 && !self.show_libs) {
+                            continue;
+                        }
+                        let head = RichText::new(format!("{}  ({})", names[k], self.counts[k]))
+                            .strong()
+                            .color(if k == 0 { p.accent } else { p.text });
+                        egui::CollapsingHeader::new(head)
+                            .id_salt(("origin", k))
+                            .default_open(k < 2)
+                            .show(ui, |ui| node(ui, &self.trees[k], "", &cur, &mut clicked));
+                    }
+                    if self.counts[2] > 0 && !self.show_libs {
+                        ui.label(
+                            RichText::new(format!("{} library classes hidden", self.counts[2]))
+                                .small()
+                                .color(p.dim),
+                        );
+                    }
+                    if clicked.is_some() {
+                        go = clicked.map(Open::Class);
+                    }
+                }
+                _ => {
+                    for (dir, paths) in &self.res {
+                        let shown: Vec<&String> = paths
+                            .iter()
+                            .filter(|p| filter.is_empty() || p.to_lowercase().contains(&filter))
+                            .collect();
+                        if shown.is_empty() {
+                            continue;
+                        }
+                        let mut leaf = |ui: &mut egui::Ui, p: &String| {
+                            let name = p.rsplit('/').next().unwrap_or(p);
+                            if ui
+                                .selectable_label(cur.as_ref() == Some(&Open::Res(p.clone())), name)
+                                .clicked()
+                            {
+                                go = Some(Open::Res(p.clone()));
+                            }
+                        };
+                        if dir.is_empty() {
+                            shown.into_iter().for_each(|p| leaf(ui, p));
+                        } else {
+                            egui::CollapsingHeader::new(format!("{dir}  ({})", shown.len()))
+                                .id_salt(dir)
+                                .default_open(!filter.is_empty())
+                                .show(ui, |ui| shown.into_iter().for_each(|p| leaf(ui, p)));
+                        }
+                    }
+                }
+            });
         if let Some(o) = go {
             self.open(o, None, None);
         }
@@ -1479,22 +2100,63 @@ impl App {
         ui.horizontal(|ui| match (&self.prog, self.st) {
             (Some(pr), Some(_)) => {
                 ui.spinner();
-                let (done, total) = (pr.done.load(Ordering::Relaxed), pr.total.load(Ordering::Relaxed));
+                let (done, total) = (
+                    pr.done.load(Ordering::Relaxed),
+                    pr.total.load(Ordering::Relaxed),
+                );
                 ui.label(format!("Searching {}…", self.hits_title));
                 if total > 0 {
-                    ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(180.0).text(format!("{done} / {total} classes")));
+                    ui.add(
+                        egui::ProgressBar::new(done as f32 / total as f32)
+                            .desired_width(180.0)
+                            .text(format!("{done} / {total} classes")),
+                    );
                 }
                 cancel = ui.button("Cancel").on_hover_text("Esc").clicked();
             }
             _ => {
-                let more = if self.hits.len() >= session::LIMIT { format!(" (first {})", session::LIMIT) } else { String::new() };
+                let more = if self.hits.len() >= session::LIMIT {
+                    format!(" (first {})", session::LIMIT)
+                } else {
+                    String::new()
+                };
                 ui.label(RichText::new(&self.hits_title).strong());
-                ui.label(RichText::new(format!("{} results{more} in {:.1} s", self.hits.len(), self.hits_secs)).color(p.dim));
-                if ui.add_enabled(!self.hits.is_empty(), egui::Button::new("Export…")).on_hover_text("Save every hit with its surrounding code to .txt, .csv or .json").clicked() {
-                    self.export = Some(ExportDlg { fmt: Format::Text, ctx: self.set.export_ctx, method: self.set.export_method });
+                ui.label(
+                    RichText::new(format!(
+                        "{} results{more} in {:.1} s",
+                        self.hits.len(),
+                        self.hits_secs
+                    ))
+                    .color(p.dim),
+                );
+                if ui
+                    .add_enabled(!self.hits.is_empty(), egui::Button::new("Export…"))
+                    .on_hover_text(
+                        "Save every hit with its surrounding code to .txt, .csv or .json",
+                    )
+                    .clicked()
+                {
+                    self.export = Some(ExportDlg {
+                        fmt: Format::Text,
+                        ctx: self.set.export_ctx,
+                        method: self.set.export_method,
+                    });
                 }
-                if ui.add_enabled(!self.hits.is_empty(), egui::Button::new("Copy")).clicked() {
-                    let all: String = self.hits.iter().map(|(t, ln, text)| if *ln == 0 { format!("{t}\n") } else { format!("{t}:{ln}\t{text}\n") }).collect();
+                if ui
+                    .add_enabled(!self.hits.is_empty(), egui::Button::new("Copy"))
+                    .clicked()
+                {
+                    let all: String = self
+                        .hits
+                        .iter()
+                        .map(|(t, ln, text)| {
+                            if *ln == 0 {
+                                format!("{t}\n")
+                            } else {
+                                format!("{t}:{ln}\t{text}\n")
+                            }
+                        })
+                        .collect();
                     ui.ctx().copy_text(all);
                     self.toast(format!("Copied {} results", self.hits.len()));
                 }
@@ -1507,13 +2169,20 @@ impl App {
         if cancel {
             self.cancel_search();
         }
-        ui.label(RichText::new(self.scope.note()).small().italics().color(p.dim));
+        ui.label(
+            RichText::new(self.scope.note())
+                .small()
+                .italics()
+                .color(p.dim),
+        );
         ui.separator();
         let size = self.set.code_font - 0.5;
         let row = ui.fonts(|f| f.row_height(&FontId::monospace(size))) + 4.0;
         // hits grouped by class (they arrive sorted by class): a foldable header, then its lines
         let flt = self.hits_filter.to_lowercase();
-        let keep = |h: &Hit| flt.is_empty() || h.0.to_lowercase().contains(&flt) || h.2.to_lowercase().contains(&flt);
+        let keep = |h: &Hit| {
+            flt.is_empty() || h.0.to_lowercase().contains(&flt) || h.2.to_lowercase().contains(&flt)
+        };
         let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
         for (k, h) in self.hits.iter().enumerate().filter(|(_, h)| keep(h)) {
             match groups.last_mut() {
@@ -1537,67 +2206,138 @@ impl App {
         for (c, ks) in &groups {
             rows.push((ks[0], true));
             if !self.folded.contains(*c) {
-                rows.extend(ks.iter().filter(|&&k| !self.hits[k].2.is_empty()).map(|&k| (k, false)));
+                rows.extend(
+                    ks.iter()
+                        .filter(|&&k| !self.hits[k].2.is_empty())
+                        .map(|&k| (k, false)),
+                );
             }
         }
-        let counts: std::collections::HashMap<&str, usize> = groups.iter().map(|g| (g.0, g.1.iter().filter(|&&k| !self.hits[k].2.is_empty()).count())).collect();
+        let counts: std::collections::HashMap<&str, usize> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.0,
+                    g.1.iter().filter(|&&k| !self.hits[k].2.is_empty()).count(),
+                )
+            })
+            .collect();
         // the query, to mark inside each line
-        let needle = (!self.use_regex && !self.query.is_empty()).then(|| if self.case { self.query.clone() } else { self.query.to_lowercase() });
-        let re = self.use_regex.then(|| regex::RegexBuilder::new(&self.query).case_insensitive(!self.case).build().ok()).flatten();
-        let mut fold = None;
-        let mono = FontId::monospace(size);
-        egui::ScrollArea::both().auto_shrink(false).show_rows(ui, row, rows.len(), |ui, range| {
-            for &(k, header) in &rows[range] {
-                let (t, ln, text) = &self.hits[k];
-                let mut job = LayoutJob::default();
-                if header {
-                    let n = counts.get(t.as_str()).copied().unwrap_or(0);
-                    let arrow = if n == 0 { "  " } else if self.folded.contains(t) { "▶ " } else { "▼ " };
-                    job.append(arrow, 0.0, TextFormat::simple(mono.clone(), p.dim));
-                    let (pkg, name) = t.rsplit_once(['.', '/']).map_or(("", t.as_str()), |x| x);
-                    job.append(name, 0.0, TextFormat::simple(mono.clone(), p.accent));
-                    if !pkg.is_empty() {
-                        job.append(&format!("  {pkg}"), 0.0, TextFormat::simple(mono.clone(), p.dim));
-                    }
-                    if n > 0 {
-                        job.append(&format!("  ({n})"), 0.0, TextFormat::simple(mono.clone(), p.dim));
-                    }
-                    let r = ui.add(egui::Label::new(job).sense(egui::Sense::click()).extend()).on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if r.clicked() {
-                        if n == 0 { go = Some((t.clone(), 0)) } else { fold = Some(t.clone()) }
-                    }
-                    if r.double_clicked() {
-                        go = Some((t.clone(), 0));
-                    }
-                    continue;
-                }
-                let lnt = if *ln > 0 { ln.to_string() } else { String::new() };
-                job.append(&format!("    {lnt:>5}  "), 0.0, TextFormat::simple(mono.clone(), p.dim));
-                let line = text.trim();
-                // spans of the query in this line
-                let spans: Vec<(usize, usize)> = match (&needle, &re) {
-                    (Some(nd), _) => {
-                        let hay = if self.case { line.to_string() } else { line.to_lowercase() };
-                        // lowercasing can change byte lengths; only mark when it didn't
-                        if hay.len() == line.len() { hay.match_indices(nd.as_str()).map(|(i, m)| (i, i + m.len())).collect() } else { vec![] }
-                    }
-                    (_, Some(re)) => re.find_iter(line).map(|m| (m.start(), m.end())).collect(),
-                    _ => vec![],
-                };
-                let mut at = 0;
-                for (s0, e0) in spans {
-                    job.append(&line[at..s0], 0.0, TextFormat::simple(mono.clone(), p.text));
-                    let mut f = TextFormat::simple(mono.clone(), p.text);
-                    f.background = p.accent.gamma_multiply(0.38);
-                    job.append(&line[s0..e0], 0.0, f);
-                    at = e0;
-                }
-                job.append(&line[at..], 0.0, TextFormat::simple(mono.clone(), p.text));
-                if ui.add(egui::Label::new(job).sense(egui::Sense::click()).extend()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open at this line").clicked() {
-                    go = Some((t.clone(), *ln));
-                }
+        let needle = (!self.use_regex && !self.query.is_empty()).then(|| {
+            if self.case {
+                self.query.clone()
+            } else {
+                self.query.to_lowercase()
             }
         });
+        let re = self
+            .use_regex
+            .then(|| {
+                regex::RegexBuilder::new(&self.query)
+                    .case_insensitive(!self.case)
+                    .build()
+                    .ok()
+            })
+            .flatten();
+        let mut fold = None;
+        let mono = FontId::monospace(size);
+        egui::ScrollArea::both()
+            .auto_shrink(false)
+            .show_rows(ui, row, rows.len(), |ui, range| {
+                for &(k, header) in &rows[range] {
+                    let (t, ln, text) = &self.hits[k];
+                    let mut job = LayoutJob::default();
+                    if header {
+                        let n = counts.get(t.as_str()).copied().unwrap_or(0);
+                        let arrow = if n == 0 {
+                            "  "
+                        } else if self.folded.contains(t) {
+                            "▶ "
+                        } else {
+                            "▼ "
+                        };
+                        job.append(arrow, 0.0, TextFormat::simple(mono.clone(), p.dim));
+                        let (pkg, name) = t.rsplit_once(['.', '/']).map_or(("", t.as_str()), |x| x);
+                        job.append(name, 0.0, TextFormat::simple(mono.clone(), p.accent));
+                        if !pkg.is_empty() {
+                            job.append(
+                                &format!("  {pkg}"),
+                                0.0,
+                                TextFormat::simple(mono.clone(), p.dim),
+                            );
+                        }
+                        if n > 0 {
+                            job.append(
+                                &format!("  ({n})"),
+                                0.0,
+                                TextFormat::simple(mono.clone(), p.dim),
+                            );
+                        }
+                        let r = ui
+                            .add(egui::Label::new(job).sense(egui::Sense::click()).extend())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if r.clicked() {
+                            if n == 0 {
+                                go = Some((t.clone(), 0))
+                            } else {
+                                fold = Some(t.clone())
+                            }
+                        }
+                        if r.double_clicked() {
+                            go = Some((t.clone(), 0));
+                        }
+                        continue;
+                    }
+                    let lnt = if *ln > 0 {
+                        ln.to_string()
+                    } else {
+                        String::new()
+                    };
+                    job.append(
+                        &format!("    {lnt:>5}  "),
+                        0.0,
+                        TextFormat::simple(mono.clone(), p.dim),
+                    );
+                    let line = text.trim();
+                    // spans of the query in this line
+                    let spans: Vec<(usize, usize)> = match (&needle, &re) {
+                        (Some(nd), _) => {
+                            let hay = if self.case {
+                                line.to_string()
+                            } else {
+                                line.to_lowercase()
+                            };
+                            // lowercasing can change byte lengths; only mark when it didn't
+                            if hay.len() == line.len() {
+                                hay.match_indices(nd.as_str())
+                                    .map(|(i, m)| (i, i + m.len()))
+                                    .collect()
+                            } else {
+                                vec![]
+                            }
+                        }
+                        (_, Some(re)) => re.find_iter(line).map(|m| (m.start(), m.end())).collect(),
+                        _ => vec![],
+                    };
+                    let mut at = 0;
+                    for (s0, e0) in spans {
+                        job.append(&line[at..s0], 0.0, TextFormat::simple(mono.clone(), p.text));
+                        let mut f = TextFormat::simple(mono.clone(), p.text);
+                        f.background = p.accent.gamma_multiply(0.38);
+                        job.append(&line[s0..e0], 0.0, f);
+                        at = e0;
+                    }
+                    job.append(&line[at..], 0.0, TextFormat::simple(mono.clone(), p.text));
+                    if ui
+                        .add(egui::Label::new(job).sense(egui::Sense::click()).extend())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Open at this line")
+                        .clicked()
+                    {
+                        go = Some((t.clone(), *ln));
+                    }
+                }
+            });
         if let Some(c) = fold {
             if !self.folded.remove(&c) {
                 self.folded.insert(c);
@@ -1614,7 +2354,11 @@ impl App {
             // mark the searched name in the opened code
             let q = self.query.clone();
             if let Some(d) = self.docs.get_mut(self.active) {
-                if !self.use_regex && !q.is_empty() && q.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                if !self.use_regex
+                    && !q.is_empty()
+                    && q.chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                {
                     d.sel = Some(q);
                     d.job = None;
                 }
@@ -1627,53 +2371,115 @@ impl App {
         let p = self.set.theme.palette();
         if let Some(dlg) = &mut self.strings_dlg {
             let (mut open, mut apply) = (true, false);
-            egui::Window::new("Edit strings").collapsible(false).default_size([720.0, 520.0]).open(&mut open).show(ctx, |ui| {
-                let mut configs: Vec<&str> = dlg.all.iter().map(|r| r.config.as_str()).collect();
-                configs.sort();
-                configs.dedup();
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("str-config").selected_text(if dlg.config.is_empty() { "default" } else { &dlg.config }).show_ui(ui, |ui| {
-                        for c in &configs {
-                            ui.selectable_value(&mut dlg.config, c.to_string(), if c.is_empty() { "default" } else { c });
-                        }
-                    });
-                    edit(ui, &mut dlg.filter, "Filter by name or text…", 260.0);
-                    ui.label(RichText::new(format!("{} changed", dlg.changes.len())).color(p.dim));
-                });
-                ui.separator();
-                let f = dlg.filter.to_lowercase();
-                let rows: Vec<usize> = dlg.all.iter().enumerate().filter(|(_, r)| r.config == dlg.config && (f.is_empty() || r.name.to_lowercase().contains(&f) || r.value.to_lowercase().contains(&f))).map(|x| x.0).collect();
-                let h = ui.text_style_height(&egui::TextStyle::Body) + 10.0;
-                egui::ScrollArea::vertical().max_height(400.0).auto_shrink(false).show_rows(ui, h, rows.len(), |ui, range| {
-                    for &k in &rows[range] {
-                        let r = &dlg.all[k];
-                        let key = (r.config.clone(), r.name.clone());
-                        let mut text = dlg.changes.get(&key).cloned().unwrap_or_else(|| r.value.clone());
-                        ui.horizontal(|ui| {
-                            let changed = dlg.changes.contains_key(&key);
-                            ui.allocate_ui_with_layout(egui::vec2(220.0, h - 6.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.set_width(220.0);
-                                ui.add(egui::Label::new(RichText::new(&r.name).monospace().color(if changed { p.accent } else { p.text })).truncate()).on_hover_text(&r.name);
-                            });
-                            if ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY)).changed() {
-                                if text == r.value {
-                                    dlg.changes.remove(&key);
-                                } else {
-                                    dlg.changes.insert(key.clone(), text.clone());
+            egui::Window::new("Edit strings")
+                .collapsible(false)
+                .default_size([720.0, 520.0])
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    let mut configs: Vec<&str> =
+                        dlg.all.iter().map(|r| r.config.as_str()).collect();
+                    configs.sort();
+                    configs.dedup();
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("str-config")
+                            .selected_text(if dlg.config.is_empty() {
+                                "default"
+                            } else {
+                                &dlg.config
+                            })
+                            .show_ui(ui, |ui| {
+                                for c in &configs {
+                                    ui.selectable_value(
+                                        &mut dlg.config,
+                                        c.to_string(),
+                                        if c.is_empty() { "default" } else { c },
+                                    );
                                 }
+                            });
+                        edit(ui, &mut dlg.filter, "Filter by name or text…", 260.0);
+                        ui.label(
+                            RichText::new(format!("{} changed", dlg.changes.len())).color(p.dim),
+                        );
+                    });
+                    ui.separator();
+                    let f = dlg.filter.to_lowercase();
+                    let rows: Vec<usize> = dlg
+                        .all
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| {
+                            r.config == dlg.config
+                                && (f.is_empty()
+                                    || r.name.to_lowercase().contains(&f)
+                                    || r.value.to_lowercase().contains(&f))
+                        })
+                        .map(|x| x.0)
+                        .collect();
+                    let h = ui.text_style_height(&egui::TextStyle::Body) + 10.0;
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .auto_shrink(false)
+                        .show_rows(ui, h, rows.len(), |ui, range| {
+                            for &k in &rows[range] {
+                                let r = &dlg.all[k];
+                                let key = (r.config.clone(), r.name.clone());
+                                let mut text = dlg
+                                    .changes
+                                    .get(&key)
+                                    .cloned()
+                                    .unwrap_or_else(|| r.value.clone());
+                                ui.horizontal(|ui| {
+                                    let changed = dlg.changes.contains_key(&key);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(220.0, h - 6.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.set_width(220.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&r.name).monospace().color(
+                                                        if changed { p.accent } else { p.text },
+                                                    ),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(&r.name);
+                                        },
+                                    );
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut text)
+                                                .desired_width(f32::INFINITY),
+                                        )
+                                        .changed()
+                                    {
+                                        if text == r.value {
+                                            dlg.changes.remove(&key);
+                                        } else {
+                                            dlg.changes.insert(key.clone(), text.clone());
+                                        }
+                                    }
+                                });
                             }
                         });
-                    }
+                    ui.separator();
+                    apply = ui
+                        .add_enabled(
+                            !dlg.changes.is_empty(),
+                            egui::Button::new(RichText::new("Apply").strong())
+                                .fill(p.accent.gamma_multiply(0.55)),
+                        )
+                        .clicked();
                 });
-                ui.separator();
-                apply = ui.add_enabled(!dlg.changes.is_empty(), egui::Button::new(RichText::new("Apply").strong()).fill(p.accent.gamma_multiply(0.55))).clicked();
-            });
             if apply {
                 let dlg = self.strings_dlg.take().unwrap();
                 match arsc::set_strings(&dlg.base, &dlg.changes) {
                     Ok(bytes) => {
                         self.edits.insert("resources.arsc".into(), Some(bytes));
-                        self.toast(format!("{} string(s) will change when you build (Files tab)", dlg.changes.len()));
+                        self.toast(format!(
+                            "{} string(s) will change when you build (Files tab)",
+                            dlg.changes.len()
+                        ));
                     }
                     Err(e) => self.toast(format!("Strings not applied: {e}")),
                 }
@@ -1683,12 +2489,31 @@ impl App {
         }
         if let Some((path, data)) = &mut self.adding {
             let (mut open, mut add) = (true, false);
-            egui::Window::new("Add file").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label(format!("{} to add. Path inside the APK:", mb(data.len() as u64)));
-                ui.add(egui::TextEdit::singleline(path).desired_width(360.0));
-                ui.label(RichText::new("assets/ is safe for any file; lib/<abi>/ for native libraries.").small().color(p.dim));
-                add = ui.add_enabled(!path.trim().is_empty() && !path.contains(".."), egui::Button::new("Add")).clicked();
-            });
+            egui::Window::new("Add file")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "{} to add. Path inside the APK:",
+                        mb(data.len() as u64)
+                    ));
+                    ui.add(egui::TextEdit::singleline(path).desired_width(360.0));
+                    ui.label(
+                        RichText::new(
+                            "assets/ is safe for any file; lib/<abi>/ for native libraries.",
+                        )
+                        .small()
+                        .color(p.dim),
+                    );
+                    add = ui
+                        .add_enabled(
+                            !path.trim().is_empty() && !path.contains(".."),
+                            egui::Button::new("Add"),
+                        )
+                        .clicked();
+                });
             if add {
                 let (path, data) = self.adding.take().unwrap();
                 let path = path.trim().trim_start_matches('/').replace('\\', "/");
@@ -1734,15 +2559,23 @@ impl App {
             go = ui.add_enabled(ready, egui::Button::new(RichText::new("Build…").strong()).fill(p.accent.gamma_multiply(0.55))).clicked();
         });
         if go {
-            let stem = std::path::Path::new(&st.path).file_stem().map_or("app".into(), |s| s.to_string_lossy().into_owned());
-            if let Some(out) = rfd::FileDialog::new().set_file_name(format!("{stem}-apkscope.apk")).add_filter("APK", &["apk"]).save_file() {
+            let stem = std::path::Path::new(&st.path)
+                .file_stem()
+                .map_or("app".into(), |s| s.to_string_lossy().into_owned());
+            if let Some(out) = rfd::FileDialog::new()
+                .set_file_name(format!("{stem}-apkscope.apk"))
+                .add_filter("APK", &["apk"])
+                .save_file()
+            {
                 let own = dlg.own_key.then(|| (dlg.key.clone(), dlg.cert.clone()));
                 let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file.clone());
                 let smali_srcs = self.smali_edits.clone();
                 spawn(&self.tx, "save", move || {
                     let r = (|| {
                         let key = match own {
-                            Some((k, c)) => apksign::load(std::path::Path::new(&k), std::path::Path::new(&c))?,
+                            Some((k, c)) => {
+                                apksign::load(std::path::Path::new(&k), std::path::Path::new(&c))?
+                            }
                             None => apksign::default_key()?.0,
                         };
                         if !smali_srcs.is_empty() {
@@ -1750,9 +2583,15 @@ impl App {
                         }
                         let (apk, cd) = rebuild::rebuild(&file, &edits)?;
                         let signed = apksign::sign(apk, cd, &key)?;
-                        std::fs::write(&out, &signed).map_err(|e| format!("{}: {e}", out.display()))?;
+                        std::fs::write(&out, &signed)
+                            .map_err(|e| format!("{}: {e}", out.display()))?;
                         let check = apksign::verify(&out.display().to_string())?;
-                        Ok(format!("Built {} ({}). {}", out.display(), mb(signed.len() as u64), check.join(", ")))
+                        Ok(format!(
+                            "Built {} ({}). {}",
+                            out.display(),
+                            mb(signed.len() as u64),
+                            check.join(", ")
+                        ))
                     })();
                     let _ = tx.send(Msg::Saved(r));
                 });
@@ -1768,22 +2607,30 @@ impl App {
         let Some(dlg) = &mut self.export else { return };
         let mut open = true;
         let mut save = false;
-        egui::Window::new("Export results").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label(format!("{} hits from {}", self.hits.len(), self.hits_title));
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label("Format");
-                ui.radio_value(&mut dlg.fmt, Format::Text, "Text");
-                ui.radio_value(&mut dlg.fmt, Format::Csv, "CSV");
-                ui.radio_value(&mut dlg.fmt, Format::Json, "JSON");
+        egui::Window::new("Export results")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!("{} hits from {}", self.hits.len(), self.hits_title));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Format");
+                    ui.radio_value(&mut dlg.fmt, Format::Text, "Text");
+                    ui.radio_value(&mut dlg.fmt, Format::Csv, "CSV");
+                    ui.radio_value(&mut dlg.fmt, Format::Json, "JSON");
+                });
+                ui.checkbox(&mut dlg.method, "Whole enclosing method for each hit");
+                ui.add_enabled_ui(!dlg.method, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut dlg.ctx, 0..=30)
+                            .text("lines of context around each hit"),
+                    );
+                });
+                ui.add_space(6.0);
+                save = ui.button("Save…").clicked();
             });
-            ui.checkbox(&mut dlg.method, "Whole enclosing method for each hit");
-            ui.add_enabled_ui(!dlg.method, |ui| {
-                ui.add(egui::Slider::new(&mut dlg.ctx, 0..=30).text("lines of context around each hit"));
-            });
-            ui.add_space(6.0);
-            save = ui.button("Save…").clicked();
-        });
         if save {
             let (fmt, ctxl, method) = (dlg.fmt, dlg.ctx, dlg.method);
             let ext = match fmt {
@@ -1791,12 +2638,18 @@ impl App {
                 Format::Csv => "csv",
                 Format::Json => "json",
             };
-            if let Some(file) = rfd::FileDialog::new().set_file_name(format!("apkscope-results.{ext}")).add_filter(ext, &[ext]).save_file() {
+            if let Some(file) = rfd::FileDialog::new()
+                .set_file_name(format!("apkscope-results.{ext}"))
+                .add_filter(ext, &[ext])
+                .save_file()
+            {
                 let (tx, hits, st) = (self.tx.clone(), self.hits.clone(), self.st);
                 spawn(&self.tx, "save", move || {
                     let Some(st) = st else { return };
                     let out = session::export(&hits, ctxl, method, fmt, |t| st.target_text(t));
-                    let r = std::fs::write(&file, out).map(|_| format!("Saved {} hits to {}", hits.len(), file.display())).map_err(|e| e.to_string());
+                    let r = std::fs::write(&file, out)
+                        .map(|_| format!("Saved {} hits to {}", hits.len(), file.display()))
+                        .map_err(|e| e.to_string());
                     let _ = tx.send(Msg::Saved(r));
                 });
                 self.set.export_ctx = ctxl;
@@ -1812,8 +2665,12 @@ impl App {
     /// Before an APK is open: logo, a drop zone and what apkscope accepts.
     fn start_screen(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let logo = self.logo.get_or_insert_with(|| {
-            let img = egui::ColorImage::from_rgba_unmultiplied([64, 64], include_bytes!("../assets/icon64.rgba"));
-            ui.ctx().load_texture("logo", img, egui::TextureOptions::LINEAR)
+            let img = egui::ColorImage::from_rgba_unmultiplied(
+                [64, 64],
+                include_bytes!("../assets/icon64.rgba"),
+            );
+            ui.ctx()
+                .load_texture("logo", img, egui::TextureOptions::LINEAR)
         });
         let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
         let loading = !self.path.is_empty() && self.err.is_none();
@@ -1851,7 +2708,10 @@ impl App {
             ui.label(RichText::new("Decompile to Java  ·  find URLs, API calls and keys  ·  inspect native libraries  ·  export a Gradle project").color(p.dim));
         });
         if pick {
-            if let Some(f) = rfd::FileDialog::new().add_filter("APK, split bundle or DEX", &session::INPUTS).pick_file() {
+            if let Some(f) = rfd::FileDialog::new()
+                .add_filter("APK, split bundle or DEX", &session::INPUTS)
+                .pick_file()
+            {
                 self.err = None;
                 self.start_load(f.display().to_string());
             }
@@ -1865,74 +2725,121 @@ impl App {
         let mut open = true;
         let before = self.set.clone();
         let st = self.st;
-        egui::Window::new("Settings").collapsible(false).resizable(false).open(&mut open).default_width(420.0).show(ctx, |ui| {
-            let s = &mut self.set;
-            ui.heading("Appearance");
-            egui::Grid::new("app").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
-                ui.label("Theme");
-                egui::ComboBox::from_id_salt("theme").selected_text(s.theme.name()).show_ui(ui, |ui| {
-                    for t in Theme::ALL {
-                        ui.selectable_value(&mut s.theme, t, t.name());
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                let s = &mut self.set;
+                ui.heading("Appearance");
+                egui::Grid::new("app")
+                    .num_columns(2)
+                    .spacing([16.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Theme");
+                        egui::ComboBox::from_id_salt("theme")
+                            .selected_text(s.theme.name())
+                            .show_ui(ui, |ui| {
+                                for t in Theme::ALL {
+                                    ui.selectable_value(&mut s.theme, t, t.name());
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Code font size");
+                        ui.add(egui::Slider::new(&mut s.code_font, 10.0..=22.0).step_by(0.5));
+                        ui.end_row();
+                        ui.label("Interface scale");
+                        ui.add(egui::Slider::new(&mut s.ui_scale, 0.8..=1.6).step_by(0.05));
+                        ui.end_row();
+                    });
+                ui.separator();
+                ui.heading("Decompiler");
+                ui.checkbox(
+                    &mut s.deobf,
+                    "Rename obfuscated classes, methods and fields",
+                )
+                .on_hover_text("Applies to the next APK you open");
+                ui.horizontal(|ui| {
+                    ui.label("Default export context");
+                    ui.add(egui::Slider::new(&mut s.export_ctx, 0..=30).text("lines"));
+                });
+                ui.separator();
+                ui.heading("Performance");
+                let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+                ui.horizontal(|ui| {
+                    ui.label("Worker threads");
+                    ui.add(
+                        egui::Slider::new(&mut s.threads, 0..=cores * 2).custom_formatter(
+                            |v, _| {
+                                if v == 0.0 {
+                                    format!("auto ({cores})")
+                                } else {
+                                    format!("{v}")
+                                }
+                            },
+                        ),
+                    );
+                });
+                ui.checkbox(
+                    &mut s.use_cache,
+                    "Cache decompiled code on disk (fast repeat searches)",
+                );
+                ui.separator();
+                ui.heading("Cache & usage");
+                let size = *self.cache_size.get_or_insert_with(cache::total_size);
+                egui::Grid::new("usage")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Memory in use");
+                        ui.label(session::memory_used().map_or("?".into(), mb));
+                        ui.end_row();
+                        ui.label("Disk cache (all APKs)");
+                        ui.label(mb(size));
+                        ui.end_row();
+                        if let Some(st) = st {
+                            ui.label("This APK");
+                            let idx = if st.index.get().is_some() {
+                                "indexed".to_string()
+                            } else {
+                                format!(
+                                    "indexing {} / {}",
+                                    st.indexed.load(Ordering::Relaxed),
+                                    st.classes.len()
+                                )
+                            };
+                            ui.label(format!(
+                                "{idx}, {}",
+                                if st.cached() {
+                                    "code cached"
+                                } else {
+                                    "code not cached yet"
+                                }
+                            ));
+                            ui.end_row();
+                        }
+                        ui.label("Cache folder");
+                        ui.label(RichText::new(cache::root().display().to_string()).small());
+                        ui.end_row();
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("Clear cache").clicked() {
+                        let _ = cache::clear_all();
+                        if let Some(st) = st {
+                            st.drop_cache();
+                        }
+                        self.cache_size = None;
+                    }
+                    if ui.button("Open folder").clicked() {
+                        let _ = std::fs::create_dir_all(cache::root());
+                        #[cfg(windows)]
+                        let _ = std::process::Command::new("explorer")
+                            .arg(cache::root())
+                            .spawn();
                     }
                 });
-                ui.end_row();
-                ui.label("Code font size");
-                ui.add(egui::Slider::new(&mut s.code_font, 10.0..=22.0).step_by(0.5));
-                ui.end_row();
-                ui.label("Interface scale");
-                ui.add(egui::Slider::new(&mut s.ui_scale, 0.8..=1.6).step_by(0.05));
-                ui.end_row();
             });
-            ui.separator();
-            ui.heading("Decompiler");
-            ui.checkbox(&mut s.deobf, "Rename obfuscated classes, methods and fields").on_hover_text("Applies to the next APK you open");
-            ui.horizontal(|ui| {
-                ui.label("Default export context");
-                ui.add(egui::Slider::new(&mut s.export_ctx, 0..=30).text("lines"));
-            });
-            ui.separator();
-            ui.heading("Performance");
-            let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
-            ui.horizontal(|ui| {
-                ui.label("Worker threads");
-                ui.add(egui::Slider::new(&mut s.threads, 0..=cores * 2).custom_formatter(|v, _| if v == 0.0 { format!("auto ({cores})") } else { format!("{v}") }));
-            });
-            ui.checkbox(&mut s.use_cache, "Cache decompiled code on disk (fast repeat searches)");
-            ui.separator();
-            ui.heading("Cache & usage");
-            let size = *self.cache_size.get_or_insert_with(cache::total_size);
-            egui::Grid::new("usage").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
-                ui.label("Memory in use");
-                ui.label(session::memory_used().map_or("?".into(), mb));
-                ui.end_row();
-                ui.label("Disk cache (all APKs)");
-                ui.label(mb(size));
-                ui.end_row();
-                if let Some(st) = st {
-                    ui.label("This APK");
-                    let idx = if st.index.get().is_some() { "indexed".to_string() } else { format!("indexing {} / {}", st.indexed.load(Ordering::Relaxed), st.classes.len()) };
-                    ui.label(format!("{idx}, {}", if st.cached() { "code cached" } else { "code not cached yet" }));
-                    ui.end_row();
-                }
-                ui.label("Cache folder");
-                ui.label(RichText::new(cache::root().display().to_string()).small());
-                ui.end_row();
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Clear cache").clicked() {
-                    let _ = cache::clear_all();
-                    if let Some(st) = st {
-                        st.drop_cache();
-                    }
-                    self.cache_size = None;
-                }
-                if ui.button("Open folder").clicked() {
-                    let _ = std::fs::create_dir_all(cache::root());
-                    #[cfg(windows)]
-                    let _ = std::process::Command::new("explorer").arg(cache::root()).spawn();
-                }
-            });
-        });
         if self.set.theme != before.theme || self.set.ui_scale != before.ui_scale {
             self.styled = None;
         }
@@ -1949,29 +2856,96 @@ impl App {
     }
 }
 
-fn node(ui: &mut egui::Ui, t: &Tree, prefix: &str, doc: &Option<Open>, clicked: &mut Option<String>) {
+fn node(
+    ui: &mut egui::Ui,
+    t: &Tree,
+    prefix: &str,
+    doc: &Option<Open>,
+    clicked: &mut Option<String>,
+) {
     for (name, sub) in &t.dirs {
-        let full = if prefix.is_empty() { name.clone() } else { format!("{prefix}.{name}") };
-        egui::CollapsingHeader::new(name.as_str()).id_salt(&full).show(ui, |ui| node(ui, sub, &full, doc, clicked));
+        let full = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        egui::CollapsingHeader::new(name.as_str())
+            .id_salt(&full)
+            .show(ui, |ui| node(ui, sub, &full, doc, clicked));
     }
     for (short, full) in &t.leaves {
-        if ui.selectable_label(doc.as_ref() == Some(&Open::Class(full.clone())), short).clicked() {
+        if ui
+            .selectable_label(doc.as_ref() == Some(&Open::Class(full.clone())), short)
+            .clicked()
+        {
             *clicked = Some(full.clone());
         }
     }
 }
 
 const KEYWORDS: &[&str] = &[
-    "abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "continue", "default", "do", "double", "else", "enum", "extends", "final",
-    "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
-    "protected", "public", "return", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void",
-    "volatile", "while", "true", "false", "null",
+    "abstract",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "void",
+    "volatile",
+    "while",
+    "true",
+    "false",
+    "null",
 ];
 
 /// Java/Smali/XML colouring: comments, strings, keywords, numbers, smali directives.
 /// `mark` (1-based) gets a background, for jumping to a search hit.
 /// `sel` = identifier to mark everywhere (the word the user clicked).
-fn highlight(text: &str, p: &Palette, size: f32, mark: Option<usize>, sel: Option<&str>) -> LayoutJob {
+fn highlight(
+    text: &str,
+    p: &Palette,
+    size: f32,
+    mark: Option<usize>,
+    sel: Option<&str>,
+) -> LayoutJob {
     let font = FontId::monospace(size);
     let mut job = LayoutJob::default();
     let mut line = 1;
@@ -2008,8 +2982,16 @@ fn highlight(text: &str, p: &Palette, size: f32, mark: Option<usize>, sel: Optio
                 e += if b[e] == b'\\' { 2 } else { 1 };
             }
             Some(((e + 1).min(b.len()), 2))
-        } else if c == b'.' && (i == 0 || !word(b[i - 1])) && b.get(i + 1).is_some_and(|c| c.is_ascii_lowercase()) {
-            let e = i + 1 + b[i + 1..].iter().position(|&c| !word(c)).unwrap_or(b.len() - i - 1);
+        } else if c == b'.'
+            && (i == 0 || !word(b[i - 1]))
+            && b.get(i + 1).is_some_and(|c| c.is_ascii_lowercase())
+        {
+            let e = i
+                + 1
+                + b[i + 1..]
+                    .iter()
+                    .position(|&c| !word(c))
+                    .unwrap_or(b.len() - i - 1);
             Some((e, 5))
         } else if word(c) && (i == 0 || !word(b[i - 1])) {
             let e = i + b[i..].iter().position(|&c| !word(c)).unwrap_or(b.len() - i);
@@ -2050,7 +3032,10 @@ fn find_next(text: &str, needle: &str, from: usize) -> Option<usize> {
     let low = needle.to_lowercase();
     let lines: Vec<&str> = text.lines().collect();
     let n = lines.len();
-    (0..n).map(|k| (from + k) % n).find(|&k| lines[k].to_lowercase().contains(&low)).map(|k| k + 1)
+    (0..n)
+        .map(|k| (from + k) % n)
+        .find(|&k| lines[k].to_lowercase().contains(&low))
+        .map(|k| k + 1)
 }
 
 impl eframe::App for App {
@@ -2058,25 +3043,32 @@ impl eframe::App for App {
         self.poll();
         self.style(ctx);
         if let (Some(st), false) = (self.st, self.titled) {
-            let name = std::path::Path::new(&st.path).file_name().map_or(st.path.clone(), |n| n.to_string_lossy().into_owned());
+            let name = std::path::Path::new(&st.path)
+                .file_name()
+                .map_or(st.path.clone(), |n| n.to_string_lossy().into_owned());
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} - apkscope")));
             self.titled = true;
         }
         let p = self.set.theme.palette();
         // files dropped on the window
-        if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone())) {
+        if let Some(path) = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()))
+        {
             self.start_load(path.display().to_string());
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             self.focus_search = true;
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::W)) && !self.docs.is_empty() {
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::W))
+            && !self.docs.is_empty()
+        {
             self.close(self.active);
         }
         let (back, fwd) = ctx.input(|i| {
             (
-                i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft) || i.pointer.button_pressed(egui::PointerButton::Extra1),
-                i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight) || i.pointer.button_pressed(egui::PointerButton::Extra2),
+                i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft)
+                    || i.pointer.button_pressed(egui::PointerButton::Extra1),
+                i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)
+                    || i.pointer.button_pressed(egui::PointerButton::Extra2),
             )
         });
         if back {
@@ -2095,10 +3087,20 @@ impl eframe::App for App {
             }
         }
         // Ctrl+Tab / Ctrl+Shift+Tab switch tabs, Ctrl+O opens an APK
-        let (next_tab, prev_tab, open_apk) = ctx.input(|i| (i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Tab), i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Tab), i.modifiers.command && i.key_pressed(egui::Key::O)));
+        let (next_tab, prev_tab, open_apk) = ctx.input(|i| {
+            (
+                i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Tab),
+                i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Tab),
+                i.modifiers.command && i.key_pressed(egui::Key::O),
+            )
+        });
         if !self.docs.is_empty() && (next_tab || prev_tab) {
             let n = self.docs.len();
-            self.active = if next_tab { (self.active + 1) % n } else { (self.active + n - 1) % n };
+            self.active = if next_tab {
+                (self.active + 1) % n
+            } else {
+                (self.active + n - 1) % n
+            };
         }
         egui::TopBottomPanel::top("bar").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(10, 8))).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -2189,52 +3191,100 @@ impl eframe::App for App {
                 ui.label(RichText::new(self.scope.note()).small().italics().color(p.dim));
             }
         });
-        egui::TopBottomPanel::bottom("status").frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::symmetric(10, 4))).show(ctx, |ui| {
-            ui.horizontal(|ui| match (self.st, &self.err) {
-                (_, Some(e)) => {
-                    ui.colored_label(Color32::RED, format!("Failed to open: {e}"));
-                }
-                (Some(st), _) => {
-                    ui.label(RichText::new(format!("{}  ·  {} classes  ·  {} methods  ·  {} dex  ·  {} resources", st.package, st.classes.len(), st.methods, st.dexes.len(), st.texts.len() + st.files.len())).color(p.dim));
-                    ui.separator();
-                    match st.index.get() {
-                        Some(_) => ui.label(RichText::new("indexed").color(p.dim)),
-                        None => {
-                            ui.spinner();
-                            ui.label(RichText::new(format!("indexing {} / {}", st.indexed.load(Ordering::Relaxed), st.classes.len())).color(p.dim))
-                        }
-                    };
-                    if st.cached() {
-                        ui.label(RichText::new("·  code cached").color(p.dim));
+        egui::TopBottomPanel::bottom("status")
+            .frame(
+                egui::Frame::new()
+                    .fill(p.bg)
+                    .inner_margin(Margin::symmetric(10, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| match (self.st, &self.err) {
+                    (_, Some(e)) => {
+                        ui.colored_label(Color32::RED, format!("Failed to open: {e}"));
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(m) = session::memory_used() {
-                            ui.label(RichText::new(mb(m)).color(p.dim));
+                    (Some(st), _) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "{}  ·  {} classes  ·  {} methods  ·  {} dex  ·  {} resources",
+                                st.package,
+                                st.classes.len(),
+                                st.methods,
+                                st.dexes.len(),
+                                st.texts.len() + st.files.len()
+                            ))
+                            .color(p.dim),
+                        );
+                        ui.separator();
+                        match st.index.get() {
+                            Some(_) => ui.label(RichText::new("indexed").color(p.dim)),
+                            None => {
+                                ui.spinner();
+                                ui.label(
+                                    RichText::new(format!(
+                                        "indexing {} / {}",
+                                        st.indexed.load(Ordering::Relaxed),
+                                        st.classes.len()
+                                    ))
+                                    .color(p.dim),
+                                )
+                            }
+                        };
+                        if st.cached() {
+                            ui.label(RichText::new("·  code cached").color(p.dim));
                         }
-                    });
-                }
-                (None, _) if !self.path.is_empty() => {
-                    ui.spinner();
-                    ui.label(format!("Loading {}…", self.path));
-                }
-                _ => {
-                    ui.label("Open an APK: the button above, or drop it on the window.");
-                }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(m) = session::memory_used() {
+                                ui.label(RichText::new(mb(m)).color(p.dim));
+                            }
+                        });
+                    }
+                    (None, _) if !self.path.is_empty() => {
+                        ui.spinner();
+                        ui.label(format!("Loading {}…", self.path));
+                    }
+                    _ => {
+                        ui.label("Open an APK: the button above, or drop it on the window.");
+                    }
+                });
             });
-        });
         // the sidebar only means something once an APK is open
         if self.st.is_some() {
-            egui::SidePanel::left("side").default_width(330.0).resizable(true).frame(egui::Frame::new().fill(p.panel).inner_margin(Margin::same(8))).show(ctx, |ui| self.side_panel(ui));
+            egui::SidePanel::left("side")
+                .default_width(330.0)
+                .resizable(true)
+                .frame(
+                    egui::Frame::new()
+                        .fill(p.panel)
+                        .inner_margin(Margin::same(8)),
+                )
+                .show(ctx, |ui| self.side_panel(ui));
         }
         if let (Some(st), true) = (self.st, self.live.open) {
             let mut act = None;
-            egui::SidePanel::right("live").resizable(true).default_width(440.0).min_width(320.0).frame(egui::Frame::new().fill(Color32::from_rgb(6, 10, 8)).inner_margin(Margin::same(8))).show(ctx, |ui| act = self.live.show(ui, st));
+            egui::SidePanel::right("live")
+                .resizable(true)
+                .default_width(440.0)
+                .min_width(320.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(6, 10, 8))
+                        .inner_margin(Margin::same(8)),
+                )
+                .show(ctx, |ui| act = self.live.show(ui, st));
             if let Some(a) = act {
                 self.act(a, ctx);
             }
         }
         if self.prog.is_some() || !self.hits_title.is_empty() {
-            egui::TopBottomPanel::bottom("hits").resizable(true).default_height(240.0).frame(egui::Frame::new().fill(p.panel).inner_margin(Margin::same(8))).show(ctx, |ui| self.results_panel(ui));
+            egui::TopBottomPanel::bottom("hits")
+                .resizable(true)
+                .default_height(240.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(p.panel)
+                        .inner_margin(Margin::same(8)),
+                )
+                .show(ctx, |ui| self.results_panel(ui));
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(Margin::same(8))).show(ctx, |ui| {
             if self.st.is_none() {
@@ -2571,18 +3621,28 @@ impl eframe::App for App {
         self.settings_window(ctx);
         if let Some((t, at)) = &self.toast {
             if at.elapsed().as_secs() < 4 {
-                egui::Area::new("toast".into()).anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -36.0]).show(ctx, |ui| {
-                    egui::Frame::new().fill(p.panel).stroke(Stroke::new(1.0_f32, p.accent)).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-                        ui.label(t);
+                egui::Area::new("toast".into())
+                    .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -36.0])
+                    .show(ctx, |ui| {
+                        egui::Frame::new()
+                            .fill(p.panel)
+                            .stroke(Stroke::new(1.0_f32, p.accent))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.label(t);
+                            });
                     });
-                });
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             } else {
                 self.toast = None;
             }
         }
         let indexing = self.st.is_some_and(|s| s.index.get().is_none());
-        let busy = (self.st.is_none() && !self.path.is_empty() && self.err.is_none()) || self.prog.is_some() || indexing || self.docs.iter().any(|d| d.text.is_none());
+        let busy = (self.st.is_none() && !self.path.is_empty() && self.err.is_none())
+            || self.prog.is_some()
+            || indexing
+            || self.docs.iter().any(|d| d.text.is_none());
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
@@ -2598,11 +3658,28 @@ pub fn run(path: Option<&str>, deobf: bool) -> Result<(), String> {
         }
         unsafe { LoadLibraryA(c"opengl32.dll".as_ptr().cast()) };
     }
-    let icon = egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 };
-    let viewport = egui::ViewportBuilder::default().with_inner_size([1100.0, 700.0]).with_maximized(true).with_title("apkscope").with_icon(Arc::new(icon)).with_drag_and_drop(true);
-    let opts = eframe::NativeOptions { viewport, ..Default::default() };
+    let icon = egui::IconData {
+        rgba: include_bytes!("../assets/icon64.rgba").to_vec(),
+        width: 64,
+        height: 64,
+    };
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1100.0, 700.0])
+        .with_maximized(true)
+        .with_title("apkscope")
+        .with_icon(Arc::new(icon))
+        .with_drag_and_drop(true);
+    let opts = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
     let path = path.map(str::to_string);
-    eframe::run_native("apkscope", opts, Box::new(move |_| Ok(Box::new(App::new(path, deobf))))).map_err(|e| e.to_string())
+    eframe::run_native(
+        "apkscope",
+        opts,
+        Box::new(move |_| Ok(Box::new(App::new(path, deobf)))),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -2612,11 +3689,32 @@ mod tests {
     #[test]
     fn highlight_splits_tokens_and_marks_line() {
         let p = Theme::Dark.palette();
-        let job = highlight("int x = 1; // hi\nString s = \"a\\\"b\";", &p, 13.0, Some(2), None);
-        let parts: Vec<&str> = job.sections.iter().map(|s| &job.text[s.byte_range.clone()]).collect();
-        assert!(parts.contains(&"int") && parts.contains(&"// hi") && parts.contains(&"\"a\\\"b\"") && parts.contains(&"1"), "{parts:?}");
+        let job = highlight(
+            "int x = 1; // hi\nString s = \"a\\\"b\";",
+            &p,
+            13.0,
+            Some(2),
+            None,
+        );
+        let parts: Vec<&str> = job
+            .sections
+            .iter()
+            .map(|s| &job.text[s.byte_range.clone()])
+            .collect();
+        assert!(
+            parts.contains(&"int")
+                && parts.contains(&"// hi")
+                && parts.contains(&"\"a\\\"b\"")
+                && parts.contains(&"1"),
+            "{parts:?}"
+        );
         // only line 2 gets a background
-        let marked: String = job.sections.iter().filter(|s| s.format.background != Color32::TRANSPARENT).map(|s| &job.text[s.byte_range.clone()]).collect();
+        let marked: String = job
+            .sections
+            .iter()
+            .filter(|s| s.format.background != Color32::TRANSPARENT)
+            .map(|s| &job.text[s.byte_range.clone()])
+            .collect();
         assert_eq!(marked, "String s = \"a\\\"b\";");
     }
 
@@ -2633,11 +3731,23 @@ mod tests {
     fn finds_member_under_cursor() {
         let java = "package a;\n\npublic class Outer {\n    private int count;\n\n    /* WARNING: 1 jump could not be structured. */\n    public static String a(int i) {\n        int x = i;\n        return null;\n    }\n\n    static class In {\n        void run() {\n        }\n    }\n}\n";
         assert_eq!(member_at(java, 2), Some((vec!["Outer".into()], None)));
-        assert_eq!(member_at(java, 3), Some((vec!["Outer".into()], Some((false, "count".into())))));
+        assert_eq!(
+            member_at(java, 3),
+            Some((vec!["Outer".into()], Some((false, "count".into()))))
+        );
         // the WARNING comment points at the method below it
-        assert_eq!(member_at(java, 5), Some((vec!["Outer".into()], Some((true, "a".into())))));
+        assert_eq!(
+            member_at(java, 5),
+            Some((vec!["Outer".into()], Some((true, "a".into()))))
+        );
         assert_eq!(member_at(java, 7), None);
-        assert_eq!(member_at(java, 12), Some((vec!["Outer".into(), "In".into()], Some((true, "run".into())))));
+        assert_eq!(
+            member_at(java, 12),
+            Some((
+                vec!["Outer".into(), "In".into()],
+                Some((true, "run".into()))
+            ))
+        );
     }
 
     #[test]
@@ -2655,14 +3765,23 @@ mod tests {
 }
 ";
         assert_eq!(word_at(java, 2, 18), Some(("B".into(), true, true, None)));
-        assert_eq!(word_at(java, 3, 11), Some(("go".into(), true, false, Some("b".into()))));
+        assert_eq!(
+            word_at(java, 3, 11),
+            Some(("go".into(), true, false, Some("b".into())))
+        );
         assert_eq!(word_at(java, 3, 8), Some(("b".into(), false, false, None)));
         assert_eq!(find_decl(java, "helper", Some(0)), Some(8));
         assert_eq!(find_decl(java, "run", Some(1)), Some(2));
         // the call inside `run`, not the declaration and not the `go()` in helper
-        let t = Target { decl: Some(("run".into(), Some(1))), then: Some("go(".into()) };
+        let t = Target {
+            decl: Some(("run".into(), Some(1))),
+            then: Some("go(".into()),
+        };
         assert_eq!(locate(java, &t), Some(4));
-        let t = Target { decl: Some(("helper".into(), None)), then: Some("go(".into()) };
+        let t = Target {
+            decl: Some(("helper".into(), None)),
+            then: Some("go(".into()),
+        };
         assert_eq!(locate(java, &t), Some(9));
         assert_eq!(classes_around(java, 3), vec!["A".to_string()]);
     }

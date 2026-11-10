@@ -17,7 +17,10 @@ fn set(s: &mut [u64], i: usize) {
 
 fn succs_all(cfg: &Cfg, b: usize) -> Vec<usize> {
     let blk = &cfg.blocks[b];
-    blk.succs().into_iter().chain(blk.handlers.iter().map(|h| h.1)).collect()
+    blk.succs()
+        .into_iter()
+        .chain(blk.handlers.iter().map(|h| h.1))
+        .collect()
 }
 
 /// registers live at the end of each block
@@ -29,7 +32,9 @@ fn live_out(cfg: &Cfg, bir: &Bir, nregs: usize) -> Vec<Vec<u64>> {
         let (stmts, cond) = &bir[b];
         let (u, d) = (&mut uses[b], &mut defs[b]);
         let read = |r: u16, d: &[u64], u: &mut [u64]| {
-            if (r as usize) < nregs && !bit(d, r as usize) { set(u, r as usize) }
+            if (r as usize) < nregs && !bit(d, r as usize) {
+                set(u, r as usize)
+            }
         };
         for s in stmts {
             for e in s.exprs() {
@@ -77,7 +82,8 @@ fn live_after(stmts: &[Stmt], from: usize, r: u16, cond: &Option<Expr>, out: &[u
             return false;
         }
     }
-    cond.as_ref().is_some_and(|c| c.count_reg(r) > 0) || ((r as usize) < out.len() * 64 && bit(out, r as usize))
+    cond.as_ref().is_some_and(|c| c.count_reg(r) > 0)
+        || ((r as usize) < out.len() * 64 && bit(out, r as usize))
 }
 
 /// Replace the single `Reg(r)` in `exprs` (evaluation order) with `e`, unless that would move a
@@ -124,13 +130,19 @@ pub fn inline(cfg: &Cfg, bir: &mut Bir, nregs: usize) {
         let mut i = stmts.len();
         while i > 0 {
             i -= 1;
-            let Stmt::Assign(Expr::Reg(r), e) = &stmts[i] else { continue };
+            let Stmt::Assign(Expr::Reg(r), e) = &stmts[i] else {
+                continue;
+            };
             let (r, e) = (*r, e.clone());
             if e == Expr::Caught {
                 continue;
             }
             let has_next = i + 1 < stmts.len();
-            let next_reads = if has_next { stmts[i + 1].reads(r) } else { cond.as_ref().map_or(0, |c| c.count_reg(r)) };
+            let next_reads = if has_next {
+                stmts[i + 1].reads(r)
+            } else {
+                cond.as_ref().map_or(0, |c| c.count_reg(r))
+            };
             let later = if !has_next {
                 (r as usize) < out.len() * 64 && bit(out, r as usize)
             } else if stmts[i + 1].def() == Some(r) {
@@ -139,7 +151,11 @@ pub fn inline(cfg: &Cfg, bir: &mut Bir, nregs: usize) {
                 live_after(stmts, i + 2, r, cond, out)
             };
             if next_reads == 1 && !later {
-                let ok = if has_next { substitute(stmts[i + 1].exprs_mut(), r, &e) } else { substitute(cond.iter_mut().collect(), r, &e) };
+                let ok = if has_next {
+                    substitute(stmts[i + 1].exprs_mut(), r, &e)
+                } else {
+                    substitute(cond.iter_mut().collect(), r, &e)
+                };
                 if ok {
                     stmts.remove(i);
                 }
@@ -176,8 +192,14 @@ fn thread_jumps(cfg: &mut Cfg, bir: &Bir) -> bool {
         .map(|blk| {
             let t = match &blk.term {
                 Term::Goto(x) => Term::Goto(target(*x)),
-                Term::If { taken, fall } => Term::If { taken: target(*taken), fall: target(*fall) },
-                Term::Switch { cases, default } => Term::Switch { cases: cases.iter().map(|&(k, x)| (k, target(x))).collect(), default: target(*default) },
+                Term::If { taken, fall } => Term::If {
+                    taken: target(*taken),
+                    fall: target(*fall),
+                },
+                Term::Switch { cases, default } => Term::Switch {
+                    cases: cases.iter().map(|&(k, x)| (k, target(x))).collect(),
+                    default: target(*default),
+                },
                 Term::Exit => Term::Exit,
             };
             any |= t != blk.term;
@@ -202,17 +224,37 @@ pub fn merge_conditions(cfg: &mut Cfg, bir: &mut Bir) -> bool {
             }
         }
         for b in 0..n {
-            let Term::If { taken: t, fall: f } = cfg.blocks[b].term else { continue };
+            let Term::If { taken: t, fall: f } = cfg.blocks[b].term else {
+                continue;
+            };
             for s_is_fall in [true, false] {
                 let s = if s_is_fall { f } else { t };
-                if s == b || preds[s] != 1 || !bir[s].0.is_empty() || cfg.blocks[s].handlers != cfg.blocks[b].handlers {
+                if s == b
+                    || preds[s] != 1
+                    || !bir[s].0.is_empty()
+                    || cfg.blocks[s].handlers != cfg.blocks[b].handlers
+                {
                     continue;
                 }
-                let Term::If { taken: t2, fall: f2 } = cfg.blocks[s].term else { continue };
-                let (Some(c), Some(d)) = (bir[b].1.clone(), bir[s].1.clone()) else { continue };
+                let Term::If {
+                    taken: t2,
+                    fall: f2,
+                } = cfg.blocks[s].term
+                else {
+                    continue;
+                };
+                let (Some(c), Some(d)) = (bir[b].1.clone(), bir[s].1.clone()) else {
+                    continue;
+                };
                 let (c, d) = (Box::new(c), Box::new(d));
                 let merged = if s_is_fall {
-                    if t2 == t { Some((Expr::Or(c, d), t, f2)) } else if f2 == t { Some((Expr::Or(c, Box::new(d.negate())), t, t2)) } else { None }
+                    if t2 == t {
+                        Some((Expr::Or(c, d), t, f2))
+                    } else if f2 == t {
+                        Some((Expr::Or(c, Box::new(d.negate())), t, t2))
+                    } else {
+                        None
+                    }
                 } else if f2 == f {
                     Some((Expr::And(c, d), t2, f))
                 } else if t2 == f {
@@ -220,7 +262,9 @@ pub fn merge_conditions(cfg: &mut Cfg, bir: &mut Bir) -> bool {
                 } else {
                     None
                 };
-                let Some((cond, taken, fall)) = merged else { continue };
+                let Some((cond, taken, fall)) = merged else {
+                    continue;
+                };
                 bir[b].1 = Some(cond);
                 cfg.blocks[b].term = Term::If { taken, fall };
                 // s is now unreachable
@@ -262,7 +306,11 @@ pub fn webs(cfg: &Cfg, bir: &mut Bir, params: &[u16]) -> Option<Vars> {
         by_reg.entry(r).or_default().push(d);
     }
     // gen = last def per reg in block, kill = all defs of regs the block defines, all = every def in block
-    let (mut gen_, mut kill, mut all) = (vec![vec![0u64; w]; n], vec![vec![0u64; w]; n], vec![vec![0u64; w]; n]);
+    let (mut gen_, mut kill, mut all) = (
+        vec![vec![0u64; w]; n],
+        vec![vec![0u64; w]; n],
+        vec![vec![0u64; w]; n],
+    );
     let mut id = params.len();
     for (b, (stmts, _)) in bir.iter().enumerate() {
         let mut last: HashMap<u16, usize> = HashMap::new();
@@ -330,18 +378,22 @@ pub fn webs(cfg: &Cfg, bir: &mut Bir, params: &[u16]) -> Option<Vars> {
     for (b, (stmts, cond)) in bir.iter_mut().enumerate() {
         let mut local: HashMap<u16, usize> = HashMap::new();
         let inb = &inn[b];
-        let use_reg = |r: u16, local: &HashMap<u16, usize>, parent: &mut Vec<usize>| -> Option<Expr> {
-            let cands: Vec<usize> = match local.get(&r) {
-                Some(&d) => vec![d],
-                None => by_reg.get(&r).map(|v| v.iter().copied().filter(|&d| bit(inb, d)).collect()).unwrap_or_default(),
+        let use_reg =
+            |r: u16, local: &HashMap<u16, usize>, parent: &mut Vec<usize>| -> Option<Expr> {
+                let cands: Vec<usize> = match local.get(&r) {
+                    Some(&d) => vec![d],
+                    None => by_reg
+                        .get(&r)
+                        .map(|v| v.iter().copied().filter(|&d| bit(inb, d)).collect())
+                        .unwrap_or_default(),
+                };
+                let first = *cands.first()?;
+                for &c in &cands[1..] {
+                    let (a, b) = (find(parent, first), find(parent, c));
+                    parent[a] = b;
+                }
+                Some(Expr::Var(first))
             };
-            let first = *cands.first()?;
-            for &c in &cands[1..] {
-                let (a, b) = (find(parent, first), find(parent, c));
-                parent[a] = b;
-            }
-            Some(Expr::Var(first))
-        };
         for s in stmts.iter_mut() {
             for e in s.exprs_mut() {
                 e.rewrite_regs(&mut |r| use_reg(r, &local, &mut parent));
@@ -361,10 +413,20 @@ pub fn webs(cfg: &Cfg, bir: &mut Bir, params: &[u16]) -> Option<Vars> {
     let mut defs = vec![0usize; nd];
     let mut param = vec![false; nd];
     for d in 0..nd {
-        if d < params.len() { param[root[d]] = true } else { defs[root[d]] += 1 }
+        if d < params.len() {
+            param[root[d]] = true
+        } else {
+            defs[root[d]] += 1
+        }
     }
     let _ = def_block;
-    Some(Vars { root, defs, param, ty: vec![None; nd], name: vec![String::new(); nd] })
+    Some(Vars {
+        root,
+        defs,
+        param,
+        ty: vec![None; nd],
+        name: vec![String::new(); nd],
+    })
 }
 
 #[cfg(test)]
@@ -380,6 +442,9 @@ mod tests {
         assert!(!substitute(vec![&mut target], 0, &call(2)));
         let mut target = Invoke(crate::ir::Call::Static, 9, vec![Reg(0), call(1)]);
         assert!(substitute(vec![&mut target], 0, &call(2)));
-        assert_eq!(target, Invoke(crate::ir::Call::Static, 9, vec![call(2), call(1)]));
+        assert_eq!(
+            target,
+            Invoke(crate::ir::Call::Static, 9, vec![call(2), call(1)])
+        );
     }
 }

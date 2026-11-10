@@ -8,14 +8,21 @@ pub mod write;
 
 /// The 3-digit version of a DEX file (`035`, `038`, ...).
 pub fn version(dex: &[u8]) -> [u8; 3] {
-    dex.get(4..7).and_then(|v| v.try_into().ok()).unwrap_or(*b"035")
+    dex.get(4..7)
+        .and_then(|v| v.try_into().ok())
+        .unwrap_or(*b"035")
 }
 
 use model::Class;
 
 /// `classesN.dex` entries, in load order (classes.dex, classes2.dex, ...).
 fn dex_entries(apk: &crate::export::Apk) -> Vec<String> {
-    let mut v: Vec<String> = apk.zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).filter(|n| n.starts_with("classes") && n.ends_with(".dex")).collect();
+    let mut v: Vec<String> = apk
+        .zip
+        .file_names()
+        .filter_map(|n| n.ok().map(|n| n.into_owned()))
+        .filter(|n| n.starts_with("classes") && n.ends_with(".dex"))
+        .collect();
     v.sort_by_key(|n| (n.len(), n.clone())); // classes.dex before classes2.dex ... classes10.dex
     v
 }
@@ -25,9 +32,13 @@ pub fn export_class(path: &str, class: &str) -> Result<String, String> {
     let desc = crate::quick::descriptor(class);
     let mut apk = crate::export::open(path)?;
     for name in dex_entries(&apk) {
-        let Some(bytes) = apk.read(&name) else { continue };
+        let Some(bytes) = apk.read(&name) else {
+            continue;
+        };
         if let Ok(Some(i)) = crate::dex::Dex::parse(&bytes).map(|dx| dx.find_class(&desc)) {
-            let c = read::Reader::new(&bytes).and_then(|r| r.class(i)).map_err(|e| format!("{name}: {e}"))?;
+            let c = read::Reader::new(&bytes)
+                .and_then(|r| r.class(i))
+                .map_err(|e| format!("{name}: {e}"))?;
             return Ok(text::print(&c));
         }
     }
@@ -37,8 +48,15 @@ pub fn export_class(path: &str, class: &str) -> Result<String, String> {
 /// Assemble edited Smali `sources` into `edits`: each class replaces the one of the same name in
 /// the DEX that defines it (a brand-new class goes to classes.dex). Returns the changed entries.
 /// Parses everything first, so a syntax error aborts before any DEX is rewritten.
-pub fn inject(path: &str, sources: &[String], edits: &mut crate::rebuild::Edits) -> Result<Vec<String>, String> {
-    let classes: Vec<Class> = sources.iter().map(|s| text::parse(s)).collect::<Result<_, _>>()?;
+pub fn inject(
+    path: &str,
+    sources: &[String],
+    edits: &mut crate::rebuild::Edits,
+) -> Result<Vec<String>, String> {
+    let classes: Vec<Class> = sources
+        .iter()
+        .map(|s| text::parse(s))
+        .collect::<Result<_, _>>()?;
     let mut apk = crate::export::open(path)?;
     let entries = dex_entries(&apk);
     // group each edited class under the dex entry it belongs to
@@ -46,26 +64,53 @@ pub fn inject(path: &str, sources: &[String], edits: &mut crate::rebuild::Edits)
     'next: for c in classes {
         let desc = String::from_utf8_lossy(&c.name).into_owned();
         for name in &entries {
-            if let Some(bytes) = apk.read(name) {
-                if crate::dex::Dex::parse(&bytes).ok().and_then(|dx| dx.find_class(&desc)).is_some() {
-                    by_dex.entry(name.clone()).or_default().push(c);
-                    continue 'next;
-                }
+            if let Some(bytes) = apk.read(name)
+                && crate::dex::Dex::parse(&bytes)
+                    .ok()
+                    .and_then(|dx| dx.find_class(&desc))
+                    .is_some()
+            {
+                by_dex.entry(name.clone()).or_default().push(c);
+                continue 'next;
             }
         }
         by_dex.entry("classes.dex".into()).or_default().push(c);
     }
     let mut changed = Vec::new();
     for (name, edited) in by_dex {
-        let bytes = apk.read(&name).ok_or_else(|| format!("{name} not in the APK"))?;
-        let mut all = read::read(&bytes).map_err(|e| format!("{name}: {e}"))?;
-        for c in edited {
-            match all.iter().position(|x| x.name == c.name) {
-                Some(k) => all[k] = c,
-                None => all.push(c),
+        let bytes = apk
+            .read(&name)
+            .ok_or_else(|| format!("{name} not in the APK"))?;
+        // fast path: patch instruction bytes in place when the edits only change existing methods'
+        // code, so a one-class edit doesn't model and rewrite the whole DEX
+        let patched = {
+            let dx = crate::dex::Dex::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
+            let indexed: Option<Vec<(usize, &Class)>> = edited
+                .iter()
+                .map(|c| {
+                    dx.find_class(&String::from_utf8_lossy(&c.name))
+                        .map(|k| (k, c))
+                })
+                .collect();
+            match indexed {
+                Some(ix) => write::patch(&bytes, &ix).map_err(|e| format!("{name}: {e}"))?,
+                None => None, // a brand-new class: no in-place slot
             }
-        }
-        edits.insert(name.clone(), Some(write::write(&all, version(&bytes)).map_err(|e| format!("{name}: {e}"))?));
+        };
+        let dex = match patched {
+            Some(d) => d,
+            None => {
+                let mut all = read::read(&bytes).map_err(|e| format!("{name}: {e}"))?;
+                for c in edited {
+                    match all.iter().position(|x| x.name == c.name) {
+                        Some(k) => all[k] = c,
+                        None => all.push(c),
+                    }
+                }
+                write::write(&all, version(&bytes)).map_err(|e| format!("{name}: {e}"))?
+            }
+        };
+        edits.insert(name.clone(), Some(dex));
         changed.push(name);
     }
     Ok(changed)
@@ -79,23 +124,42 @@ mod tests {
     /// written DEX -> model -> written again must give the same bytes, also through Smali text
     fn roundtrip(name: &str, orig: &[u8]) -> (usize, usize) {
         let classes = read::read(orig).unwrap_or_else(|e| panic!("{name}: read: {e}"));
-        let d1 = write::write(&classes, version(orig)).unwrap_or_else(|e| panic!("{name}: write: {e}"));
+        let d1 =
+            write::write(&classes, version(orig)).unwrap_or_else(|e| panic!("{name}: write: {e}"));
         let c1 = read::read(&d1).unwrap_or_else(|e| panic!("{name}: re-read: {e}"));
         let again = write::write(&c1, version(orig)).unwrap();
         if d1 != again {
-            let by: std::collections::HashMap<&[u8], &model::Class> = c1.iter().map(|c| (&*c.name, c)).collect();
+            let by: std::collections::HashMap<&[u8], &model::Class> =
+                c1.iter().map(|c| (&*c.name, c)).collect();
             for a in &classes {
                 let b = by[&*a.name];
                 if a != b {
                     for (ma, mb) in a.methods.iter().zip(&b.methods) {
                         if ma != mb {
-                            let (Some(ca), Some(cb)) = (ma.code.as_ref(), mb.code.as_ref()) else { panic!("{name}: {:?}
-{:?}", ma, mb) };
-                            let one = |m: &model::Method| text::print(&model::Class { methods: vec![m.clone()], fields: vec![], ..a.clone() });
+                            let (Some(ca), Some(cb)) = (ma.code.as_ref(), mb.code.as_ref()) else {
+                                panic!(
+                                    "{name}: {:?}
+{:?}",
+                                    ma, mb
+                                )
+                            };
+                            let one = |m: &model::Method| {
+                                text::print(&model::Class {
+                                    methods: vec![m.clone()],
+                                    fields: vec![],
+                                    ..a.clone()
+                                })
+                            };
                             std::fs::write("rt_a.smali", one(ma)).unwrap();
                             std::fs::write("rt_b.smali", one(mb)).unwrap();
                             for (x, y) in ca.items.iter().zip(&cb.items) {
-                                assert_eq!(x, y, "{name}: {} {}", String::from_utf8_lossy(&a.name), String::from_utf8_lossy(&ma.name));
+                                assert_eq!(
+                                    x,
+                                    y,
+                                    "{name}: {} {}",
+                                    String::from_utf8_lossy(&a.name),
+                                    String::from_utf8_lossy(&ma.name)
+                                );
                             }
                             assert_eq!(ca, cb);
                         }
@@ -103,17 +167,37 @@ mod tests {
                     assert_eq!(a, b, "{name}: writing is not stable");
                 }
             }
-            let at = 0x20 + d1[0x20..].iter().zip(&again[0x20..]).position(|(x, y)| x != y).unwrap_or(0);
+            let at = 0x20
+                + d1[0x20..]
+                    .iter()
+                    .zip(&again[0x20..])
+                    .position(|(x, y)| x != y)
+                    .unwrap_or(0);
             let map = u32::from_le_bytes(d1[0x34..0x38].try_into().unwrap()) as usize;
             let n = u32::from_le_bytes(d1[map..map + 4].try_into().unwrap()) as usize;
-            let secs: Vec<String> = (0..n).map(|k| { let o = map + 4 + k * 12; format!("{:#x}@{:#x}", u16::from_le_bytes(d1[o..o+2].try_into().unwrap()), u32::from_le_bytes(d1[o+8..o+12].try_into().unwrap())) }).collect();
-            panic!("{name}: writing is not stable: first diff at {at:#x} of {:#x}/{:#x}; sections {secs:?}", d1.len(), again.len());
+            let secs: Vec<String> = (0..n)
+                .map(|k| {
+                    let o = map + 4 + k * 12;
+                    format!(
+                        "{:#x}@{:#x}",
+                        u16::from_le_bytes(d1[o..o + 2].try_into().unwrap()),
+                        u32::from_le_bytes(d1[o + 8..o + 12].try_into().unwrap())
+                    )
+                })
+                .collect();
+            panic!(
+                "{name}: writing is not stable: first diff at {at:#x} of {:#x}/{:#x}; sections {secs:?}",
+                d1.len(),
+                again.len()
+            );
         }
         let c2: Vec<_> = c1
             .iter()
             .map(|c| {
                 let t = text::print(c);
-                text::parse(&t).unwrap_or_else(|e| panic!("{name}: {}: {e}\n{t}", String::from_utf8_lossy(&c.name)))
+                text::parse(&t).unwrap_or_else(|e| {
+                    panic!("{name}: {}: {e}\n{t}", String::from_utf8_lossy(&c.name))
+                })
             })
             .collect();
         let d2 = write::write(&c2, version(orig)).unwrap();
@@ -121,7 +205,13 @@ mod tests {
             for (a, b) in c1.iter().zip(&c2) {
                 if a != b {
                     for (ma, mb) in a.methods.iter().zip(&b.methods) {
-                        assert_eq!(ma, mb, "{name}: {} differs after Smali\n{}", String::from_utf8_lossy(&a.name), text::print(a));
+                        assert_eq!(
+                            ma,
+                            mb,
+                            "{name}: {} differs after Smali\n{}",
+                            String::from_utf8_lossy(&a.name),
+                            text::print(a)
+                        );
                     }
                     assert_eq!(a, b, "{name}: class differs after Smali");
                 }
@@ -139,32 +229,57 @@ mod tests {
         let desc = |d: &Dex, i| d.class_descriptor(i).unwrap();
         let body = |d: &Dex, i: usize| -> Vec<String> {
             let cd = d.class_def(i).unwrap();
-            let mut v = vec![format!("{} {:x} {:?} {:?} {:?}", cd.class, cd.access, cd.superclass, cd.interfaces, cd.source_file)];
+            let mut v = vec![format!(
+                "{} {:x} {:?} {:?} {:?}",
+                cd.class, cd.access, cd.superclass, cd.interfaces, cd.source_file
+            )];
             let data = d.class_data(i).unwrap();
             for (f, a) in data.fields {
                 v.push(format!("F {} {a:x}", d.field_ref(f).unwrap()));
             }
             for m in data.methods {
-                v.push(format!("M {} {:x}", d.method_ref(m.method_idx).unwrap(), m.access));
+                v.push(format!(
+                    "M {} {:x}",
+                    d.method_ref(m.method_idx).unwrap(),
+                    m.access
+                ));
                 if let Some(c) = m.code {
-                    v.push(format!("  regs {} ins {} tries {}", c.registers, c.ins, c.tries.len()));
+                    v.push(format!(
+                        "  regs {} ins {} tries {}",
+                        c.registers,
+                        c.ins,
+                        c.tries.len()
+                    ));
                     for i in crate::bytecode::decode(c.insns).unwrap() {
                         v.push(crate::render(d, &i).unwrap_or_else(|e| e));
                     }
                 }
             }
-            v.push(format!("{:?}", d.static_values(i).unwrap()).chars().filter(|c| !c.is_ascii_digit()).collect());
+            v.push(
+                format!("{:?}", d.static_values(i).unwrap())
+                    .chars()
+                    .filter(|c| !c.is_ascii_digit())
+                    .collect(),
+            );
             v
         };
-        let mut by: std::collections::HashMap<String, usize> = (0..y.class_count).map(|i| (desc(&y, i), i)).collect();
+        let mut by: std::collections::HashMap<String, usize> =
+            (0..y.class_count).map(|i| (desc(&y, i), i)).collect();
         for i in 0..x.class_count {
-            let j = by.remove(&desc(&x, i)).unwrap_or_else(|| panic!("{name}: {} missing", desc(&x, i)));
+            let j = by
+                .remove(&desc(&x, i))
+                .unwrap_or_else(|| panic!("{name}: {} missing", desc(&x, i)));
             let (p, q) = (body(&x, i), body(&y, j));
             for (l1, l2) in p.iter().zip(&q) {
                 // branch offsets print as numbers and stay equal unless code grew
                 assert_eq!(l1, l2, "{name}: {} differs", desc(&x, i));
             }
-            assert_eq!(p.len(), q.len(), "{name}: {} differs in length", desc(&x, i));
+            assert_eq!(
+                p.len(),
+                q.len(),
+                "{name}: {} differs in length",
+                desc(&x, i)
+            );
         }
     }
 
@@ -221,7 +336,10 @@ mod tests {
         // the printed form of what was written parses back to the same DEX
         let again = write::write(&[text::parse(&text::print(&back[0])).unwrap()], *b"035").unwrap();
         assert_eq!(d, again);
-        assert_eq!(back[0].fields[0].init, Some(model::Value::Str(model::s(b"hi \"there\"\n"))));
+        assert_eq!(
+            back[0].fields[0].init,
+            Some(model::Value::Str(model::s(b"hi \"there\"\n")))
+        );
         let m = x.methods(0).unwrap();
         assert_eq!(m.len(), 2);
         assert_eq!(m[1].code.as_ref().unwrap().tries.len(), 1);
@@ -235,8 +353,44 @@ mod tests {
     fn reports_errors_with_line() {
         let e = text::parse(".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 0\n    bogus-op v0\n.end method\n").unwrap_err();
         assert!(e.starts_with("line 5:"), "{e}");
-        let e = text::parse(".class LA;\n.method static f()V\n    .locals 0\n    goto :nowhere\n.end method\n").unwrap_err();
+        let e = text::parse(
+            ".class LA;\n.method static f()V\n    .locals 0\n    goto :nowhere\n.end method\n",
+        )
+        .unwrap_err();
         assert!(e.contains(":nowhere"), "{e}");
+    }
+
+    #[test]
+    fn patches_instruction_in_place() {
+        let src = ".class public Lcom/ex/P;\n.super Ljava/lang/Object;\n\
+                   .method public static f()I\n    .registers 1\n    const/16 v0, 0x64\n    return v0\n.end method\n";
+        let dex = write::write(&[text::parse(src).unwrap()], *b"035").unwrap();
+        let ci = Dex::parse(&dex).unwrap().find_class("Lcom/ex/P;").unwrap();
+
+        // same-width immediate change: patched in place, same size, only the operand (and header
+        // checksum/signature) differ, and it decodes to the new value
+        let edited = text::parse(&src.replace("0x64", "0x65")).unwrap();
+        let patched = write::patch(&dex, &[(ci, &edited)])
+            .unwrap()
+            .expect("same-width edit should patch in place");
+        assert_eq!(patched.len(), dex.len());
+        let back = read::read(&patched).unwrap();
+        let lit = back[0].methods[0]
+            .code
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|it| match it {
+                model::Item::Ins(i) if i.op == 0x13 => Some(i.lit),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(lit, 0x65);
+
+        // adding an instruction changes the layout, so it must fall back (returns None)
+        let grew = text::parse(&src.replace("    return v0", "    nop\n    return v0")).unwrap();
+        assert!(write::patch(&dex, &[(ci, &grew)]).unwrap().is_none());
     }
 
     /// APKSCOPE_ROUNDTRIP=<dir of .apk> cargo test --release roundtrip_apks -- --ignored --nocapture
@@ -250,7 +404,11 @@ mod tests {
                 continue;
             }
             let mut z = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
-            let names: Vec<String> = z.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).filter(|n| n.starts_with("classes") && n.ends_with(".dex")).collect();
+            let names: Vec<String> = z
+                .file_names()
+                .filter_map(|n| n.ok().map(|n| n.into_owned()))
+                .filter(|n| n.starts_with("classes") && n.ends_with(".dex"))
+                .collect();
             let t = std::time::Instant::now();
             let (mut classes, mut bytes, mut orig) = (0, 0, 0);
             for n in names {
@@ -261,7 +419,11 @@ mod tests {
                 bytes += size;
                 orig += b.len();
             }
-            println!("{}: {classes} classes, {orig} -> {bytes} bytes, {:?}", path.file_name().unwrap().to_string_lossy(), t.elapsed());
+            println!(
+                "{}: {classes} classes, {orig} -> {bytes} bytes, {:?}",
+                path.file_name().unwrap().to_string_lossy(),
+                t.elapsed()
+            );
         }
     }
 }

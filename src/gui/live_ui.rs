@@ -72,9 +72,17 @@ impl LiveUi {
     }
 
     /// Hook `class` (descriptor or Java name), one method or all, from the code view.
-    pub fn hook(&mut self, st: &State, class: &str, method: Option<&str>) -> Result<String, String> {
+    pub fn hook(
+        &mut self,
+        st: &State,
+        class: &str,
+        method: Option<&str>,
+    ) -> Result<String, String> {
         self.open = true;
-        let live = self.live.as_mut().ok_or("start a live session first (LIVE panel, Spawn or Attach)")?;
+        let live = self
+            .live
+            .as_mut()
+            .ok_or("start a live session first (LIVE panel, Spawn or Attach)")?;
         let js = crate::re::frida(&st.dexes, class, method, true)?;
         let java = crate::dex::java_name(&crate::re::desc(class));
         let key = method.map_or(java.clone(), |m| format!("{java}#{m}"));
@@ -84,7 +92,10 @@ impl LiveUi {
 
     fn start(&mut self, target: String) {
         let (tx, rx) = mpsc::channel();
-        let (attach, device) = (self.attach, Some(self.device.trim().to_string()).filter(|d| !d.is_empty()));
+        let (attach, device) = (
+            self.attach,
+            Some(self.device.trim().to_string()).filter(|d| !d.is_empty()),
+        );
         std::thread::spawn(move || _ = tx.send(Live::start(&target, attach, device.as_deref())));
         self.starting = Some(rx);
         self.err = None;
@@ -95,7 +106,15 @@ impl LiveUi {
         if let Some(rx) = &self.starting {
             match rx.try_recv() {
                 Ok(Ok(l)) => {
-                    *self = LiveUi { open: true, live: Some(l), device: std::mem::take(&mut self.device), attach: self.attach, script: std::mem::take(&mut self.script), script_name: std::mem::take(&mut self.script_name), ..Default::default() };
+                    *self = LiveUi {
+                        open: true,
+                        live: Some(l),
+                        device: std::mem::take(&mut self.device),
+                        attach: self.attach,
+                        script: std::mem::take(&mut self.script),
+                        script_name: std::mem::take(&mut self.script_name),
+                        ..Default::default()
+                    };
                 }
                 Ok(Err(e)) => {
                     self.err = Some(e);
@@ -123,7 +142,11 @@ impl LiveUi {
         let Some(live) = &self.live else { return };
         let new: Vec<Value> = {
             let ev = live.events.lock().unwrap();
-            ev.list.iter().filter(|e| e["seq"].as_u64() >= Some(self.seen)).cloned().collect()
+            ev.list
+                .iter()
+                .filter(|e| e["seq"].as_u64() >= Some(self.seen))
+                .cloned()
+                .collect()
         };
         self.ingest(new, now);
     }
@@ -134,7 +157,10 @@ impl LiveUi {
             if let Some(r) = self.rate.back_mut() {
                 *r += 1;
             }
-            let (k, m) = (e["k"].as_str().unwrap_or("?").to_string(), e["m"].as_str().unwrap_or("").to_string());
+            let (k, m) = (
+                e["k"].as_str().unwrap_or("?").to_string(),
+                e["m"].as_str().unwrap_or("").to_string(),
+            );
             let tid = e["tid"].as_u64().unwrap_or(0);
             let d = self.depth.entry(tid).or_default();
             let shown = match k.as_str() {
@@ -171,7 +197,12 @@ impl LiveUi {
         if !self.paused {
             self.poll();
         }
-        ui.ctx().request_repaint_after(Duration::from_millis(if self.live.is_some() { 50 } else { 250 }));
+        ui.ctx()
+            .request_repaint_after(Duration::from_millis(if self.live.is_some() {
+                50
+            } else {
+                250
+            }));
         let mut out = None;
         ui.visuals_mut().override_text_color = Some(GREEN);
         ui.style_mut().override_font_id = Some(FontId::monospace(12.0));
@@ -191,11 +222,22 @@ impl LiveUi {
         if self.live.is_none() {
             let ok = self.starting.is_none() && !st.package.is_empty();
             ui.horizontal(|ui| {
-                if ui.add_enabled(ok, egui::Button::new(RichText::new("▶ Launch app").strong())).on_hover_text("Start the app on the device under Frida").clicked() {
+                if ui
+                    .add_enabled(
+                        ok,
+                        egui::Button::new(RichText::new("▶ Launch app").strong()),
+                    )
+                    .on_hover_text("Start the app on the device under Frida")
+                    .clicked()
+                {
                     self.attach = false;
                     self.start(st.package.clone());
                 }
-                if ui.add_enabled(ok, egui::Button::new("⇢ Attach")).on_hover_text("Join the app that is already running").clicked() {
+                if ui
+                    .add_enabled(ok, egui::Button::new("⇢ Attach"))
+                    .on_hover_text("Join the app that is already running")
+                    .clicked()
+                {
                     self.attach = true;
                     self.start(st.package.clone());
                 }
@@ -228,7 +270,11 @@ impl LiveUi {
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            for (t, name) in [(Tab::Activity, "Activity"), (Tab::Hooks, "Hooks"), (Tab::Script, "Script")] {
+            for (t, name) in [
+                (Tab::Activity, "Activity"),
+                (Tab::Hooks, "Hooks"),
+                (Tab::Script, "Script"),
+            ] {
                 ui.selectable_value(&mut self.tab, t, name);
             }
         });
@@ -238,7 +284,11 @@ impl LiveUi {
                 if let Some(a) = self.pixels(ui, 170.0) {
                     out = Some(a);
                 }
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter the stream").desired_width(f32::INFINITY));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .hint_text("filter the stream")
+                        .desired_width(f32::INFINITY),
+                );
                 if let Some(a) = self.stream(ui) {
                     out = Some(a);
                 }
@@ -248,27 +298,53 @@ impl LiveUi {
                 if keys.is_empty() {
                     ui.label(RichText::new("No hooks yet.\n\nRight-click a method or class in the code and pick Hook live: its calls, arguments and results show up under Activity.").color(DIM));
                 }
-                egui::ScrollArea::vertical().id_salt("live_hooks").show(ui, |ui| {
-                    for k in keys {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("✖").on_hover_text("Unhook").clicked() {
-                                if let Some(l) = &mut self.live {
-                                    let _ = l.unhook(&k);
+                egui::ScrollArea::vertical()
+                    .id_salt("live_hooks")
+                    .show(ui, |ui| {
+                        for k in keys {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✖").on_hover_text("Unhook").clicked() {
+                                    if let Some(l) = &mut self.live {
+                                        let _ = l.unhook(&k);
+                                    }
                                 }
-                            }
-                            let prefix = k.replace('#', ".");
-                            let calls: u64 = self.tiles.iter().filter(|(m, _)| m.starts_with(&prefix)).map(|(_, t)| t.calls).sum();
-                            ui.label(format!("{k}  ({calls})"));
-                        });
-                    }
-                });
+                                let prefix = k.replace('#', ".");
+                                let calls: u64 = self
+                                    .tiles
+                                    .iter()
+                                    .filter(|(m, _)| m.starts_with(&prefix))
+                                    .map(|(_, t)| t.calls)
+                                    .sum();
+                                ui.label(format!("{k}  ({calls})"));
+                            });
+                        }
+                    });
             }
             Tab::Script => {
-                ui.label(RichText::new("Your own Frida JS. __ev(kind, name, value) puts events in Activity.").color(DIM));
+                ui.label(
+                    RichText::new(
+                        "Your own Frida JS. __ev(kind, name, value) puts events in Activity.",
+                    )
+                    .color(DIM),
+                );
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.script_name).hint_text("name").desired_width(120.0));
-                    if ui.add_enabled(self.live.is_some() && !self.script.trim().is_empty(), egui::Button::new("Load")).clicked() {
-                        let name = if self.script_name.trim().is_empty() { "script".to_string() } else { self.script_name.trim().to_string() };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.script_name)
+                            .hint_text("name")
+                            .desired_width(120.0),
+                    );
+                    if ui
+                        .add_enabled(
+                            self.live.is_some() && !self.script.trim().is_empty(),
+                            egui::Button::new("Load"),
+                        )
+                        .clicked()
+                    {
+                        let name = if self.script_name.trim().is_empty() {
+                            "script".to_string()
+                        } else {
+                            self.script_name.trim().to_string()
+                        };
                         if let Some(l) = &mut self.live {
                             if let Err(e) = l.hook(&name, &self.script, true) {
                                 self.err = Some(e);
@@ -276,9 +352,17 @@ impl LiveUi {
                         }
                     }
                 });
-                egui::ScrollArea::vertical().id_salt("live_js").show(ui, |ui| {
-                    ui.add(egui::TextEdit::multiline(&mut self.script).code_editor().desired_rows(16).desired_width(f32::INFINITY).hint_text("Java.perform(() => { ... })"));
-                });
+                egui::ScrollArea::vertical()
+                    .id_salt("live_js")
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.script)
+                                .code_editor()
+                                .desired_rows(16)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Java.perform(() => { ... })"),
+                        );
+                    });
             }
         }
         out
@@ -287,28 +371,51 @@ impl LiveUi {
     /// The event stream, indented by call depth; a click opens the method.
     fn stream(&mut self, ui: &mut egui::Ui) -> Option<Act> {
         let mut out = None;
-        let rows: Vec<&Row> = self.rows.iter().filter(|r| self.filter.is_empty() || r.2.contains(&self.filter) || r.3.contains(&self.filter)).collect();
+        let rows: Vec<&Row> = self
+            .rows
+            .iter()
+            .filter(|r| {
+                self.filter.is_empty() || r.2.contains(&self.filter) || r.3.contains(&self.filter)
+            })
+            .collect();
         if rows.is_empty() {
-            ui.label(RichText::new("Calls of hooked methods appear here as they happen.").color(DIM));
+            ui.label(
+                RichText::new("Calls of hooked methods appear here as they happen.").color(DIM),
+            );
         }
-        egui::ScrollArea::vertical().id_salt("live_stream").stick_to_bottom(true).auto_shrink(false).show_rows(ui, 15.0, rows.len(), |ui, range| {
-            for (d, k, m, v) in &rows[range] {
-                let (glyph, c) = match k.as_str() {
-                    "call" => ("→", GREEN),
-                    "ret" => ("←", CYAN),
-                    "throw" => ("✖", RED),
-                    "error" | "stderr" => ("!", AMBER),
-                    _ => ("·", DIM),
-                };
-                let short = m.rsplit('.').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(".");
-                let text = format!("{}{glyph} {short} {v}", "│ ".repeat(*d));
-                let r = ui.add(egui::Label::new(RichText::new(text).color(c)).truncate().sense(Sense::click()));
-                if r.clicked() {
-                    out = open_method(m);
+        egui::ScrollArea::vertical()
+            .id_salt("live_stream")
+            .stick_to_bottom(true)
+            .auto_shrink(false)
+            .show_rows(ui, 15.0, rows.len(), |ui, range| {
+                for (d, k, m, v) in &rows[range] {
+                    let (glyph, c) = match k.as_str() {
+                        "call" => ("→", GREEN),
+                        "ret" => ("←", CYAN),
+                        "throw" => ("✖", RED),
+                        "error" | "stderr" => ("!", AMBER),
+                        _ => ("·", DIM),
+                    };
+                    let short = m
+                        .rsplit('.')
+                        .take(2)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let text = format!("{}{glyph} {short} {v}", "│ ".repeat(*d));
+                    let r = ui.add(
+                        egui::Label::new(RichText::new(text).color(c))
+                            .truncate()
+                            .sense(Sense::click()),
+                    );
+                    if r.clicked() {
+                        out = open_method(m);
+                    }
+                    r.on_hover_text(format!("{m}\n{v}\n(click: open in code)"));
                 }
-                r.on_hover_text(format!("{m}\n{v}\n(click: open in code)"));
-            }
-        });
+            });
         out
     }
 
@@ -327,38 +434,76 @@ impl LiveUi {
             y += 3.0;
         }
         let strip = 54.0;
-        let board = egui::Rect::from_min_max(rect.min + vec2(6.0, 6.0), pos2(rect.right() - 6.0, rect.bottom() - strip - 6.0));
+        let board = egui::Rect::from_min_max(
+            rect.min + vec2(6.0, 6.0),
+            pos2(rect.right() - 6.0, rect.bottom() - strip - 6.0),
+        );
         let now = Instant::now();
         let cell = 18.0;
         let per = ((board.width() / (cell + 4.0)) as usize).max(1);
-        let max_calls = self.tiles.values().map(|t| t.calls).max().unwrap_or(1).max(1) as f32;
+        let max_calls = self
+            .tiles
+            .values()
+            .map(|t| t.calls)
+            .max()
+            .unwrap_or(1)
+            .max(1) as f32;
         if self.tiles.is_empty() {
-            p.text(board.center(), egui::Align2::CENTER_CENTER, "[ NO SIGNAL ]", FontId::monospace(14.0), DIM);
+            p.text(
+                board.center(),
+                egui::Align2::CENTER_CENTER,
+                "[ NO SIGNAL ]",
+                FontId::monospace(14.0),
+                DIM,
+            );
         }
         for (i, (m, t)) in self.tiles.iter().enumerate() {
-            let at = board.min + vec2((i % per) as f32 * (cell + 4.0), (i / per) as f32 * (cell + 4.0));
+            let at = board.min
+                + vec2(
+                    (i % per) as f32 * (cell + 4.0),
+                    (i / per) as f32 * (cell + 4.0),
+                );
             let r = egui::Rect::from_min_size(at, vec2(cell, cell));
             if r.bottom() > board.bottom() {
                 break;
             }
-            let heat = t.last.map_or(0.0, |l| (1.0 - (now - l).as_secs_f32() / 1.5).max(0.0));
+            let heat = t
+                .last
+                .map_or(0.0, |l| (1.0 - (now - l).as_secs_f32() / 1.5).max(0.0));
             let base = if t.threw { RED } else { GREEN };
             let warm = 0.15 + 0.35 * (t.calls as f32).ln_1p() / max_calls.ln_1p().max(1.0);
-            p.rect_filled(r, CornerRadius::ZERO, base.gamma_multiply((warm + heat).min(1.0)));
+            p.rect_filled(
+                r,
+                CornerRadius::ZERO,
+                base.gamma_multiply((warm + heat).min(1.0)),
+            );
             // the inner pixel blinks while hot
             if heat > 0.0 {
-                p.rect_filled(r.shrink(6.0), CornerRadius::ZERO, Color32::WHITE.gamma_multiply(heat));
+                p.rect_filled(
+                    r.shrink(6.0),
+                    CornerRadius::ZERO,
+                    Color32::WHITE.gamma_multiply(heat),
+                );
             }
             let resp = ui.interact(r, ui.id().with(("tile", i)), Sense::click());
             if resp.clicked() {
                 out = open_method(m);
             }
-            resp.on_hover_text(format!("{m}\n{} calls, {} throws\n(click: open in code)", t.calls, t.throws));
+            resp.on_hover_text(format!(
+                "{m}\n{} calls, {} throws\n(click: open in code)",
+                t.calls, t.throws
+            ));
         }
         // events-per-second bars, in 4-px pixel blocks
         let base = rect.bottom() - 6.0;
         let top = base - strip + 10.0;
-        p.text(pos2(rect.left() + 6.0, top - 8.0), egui::Align2::LEFT_TOP, format!("EV/S {}", self.rate.back().copied().unwrap_or(0)), FontId::monospace(10.0), DIM);
+        p.text(
+            pos2(rect.left() + 6.0, top - 8.0),
+            egui::Align2::LEFT_TOP,
+            format!("EV/S {}", self.rate.back().copied().unwrap_or(0)),
+            FontId::monospace(10.0),
+            DIM,
+        );
         let peak = self.rate.iter().copied().max().unwrap_or(1).max(1) as f32;
         let bw = ((rect.width() - 12.0) / SECS as f32).floor().max(2.0);
         for (i, &n) in self.rate.iter().enumerate() {
@@ -366,7 +511,11 @@ impl LiveUi {
             let blocks = ((n as f32 / peak) * ((base - top) / 4.0)).ceil() as usize;
             for b in 0..blocks {
                 let y = base - (b as f32 + 1.0) * 4.0;
-                p.rect_filled(egui::Rect::from_min_size(pos2(x, y), vec2(bw - 1.0, 3.0)), CornerRadius::ZERO, if b > 8 { AMBER } else { GREEN });
+                p.rect_filled(
+                    egui::Rect::from_min_size(pos2(x, y), vec2(bw - 1.0, 3.0)),
+                    CornerRadius::ZERO,
+                    if b > 8 { AMBER } else { GREEN },
+                );
             }
         }
         out
@@ -377,8 +526,18 @@ impl LiveUi {
 fn open_method(m: &str) -> Option<Act> {
     let (class, name) = m.rsplit_once('.')?;
     let top = class.split('$').next().unwrap_or(class).to_string();
-    let name = if name == "<init>" { class.rsplit(['.', '$']).next().unwrap_or(name).to_string() } else { name.to_string() };
-    Some(Act::OpenClass(top, Some(super::Target { decl: None, then: Some(format!(" {name}(")) })))
+    let name = if name == "<init>" {
+        class.rsplit(['.', '$']).next().unwrap_or(name).to_string()
+    } else {
+        name.to_string()
+    };
+    Some(Act::OpenClass(
+        top,
+        Some(super::Target {
+            decl: None,
+            then: Some(format!(" {name}(")),
+        }),
+    ))
 }
 
 #[cfg(test)]
@@ -388,12 +547,20 @@ mod tests {
     #[test]
     fn stream_depth_and_tiles() {
         let mut ui = LiveUi::default();
-        let ev: Vec<Value> = [r#"{"k":"call","m":"a.B.f","v":[],"tid":1,"seq":0}"#, r#"{"k":"call","m":"a.B.g","v":["1"],"tid":1,"seq":1}"#, r#"{"k":"ret","m":"a.B.g","v":"2","tid":1,"seq":2}"#, r#"{"k":"throw","m":"a.B.f","v":"E","tid":1,"seq":3}"#]
-            .iter()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let ev: Vec<Value> = [
+            r#"{"k":"call","m":"a.B.f","v":[],"tid":1,"seq":0}"#,
+            r#"{"k":"call","m":"a.B.g","v":["1"],"tid":1,"seq":1}"#,
+            r#"{"k":"ret","m":"a.B.g","v":"2","tid":1,"seq":2}"#,
+            r#"{"k":"throw","m":"a.B.f","v":"E","tid":1,"seq":3}"#,
+        ]
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
         ui.ingest(ev, Instant::now());
-        assert_eq!(ui.rows.iter().map(|r| r.0).collect::<Vec<_>>(), [0, 1, 1, 0]);
+        assert_eq!(
+            ui.rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+            [0, 1, 1, 0]
+        );
         assert_eq!(ui.seen, 4);
         assert!(ui.tiles["a.B.f"].threw && ui.tiles["a.B.g"].calls == 1);
         assert!(matches!(open_method("a.b.C$D.run"), Some(Act::OpenClass(c, _)) if c == "a.b.C"));

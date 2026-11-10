@@ -3,14 +3,47 @@
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Fmt {
-    F10x, F12x, F11n, F11x, F10t, F20t, F22x, F21t, F21s, F21h, F21c, F23x, F22b, F22t, F22s,
-    F22c, F30t, F32x, F31i, F31t, F31c, F35c, F3rc, F45cc, F4rcc, F51l,
+    F10x,
+    F12x,
+    F11n,
+    F11x,
+    F10t,
+    F20t,
+    F22x,
+    F21t,
+    F21s,
+    F21h,
+    F21c,
+    F23x,
+    F22b,
+    F22t,
+    F22s,
+    F22c,
+    F30t,
+    F32x,
+    F31i,
+    F31t,
+    F31c,
+    F35c,
+    F3rc,
+    F45cc,
+    F4rcc,
+    F51l,
 }
 use Fmt::*;
 
 /// What `Insn::idx` points into.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Ref { None, String, Type, Field, Method, Proto, CallSite, MethodHandle }
+pub enum Ref {
+    None,
+    String,
+    Type,
+    Field,
+    Method,
+    Proto,
+    CallSite,
+    MethodHandle,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Insn {
@@ -28,13 +61,19 @@ pub struct Insn {
     pub idx2: u32,
 }
 
-const BINOPS: [&str; 11] = ["add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr"];
-const KINDS: [&str; 7] = ["", "-wide", "-object", "-boolean", "-byte", "-char", "-short"];
+const BINOPS: [&str; 11] = [
+    "add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr",
+];
+const KINDS: [&str; 7] = [
+    "", "-wide", "-object", "-boolean", "-byte", "-char", "-short",
+];
 
 /// mnemonic, format, index kind. None = unused opcode. Table built once: decoding is hot.
 pub fn info(op: u8) -> Option<(&'static str, Fmt, Ref)> {
     static TABLE: std::sync::OnceLock<Vec<Option<(String, Fmt, Ref)>>> = std::sync::OnceLock::new();
-    TABLE.get_or_init(|| (0..=255u8).map(build_info).collect())[op as usize].as_ref().map(|(n, f, r)| (n.as_str(), *f, *r))
+    TABLE.get_or_init(|| (0..=255u8).map(build_info).collect())[op as usize]
+        .as_ref()
+        .map(|(n, f, r)| (n.as_str(), *f, *r))
 }
 
 fn build_info(op: u8) -> Option<(String, Fmt, Ref)> {
@@ -86,32 +125,92 @@ fn build_info(op: u8) -> Option<(String, Fmt, Ref)> {
         0x2a => s("goto/32", F30t, n),
         0x2b => s("packed-switch", F31t, n),
         0x2c => s("sparse-switch", F31t, n),
-        0x2d..=0x31 => s(["cmpl-float", "cmpg-float", "cmpl-double", "cmpg-double", "cmp-long"][(op - 0x2d) as usize], F23x, n),
-        0x32..=0x37 => s(&format!("if-{}", ["eq", "ne", "lt", "ge", "gt", "le"][(op - 0x32) as usize]), F22t, n),
-        0x38..=0x3d => s(&format!("if-{}z", ["eq", "ne", "lt", "ge", "gt", "le"][(op - 0x38) as usize]), F21t, n),
+        0x2d..=0x31 => s(
+            [
+                "cmpl-float",
+                "cmpg-float",
+                "cmpl-double",
+                "cmpg-double",
+                "cmp-long",
+            ][(op - 0x2d) as usize],
+            F23x,
+            n,
+        ),
+        0x32..=0x37 => s(
+            &format!(
+                "if-{}",
+                ["eq", "ne", "lt", "ge", "gt", "le"][(op - 0x32) as usize]
+            ),
+            F22t,
+            n,
+        ),
+        0x38..=0x3d => s(
+            &format!(
+                "if-{}z",
+                ["eq", "ne", "lt", "ge", "gt", "le"][(op - 0x38) as usize]
+            ),
+            F21t,
+            n,
+        ),
         0x44..=0x51 => {
             let i = (op - 0x44) as usize;
-            s(&format!("{}{}", ["aget", "aput"][i / 7], KINDS[i % 7]), F23x, n)
+            s(
+                &format!("{}{}", ["aget", "aput"][i / 7], KINDS[i % 7]),
+                F23x,
+                n,
+            )
         }
         0x52..=0x5f => {
             let i = (op - 0x52) as usize;
-            s(&format!("{}{}", ["iget", "iput"][i / 7], KINDS[i % 7]), F22c, Ref::Field)
+            s(
+                &format!("{}{}", ["iget", "iput"][i / 7], KINDS[i % 7]),
+                F22c,
+                Ref::Field,
+            )
         }
         0x60..=0x6d => {
             let i = (op - 0x60) as usize;
-            s(&format!("{}{}", ["sget", "sput"][i / 7], KINDS[i % 7]), F21c, Ref::Field)
+            s(
+                &format!("{}{}", ["sget", "sput"][i / 7], KINDS[i % 7]),
+                F21c,
+                Ref::Field,
+            )
         }
-        0x6e..=0x72 => s(&format!("invoke-{}", INVOKES[(op - 0x6e) as usize]), F35c, Ref::Method),
-        0x74..=0x78 => s(&format!("invoke-{}/range", INVOKES[(op - 0x74) as usize]), F3rc, Ref::Method),
+        0x6e..=0x72 => s(
+            &format!("invoke-{}", INVOKES[(op - 0x6e) as usize]),
+            F35c,
+            Ref::Method,
+        ),
+        0x74..=0x78 => s(
+            &format!("invoke-{}/range", INVOKES[(op - 0x74) as usize]),
+            F3rc,
+            Ref::Method,
+        ),
         0x7b..=0x8f => s(UNOPS[(op - 0x7b) as usize], F12x, n),
         0x90..=0xcf => {
             let i = ((op - 0x90) % 32) as usize;
-            let (name, ty) = if i < 22 { (BINOPS[i % 11], ["int", "long"][i / 11]) } else { (BINOPS[(i - 22) % 5], ["float", "double"][(i - 22) / 5]) };
+            let (name, ty) = if i < 22 {
+                (BINOPS[i % 11], ["int", "long"][i / 11])
+            } else {
+                (BINOPS[(i - 22) % 5], ["float", "double"][(i - 22) / 5])
+            };
             let suffix = if op >= 0xb0 { "/2addr" } else { "" };
-            s(&format!("{name}-{ty}{suffix}"), if op >= 0xb0 { F12x } else { F23x }, n)
+            s(
+                &format!("{name}-{ty}{suffix}"),
+                if op >= 0xb0 { F12x } else { F23x },
+                n,
+            )
         }
-        0xd0..=0xd7 => s(&format!("{}-int/lit16", LIT_OPS[(op - 0xd0) as usize]), F22s, n),
-        0xd8..=0xe2 => s(&format!("{}-int/lit8", LIT_OPS[(op - 0xd8) as usize]), F22b, n),
+        0xd0..=0xd7 => s(
+            &format!("{}-int/lit16", LIT_OPS[(op - 0xd0) as usize]),
+            F22s,
+            n,
+        ),
+        0xd8..=0xe2 => s(
+            &format!("{}-int/lit8", LIT_OPS[(op - 0xd8) as usize]),
+            F22b,
+            n,
+        ),
         0xfa => s("invoke-polymorphic", F45cc, Ref::Method),
         0xfb => s("invoke-polymorphic/range", F4rcc, Ref::Method),
         0xfc => s("invoke-custom", F35c, Ref::CallSite),
@@ -123,11 +222,31 @@ fn build_info(op: u8) -> Option<(String, Fmt, Ref)> {
 }
 
 const INVOKES: [&str; 5] = ["virtual", "super", "direct", "static", "interface"];
-const LIT_OPS: [&str; 11] = ["add", "rsub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr"];
+const LIT_OPS: [&str; 11] = [
+    "add", "rsub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr",
+];
 const UNOPS: [&str; 21] = [
-    "neg-int", "not-int", "neg-long", "not-long", "neg-float", "neg-double", "int-to-long", "int-to-float",
-    "int-to-double", "long-to-int", "long-to-float", "long-to-double", "float-to-int", "float-to-long",
-    "float-to-double", "double-to-int", "double-to-long", "double-to-float", "int-to-byte", "int-to-char", "int-to-short",
+    "neg-int",
+    "not-int",
+    "neg-long",
+    "not-long",
+    "neg-float",
+    "neg-double",
+    "int-to-long",
+    "int-to-float",
+    "int-to-double",
+    "long-to-int",
+    "long-to-float",
+    "long-to-double",
+    "float-to-int",
+    "float-to-long",
+    "float-to-double",
+    "double-to-int",
+    "double-to-long",
+    "double-to-float",
+    "int-to-byte",
+    "int-to-char",
+    "int-to-short",
 ];
 
 fn size(f: Fmt) -> usize {
@@ -156,15 +275,33 @@ pub fn width(f: Fmt) -> usize {
 pub fn for_each_ref(insns: &[u8], mut f: impl FnMut(Ref, u32)) {
     static TABLE: std::sync::OnceLock<Vec<(u8, Ref, bool)>> = std::sync::OnceLock::new();
     // (width, ref kind, 32-bit index); width 0 = unused opcode
-    let table = TABLE.get_or_init(|| (0..=255u8).map(|op| info(op).map_or((0, Ref::None, false), |(_, fm, r)| (width(fm) as u8, r, fm == F31c))).collect());
-    let unit = |pc: usize| insns.get(pc * 2..pc * 2 + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let table = TABLE.get_or_init(|| {
+        (0..=255u8)
+            .map(|op| {
+                info(op).map_or((0, Ref::None, false), |(_, fm, r)| {
+                    (width(fm) as u8, r, fm == F31c)
+                })
+            })
+            .collect()
+    });
+    let unit = |pc: usize| {
+        insns
+            .get(pc * 2..pc * 2 + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
     let n = insns.len() / 2;
     let mut pc = 0;
     while pc < n {
         let Some(w0) = unit(pc) else { return };
         let op = w0 & 0xff;
         if op == 0 && w0 != 0 {
-            let (Some(a), Some(b), Some(c)) = (unit(pc + 1), unit(pc + 2).or(Some(0)), unit(pc + 3).or(Some(0))) else { return };
+            let (Some(a), Some(b), Some(c)) = (
+                unit(pc + 1),
+                unit(pc + 2).or(Some(0)),
+                unit(pc + 3).or(Some(0)),
+            ) else {
+                return;
+            };
             pc += match w0 {
                 0x0100 => 4 + a * 2,
                 0x0200 => 2 + a * 4,
@@ -179,7 +316,11 @@ pub fn for_each_ref(insns: &[u8], mut f: impl FnMut(Ref, u32)) {
         }
         if r != Ref::None {
             let Some(lo) = unit(pc + 1) else { return };
-            let idx = if wide { lo | unit(pc + 2).unwrap_or(0) << 16 } else { lo };
+            let idx = if wide {
+                lo | unit(pc + 2).unwrap_or(0) << 16
+            } else {
+                lo
+            };
             f(r, idx as u32);
         }
         pc += w as usize;
@@ -189,11 +330,21 @@ pub fn for_each_ref(insns: &[u8], mut f: impl FnMut(Ref, u32)) {
 /// Decode a whole method body. `insns` is little-endian code units.
 /// Switch / array payload pseudo-instructions are skipped, not returned.
 pub fn decode(insns: &[u8]) -> Result<Vec<Insn>, String> {
-    let w: Vec<u16> = insns.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let w: Vec<u16> = insns
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     let mut out = Vec::with_capacity(w.len() / 2);
     let mut pc = 0;
     while pc < w.len() {
-        let u = |i: usize| w.get(pc + i).copied().map(u32::from).ok_or_else(|| format!("truncated insn at {pc:#x}"));
+        let u = |i: usize| {
+            w.get(pc + i)
+                .copied()
+                .map(u32::from)
+                .ok_or_else(|| format!("truncated insn at {pc:#x}"))
+        };
         let w0 = u(0)?;
         let op = (w0 & 0xff) as u8;
         // payloads hide behind nop with a non-zero high byte
@@ -207,7 +358,16 @@ pub fn decode(insns: &[u8]) -> Result<Vec<Insn>, String> {
             continue;
         }
         let (_, f, _) = info(op).ok_or_else(|| format!("unused opcode {op:#x} at {pc:#x}"))?;
-        let mut i = Insn { off: pc as u32, op, regs: [0; 5], nregs: 0, range: false, lit: 0, idx: 0, idx2: 0 };
+        let mut i = Insn {
+            off: pc as u32,
+            op,
+            regs: [0; 5],
+            nregs: 0,
+            range: false,
+            lit: 0,
+            idx: 0,
+            idx2: 0,
+        };
         let a8 = (w0 >> 8) as u16;
         let (a4, b4) = (((w0 >> 8) & 0xf) as u16, (w0 >> 12) as u16);
         let mut set = |r: &[u16]| {
@@ -217,39 +377,79 @@ pub fn decode(insns: &[u8]) -> Result<Vec<Insn>, String> {
         match f {
             F10x => {}
             F12x => set(&[a4, b4]),
-            F11n => { set(&[a4]); i.lit = ((w0 as i32) << 16 >> 28) as i64 }
+            F11n => {
+                set(&[a4]);
+                i.lit = ((w0 as i32) << 16 >> 28) as i64
+            }
             F11x => set(&[a8]),
             F10t => i.lit = (w0 >> 8) as u8 as i8 as i64,
             F20t => i.lit = u(1)? as u16 as i16 as i64,
             F22x => set(&[a8, u(1)? as u16]),
-            F21t | F21s => { set(&[a8]); i.lit = u(1)? as u16 as i16 as i64 }
-            F21h => { set(&[a8]); i.lit = (u(1)? as u16 as i16 as i64) << if op == 0x19 { 48 } else { 16 } }
-            F21c => { set(&[a8]); i.idx = u(1)? }
-            F23x => { let x = u(1)? as u16; set(&[a8, x & 0xff, x >> 8]) }
-            F22b => { let x = u(1)?; set(&[a8, (x & 0xff) as u16]); i.lit = (x >> 8) as u8 as i8 as i64 }
-            F22t | F22s => { set(&[a4, b4]); i.lit = u(1)? as u16 as i16 as i64 }
-            F22c => { set(&[a4, b4]); i.idx = u(1)? }
+            F21t | F21s => {
+                set(&[a8]);
+                i.lit = u(1)? as u16 as i16 as i64
+            }
+            F21h => {
+                set(&[a8]);
+                i.lit = (u(1)? as u16 as i16 as i64) << if op == 0x19 { 48 } else { 16 }
+            }
+            F21c => {
+                set(&[a8]);
+                i.idx = u(1)?
+            }
+            F23x => {
+                let x = u(1)? as u16;
+                set(&[a8, x & 0xff, x >> 8])
+            }
+            F22b => {
+                let x = u(1)?;
+                set(&[a8, (x & 0xff) as u16]);
+                i.lit = (x >> 8) as u8 as i8 as i64
+            }
+            F22t | F22s => {
+                set(&[a4, b4]);
+                i.lit = u(1)? as u16 as i16 as i64
+            }
+            F22c => {
+                set(&[a4, b4]);
+                i.idx = u(1)?
+            }
             F30t => i.lit = (u(1)? | u(2)? << 16) as i32 as i64,
             F32x => set(&[u(1)? as u16, u(2)? as u16]),
-            F31i | F31t => { set(&[a8]); i.lit = (u(1)? | u(2)? << 16) as i32 as i64 }
-            F31c => { set(&[a8]); i.idx = u(1)? | u(2)? << 16 }
+            F31i | F31t => {
+                set(&[a8]);
+                i.lit = (u(1)? | u(2)? << 16) as i32 as i64
+            }
+            F31c => {
+                set(&[a8]);
+                i.idx = u(1)? | u(2)? << 16
+            }
             F35c | F45cc => {
                 let x = u(2)? as u16;
                 let all = [x & 0xf, (x >> 4) & 0xf, (x >> 8) & 0xf, x >> 12, a4];
                 let n = b4 as usize;
-                if n > 5 { return Err(format!("bad arg count at {pc:#x}")); }
+                if n > 5 {
+                    return Err(format!("bad arg count at {pc:#x}"));
+                }
                 set(&all[..n]);
                 i.idx = u(1)?;
-                if f == F45cc { i.idx2 = u(3)? }
+                if f == F45cc {
+                    i.idx2 = u(3)?
+                }
             }
             F3rc | F4rcc => {
                 i.regs[0] = u(2)? as u16;
                 i.nregs = a8 as u8;
                 i.range = true;
                 i.idx = u(1)?;
-                if f == F4rcc { i.idx2 = u(3)? }
+                if f == F4rcc {
+                    i.idx2 = u(3)?
+                }
             }
-            F51l => { set(&[a8]); i.lit = (u(1)? | u(2)? << 16) as i64 | ((u(3)? | u(4)? << 16) as i64) << 32 }
+            F51l => {
+                set(&[a8]);
+                i.lit = (u(1)? | u(2)? << 16) as i64 | ((u(3)? | u(4)? << 16) as i64) << 32
+            }
         }
         out.push(i);
         pc += size(f);
@@ -268,11 +468,16 @@ mod tests {
     #[test]
     fn decodes_common_forms() {
         // const/4 v1, -1 ; invoke-virtual {v1, v2}, meth@7 ; if-eqz v0, -2 ; packed-switch payload ; return-void
-        let code = enc(&[0xf112, 0x206e, 0x0007, 0x0021, 0x0038, 0xfffe, 0x0100, 0x0001, 0, 0, 0, 0, 0x000e]);
+        let code = enc(&[
+            0xf112, 0x206e, 0x0007, 0x0021, 0x0038, 0xfffe, 0x0100, 0x0001, 0, 0, 0, 0, 0x000e,
+        ]);
         let v = decode(&code).unwrap();
         assert_eq!(v.len(), 4);
         assert_eq!((v[0].op, v[0].regs[0], v[0].lit), (0x12, 1, -1));
-        assert_eq!((v[1].nregs, &v[1].regs[..2], v[1].idx), (2, &[1u16, 2][..], 7));
+        assert_eq!(
+            (v[1].nregs, &v[1].regs[..2], v[1].idx),
+            (2, &[1u16, 2][..], 7)
+        );
         assert_eq!((v[2].off, v[2].lit), (4, -2));
         assert_eq!((v[3].op, v[3].off), (0x0e, 12));
     }

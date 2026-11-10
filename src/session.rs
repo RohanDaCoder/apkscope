@@ -26,6 +26,7 @@ pub fn threads() -> usize {
 }
 
 /// Resident memory of this process, in bytes.
+#[cfg(feature = "gui")]
 pub fn memory_used() -> Option<u64> {
     #[cfg(windows)]
     {
@@ -47,7 +48,10 @@ pub fn memory_used() -> Option<u64> {
             fn GetCurrentProcess() -> isize;
             fn K32GetProcessMemoryInfo(p: isize, c: *mut Counters, cb: u32) -> i32;
         }
-        let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, ..Default::default() };
+        let mut c = Counters {
+            cb: std::mem::size_of::<Counters>() as u32,
+            ..Default::default()
+        };
         // safety: c is a correctly sized PROCESS_MEMORY_COUNTERS that outlives the call
         let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
         (ok != 0).then_some(c.ws as u64)
@@ -55,10 +59,13 @@ pub fn memory_used() -> Option<u64> {
     #[cfg(not(windows))]
     {
         let s = std::fs::read_to_string("/proc/self/statm").ok()?;
-        s.split_whitespace().nth(1)?.parse::<u64>().ok().map(|p| p * 4096)
+        s.split_whitespace()
+            .nth(1)?
+            .parse::<u64>()
+            .ok()
+            .map(|p| p * 4096)
     }
 }
-
 
 /// Where a top-level class comes from.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -73,14 +80,76 @@ pub enum Origin {
 
 /// Package prefixes of common Android SDKs and libraries (Java names, dot-terminated).
 const LIBRARIES: &[&str] = &[
-    "android.", "androidx.", "com.android.", "dalvik.", "java.", "javax.", "kotlin.", "kotlinx.", "org.jetbrains.", "org.intellij.",
-    "com.google.", "com.squareup.", "okhttp3.", "okio.", "retrofit2.", "io.reactivex.", "rx.", "io.grpc.", "com.facebook.", "com.bumptech.",
-    "dagger.", "hilt_aggregated_deps.", "com.fasterxml.", "org.json.", "org.apache.", "org.slf4j.", "ch.qos.", "com.airbnb.", "io.sentry.",
-    "com.crashlytics.", "io.fabric.", "com.adjust.", "com.appsflyer.", "com.unity3d.", "com.applovin.", "com.ironsource.", "com.mopub.",
-    "com.chartboost.", "com.vungle.", "com.inmobi.", "com.amazon.", "com.microsoft.", "org.chromium.", "io.flutter.", "com.facebook.react.",
-    "org.greenrobot.", "net.sqlcipher.", "org.bouncycastle.", "org.conscrypt.", "com.tencent.", "com.huawei.", "io.branch.", "com.onesignal.",
-    "com.revenuecat.", "io.realm.", "org.koin.", "coil.", "com.github.", "io.ktor.", "org.reactivestreams.", "com.jakewharton.", "timber.",
-    "io.opentelemetry.", "com.braze.", "com.mixpanel.", "com.segment.", "com.stripe.", "com.paypal.", "com.yandex.", "com.bytedance.sdk.",
+    "android.",
+    "androidx.",
+    "com.android.",
+    "dalvik.",
+    "java.",
+    "javax.",
+    "kotlin.",
+    "kotlinx.",
+    "org.jetbrains.",
+    "org.intellij.",
+    "com.google.",
+    "com.squareup.",
+    "okhttp3.",
+    "okio.",
+    "retrofit2.",
+    "io.reactivex.",
+    "rx.",
+    "io.grpc.",
+    "com.facebook.",
+    "com.bumptech.",
+    "dagger.",
+    "hilt_aggregated_deps.",
+    "com.fasterxml.",
+    "org.json.",
+    "org.apache.",
+    "org.slf4j.",
+    "ch.qos.",
+    "com.airbnb.",
+    "io.sentry.",
+    "com.crashlytics.",
+    "io.fabric.",
+    "com.adjust.",
+    "com.appsflyer.",
+    "com.unity3d.",
+    "com.applovin.",
+    "com.ironsource.",
+    "com.mopub.",
+    "com.chartboost.",
+    "com.vungle.",
+    "com.inmobi.",
+    "com.amazon.",
+    "com.microsoft.",
+    "org.chromium.",
+    "io.flutter.",
+    "com.facebook.react.",
+    "org.greenrobot.",
+    "net.sqlcipher.",
+    "org.bouncycastle.",
+    "org.conscrypt.",
+    "com.tencent.",
+    "com.huawei.",
+    "io.branch.",
+    "com.onesignal.",
+    "com.revenuecat.",
+    "io.realm.",
+    "org.koin.",
+    "coil.",
+    "com.github.",
+    "io.ktor.",
+    "org.reactivestreams.",
+    "com.jakewharton.",
+    "timber.",
+    "io.opentelemetry.",
+    "com.braze.",
+    "com.mixpanel.",
+    "com.segment.",
+    "com.stripe.",
+    "com.paypal.",
+    "com.yandex.",
+    "com.bytedance.sdk.",
 ];
 
 /// Origin of a class by its (displayed) Java name. App code is the manifest package's
@@ -91,7 +160,11 @@ pub fn origin(name: &str, package: &str) -> Origin {
         return Origin::Library;
     }
     let parts: Vec<&str> = package.split('.').collect();
-    let root = if parts.len() >= 3 { parts[..2].join(".") } else { package.to_string() };
+    let root = if parts.len() >= 3 {
+        parts[..2].join(".")
+    } else {
+        package.to_string()
+    };
     if !root.is_empty() && name.starts_with(&root) && name[root.len()..].starts_with('.') {
         Origin::App
     } else {
@@ -132,26 +205,45 @@ pub const INPUTS: [&str; 4] = ["apk", "apks", "xapk", "dex"];
 /// `base.apk`, a bare `.dex` is wrapped in a minimal APK. Both land in the cache folder.
 pub fn prepare(path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
-    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let stem = std::path::Path::new(path).file_stem().map_or("input".into(), |s| s.to_string_lossy().into_owned());
+    let ext = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .map_or("input".into(), |s| s.to_string_lossy().into_owned());
     let dir = cache::root().join("inputs");
     match ext.as_str() {
         "apk" => Ok(path.to_string()),
         "apks" | "xapk" => {
             let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("{path}: {e}"))?;
-            let names: Vec<String> = zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).filter(|n| n.ends_with(".apk")).collect();
+            let names: Vec<String> = zip
+                .file_names()
+                .filter_map(|n| n.ok().map(|n| n.into_owned()))
+                .filter(|n| n.ends_with(".apk"))
+                .collect();
             // the base split holds the code; fall back to the largest APK inside
-            let base = names.iter().find(|n| n.rsplit('/').next() == Some("base.apk")).cloned().or_else(|| {
-                names.iter().max_by_key(|n| zip.by_name(n).map(|e| e.size()).unwrap_or(0)).cloned()
-            });
+            let base = names
+                .iter()
+                .find(|n| n.rsplit('/').next() == Some("base.apk"))
+                .cloned()
+                .or_else(|| {
+                    names
+                        .iter()
+                        .max_by_key(|n| zip.by_name(n).map(|e| e.size()).unwrap_or(0))
+                        .cloned()
+                });
             let base = base.ok_or("no APK inside this bundle")?;
             let size = zip.by_name(&base).map_err(|e| e.to_string())?.size();
             let out = dir.join(format!("{stem}-{size:x}-base.apk"));
             if !out.exists() {
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                 let mut data = Vec::new();
-                zip.by_name(&base).map_err(|e| e.to_string())?.read_to_end(&mut data).map_err(|e| e.to_string())?;
+                zip.by_name(&base)
+                    .map_err(|e| e.to_string())?
+                    .read_to_end(&mut data)
+                    .map_err(|e| e.to_string())?;
                 std::fs::write(&out, data).map_err(|e| e.to_string())?;
             }
             Ok(out.display().to_string())
@@ -161,14 +253,20 @@ pub fn prepare(path: &str) -> Result<String, String> {
             Dex::parse(&data).map_err(|e| format!("{path}: {e}"))?;
             let out = dir.join(format!("{stem}-{:x}.apk", data.len()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let mut w = zip::ZipWriter::new(std::fs::File::create(&out).map_err(|e| e.to_string())?);
-            let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-            w.start_file("classes.dex", opts).map_err(|e| e.to_string())?;
+            let mut w =
+                zip::ZipWriter::new(std::fs::File::create(&out).map_err(|e| e.to_string())?);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            w.start_file("classes.dex", opts)
+                .map_err(|e| e.to_string())?;
             w.write_all(&data).map_err(|e| e.to_string())?;
             w.finish().map_err(|e| e.to_string())?;
             Ok(out.display().to_string())
         }
-        _ => Err(format!("apkscope opens {}; not .{ext}", INPUTS.map(|e| format!(".{e}")).join(", "))),
+        _ => Err(format!(
+            "apkscope opens {}; not .{ext}",
+            INPUTS.map(|e| format!(".{e}")).join(", ")
+        )),
     }
 }
 
@@ -176,7 +274,10 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let real = prepare(path)?;
     let mut apk = export::open(&real)?;
     // a session lives until the process exits, so the DEX bytes can be 'static
-    let raw: Vec<&'static [u8]> = std::mem::take(&mut apk.dex).into_iter().map(|(_, b)| &*Box::leak(b.into_boxed_slice())).collect();
+    let raw: Vec<&'static [u8]> = std::mem::take(&mut apk.dex)
+        .into_iter()
+        .map(|(_, b)| &*Box::leak(b.into_boxed_slice()))
+        .collect();
     let dexes: Vec<Dex<'static>> = raw.iter().filter_map(|b| Dex::parse(b).ok()).collect();
     if deobf {
         crate::deobf::init(&dexes);
@@ -185,34 +286,44 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let tag = crate::re::notes_tag(&notes);
     crate::deobf::set_notes(notes);
     // inline string decryption needs every DEX, from any thread
-    crate::re::set_dexes(Box::leak(raw.iter().filter_map(|b| Dex::parse(b).ok()).collect::<Vec<_>>().into_boxed_slice()));
+    crate::re::set_dexes(Box::leak(
+        raw.iter()
+            .filter_map(|b| Dex::parse(b).ok())
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    ));
     crate::imports::init(&dexes);
     let mut classes = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (d, dx) in dexes.iter().enumerate() {
         let nest = dx.nesting();
         for c in 0..dx.class_count {
-            if nest.parent[c].is_none() {
-                if let Ok(desc) = dx.class_descriptor(c) {
-                    if seen.insert(desc.clone()) {
-                        classes.push((dex::java_name(&desc), d, c));
-                    }
-                }
+            if nest.parent[c].is_none()
+                && let Ok(desc) = dx.class_descriptor(c)
+                && seen.insert(desc.clone())
+            {
+                classes.push((dex::java_name(&desc), d, c));
             }
         }
     }
     classes.sort();
-    let entries: Vec<String> = apk.zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
-    let table = apk.read("resources.arsc").and_then(|d| res::parse_table(&d).ok());
+    let entries: Vec<String> = apk
+        .zip
+        .file_names()
+        .filter_map(|n| n.ok().map(|n| n.into_owned()))
+        .collect();
+    let table = apk
+        .read("resources.arsc")
+        .and_then(|d| res::parse_table(&d).ok());
     let names = table.as_ref().map(res::Names::new);
     let mut texts = BTreeMap::new();
     let mut files = BTreeMap::new();
     let mut package = String::new();
-    if let Some(m) = apk.read("AndroidManifest.xml") {
-        if let Ok(t) = res::decode_xml(&m, names.as_ref()) {
-            package = attr(&t, "package").unwrap_or_default();
-            texts.insert("AndroidManifest.xml".to_string(), t);
-        }
+    if let Some(m) = apk.read("AndroidManifest.xml")
+        && let Ok(t) = res::decode_xml(&m, names.as_ref())
+    {
+        package = attr(&t, "package").unwrap_or_default();
+        texts.insert("AndroidManifest.xml".to_string(), t);
     }
     if let (Some(t), Some(n)) = (&table, &names) {
         let dec = res::decode_table(t, n);
@@ -223,8 +334,18 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
             files.insert(format!("res/{p}"), src);
         }
     }
-    let methods = dexes.iter().map(|d| (0..d.class_count).map(|c| d.class_data(c).map_or(0, |x| x.methods.len())).sum::<usize>()).sum();
-    let origin = classes.iter().map(|c| self::origin(&c.0, &package)).collect();
+    let methods = dexes
+        .iter()
+        .map(|d| {
+            (0..d.class_count)
+                .map(|c| d.class_data(c).map_or(0, |x| x.methods.len()))
+                .sum::<usize>()
+        })
+        .sum();
+    let origin = classes
+        .iter()
+        .map(|c| self::origin(&c.0, &package))
+        .collect();
     let cache_dir = cache::dir_for(&real, deobf, tag);
     let reader = cache::Reader::open(&cache_dir, classes.len()).map(Arc::new);
     Ok(State {
@@ -264,17 +385,25 @@ impl State {
     pub fn find(&self, name: &str) -> Option<usize> {
         let by = |n: &str| self.classes.binary_search_by(|c| c.0.as_str().cmp(n)).ok();
         by(name).or_else(|| {
-            let desc = if name.starts_with('L') && name.ends_with(';') { name.to_string() } else { format!("L{};", name.replace('.', "/")) };
+            let desc = if name.starts_with('L') && name.ends_with(';') {
+                name.to_string()
+            } else {
+                format!("L{};", name.replace('.', "/"))
+            };
             by(&dex::java_name(&desc))
         })
     }
 
     /// Java of top-level class `k`, from the cache when there is one.
-    fn java_of(&self, k: usize, reader: Option<(&cache::Reader, &mut std::fs::File)>) -> Option<String> {
-        if let Some((r, f)) = reader {
-            if let Some(t) = r.get(f, k) {
-                return Some(t);
-            }
+    fn java_of(
+        &self,
+        k: usize,
+        reader: Option<(&cache::Reader, &mut std::fs::File)>,
+    ) -> Option<String> {
+        if let Some((r, f)) = reader
+            && let Some(t) = r.get(f, k)
+        {
+            return Some(t);
         }
         let (_, d, c) = &self.classes[k];
         java::class(&self.dexes[*d], *c).ok()
@@ -291,7 +420,9 @@ impl State {
                 (Some(r), Some(f)) => self.java_of(k, Some((r, f))),
                 _ => None,
             };
-            return Some(text.unwrap_or_else(|| java::class(dx, *c).unwrap_or_else(|e| format!("/* failed: {e} */"))));
+            return Some(text.unwrap_or_else(|| {
+                java::class(dx, *c).unwrap_or_else(|e| format!("/* failed: {e} */"))
+            }));
         }
         Some(self::smali(dx, *c))
     }
@@ -331,9 +462,17 @@ impl State {
 
     /// Raw bytes of any file inside the APK (only names from its own listing).
     /// Edited manifest text -> binary XML, typed like the APK's own manifest.
+    #[cfg(feature = "gui")]
     pub fn encode_manifest(&self, text: &str) -> Result<Vec<u8>, String> {
-        let names = self.names.as_ref().ok_or("this APK has no resources.arsc to resolve @references")?;
-        crate::axml::encode(text, self.read_entry("AndroidManifest.xml").as_deref(), names)
+        let names = self
+            .names
+            .as_ref()
+            .ok_or("this APK has no resources.arsc to resolve @references")?;
+        crate::axml::encode(
+            text,
+            self.read_entry("AndroidManifest.xml").as_deref(),
+            names,
+        )
     }
 
     pub fn read_entry(&self, name: &str) -> Option<Vec<u8>> {
@@ -344,6 +483,7 @@ impl State {
     }
 
     /// `minSdkVersion` from the manifest.
+    #[cfg(feature = "gui")]
     pub fn min_sdk(&self) -> Option<u32> {
         let m = self.texts.get("AndroidManifest.xml")?;
         let at = m.find("<uses-sdk")?;
@@ -351,23 +491,38 @@ impl State {
     }
 
     /// Every file in the APK as (name, size, compressed size).
+    #[cfg(feature = "gui")]
     pub fn files_list(&self) -> Vec<(String, u64, u64)> {
         let mut apk = self.apk.lock().unwrap();
-        let mut v: Vec<(String, u64, u64)> = self.entries.iter().filter(|e| !e.ends_with('/')).map(|e| {
-            let (s, c) = apk.zip.by_name(e).map_or((0, 0), |f| (f.size(), f.compressed_size()));
-            (e.clone(), s, c)
-        }).collect();
+        let mut v: Vec<(String, u64, u64)> = self
+            .entries
+            .iter()
+            .filter(|e| !e.ends_with('/'))
+            .map(|e| {
+                let (s, c) = apk
+                    .zip
+                    .by_name(e)
+                    .map_or((0, 0), |f| (f.size(), f.compressed_size()));
+                (e.clone(), s, c)
+            })
+            .collect();
         v.sort();
         v
     }
 
     /// A file inside the APK shown as text: its content when it is text, else a hex dump.
+    #[cfg(feature = "gui")]
     pub fn file_view(&self, name: &str) -> String {
-        let Some(d) = self.read_entry(name) else { return format!("// {name}: not found") };
-        let mut o = format!("// {name}
+        let Some(d) = self.read_entry(name) else {
+            return format!("// {name}: not found");
+        };
+        let mut o = format!(
+            "// {name}
 // {} bytes
 
-", d.len());
+",
+            d.len()
+        );
         if let Ok(t) = res::decode_xml(&d, self.names.as_ref()) {
             return o + &t;
         }
@@ -376,12 +531,24 @@ impl State {
             _ => {
                 for (k, row) in d.chunks(16).take(256).enumerate() {
                     let hexs: String = row.iter().map(|b| format!("{b:02x} ")).collect();
-                    let text: String = row.iter().map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' }).collect();
+                    let text: String = row
+                        .iter()
+                        .map(|&b| {
+                            if (0x20..0x7f).contains(&b) {
+                                b as char
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect();
                     let _ = writeln!(o, "{:08x}  {hexs:<48} {text}", k * 16);
                 }
                 if d.len() > 4096 {
-                    let _ = writeln!(o, "
-// first 4096 bytes shown; extract the file for the rest");
+                    let _ = writeln!(
+                        o,
+                        "
+// first 4096 bytes shown; extract the file for the rest"
+                    );
                 }
                 o
             }
@@ -389,6 +556,7 @@ impl State {
     }
 
     /// Write every file of the APK under `dir`, skipping names that would escape it.
+    #[cfg(feature = "gui")]
     pub fn extract_all(&self, dir: &std::path::Path) -> Result<usize, String> {
         let mut n = 0;
         for (name, _, _) in self.files_list() {
@@ -411,7 +579,12 @@ impl State {
     /// Native libraries as (path, uncompressed size), grouped by ABI folder.
     pub fn native_libs(&self) -> Vec<(String, u64)> {
         let mut apk = self.apk.lock().unwrap();
-        let mut v: Vec<(String, u64)> = self.entries.iter().filter(|e| e.starts_with("lib/") && e.ends_with(".so")).map(|e| (e.clone(), apk.zip.by_name(e).map_or(0, |f| f.size()))).collect();
+        let mut v: Vec<(String, u64)> = self
+            .entries
+            .iter()
+            .filter(|e| e.starts_with("lib/") && e.ends_with(".so"))
+            .map(|e| (e.clone(), apk.zip.by_name(e).map_or(0, |f| f.size())))
+            .collect();
         v.sort();
         v
     }
@@ -424,8 +597,15 @@ impl State {
                 for c in 0..dx.class_count {
                     let Ok(data) = dx.class_data(c) else { continue };
                     for m in data.methods.iter().filter(|m| m.access & 0x100 != 0) {
-                        if let (Ok(desc), Ok((_, name, _))) = (dx.class_descriptor(c), dx.method_parts(m.method_idx)) {
-                            v.push((desc.trim_start_matches('L').trim_end_matches(';').replace(['/', '$'], "."), name));
+                        if let (Ok(desc), Ok((_, name, _))) =
+                            (dx.class_descriptor(c), dx.method_parts(m.method_idx))
+                        {
+                            v.push((
+                                desc.trim_start_matches('L')
+                                    .trim_end_matches(';')
+                                    .replace(['/', '$'], "."),
+                                name,
+                            ));
                         }
                     }
                 }
@@ -438,46 +618,104 @@ impl State {
 
     /// Readable report of one native library.
     pub fn native_report(&self, path: &str) -> String {
-        let Some(data) = self.read_entry(path) else { return format!("// {path}: not found") };
+        let Some(data) = self.read_entry(path) else {
+            return format!("// {path}: not found");
+        };
         let mut o = String::new();
-        let _ = writeln!(o, "// {path}
-");
+        let _ = writeln!(
+            o,
+            "// {path}
+"
+        );
         let e = match elf::parse(&data) {
             Ok(e) => e,
             Err(err) => return format!("{o}// {err}, {} bytes", data.len()),
         };
         let _ = writeln!(o, "size              {} bytes", data.len());
         let _ = writeln!(o, "architecture      {} ({}-bit)", e.machine, e.bits);
-        let _ = writeln!(o, "JNI_OnLoad        {}", if e.exports.iter().any(|x| x == "JNI_OnLoad") { "yes: natives may also be registered at runtime (RegisterNatives), which can't be mapped statically" } else { "no" });
-        let _ = writeln!(o, "
-// needs ({})", e.needed.len());
+        let _ = writeln!(
+            o,
+            "JNI_OnLoad        {}",
+            if e.exports.iter().any(|x| x == "JNI_OnLoad") {
+                "yes: natives may also be registered at runtime (RegisterNatives), which can't be mapped statically"
+            } else {
+                "no"
+            }
+        );
+        let _ = writeln!(
+            o,
+            "
+// needs ({})",
+            e.needed.len()
+        );
         for n in &e.needed {
             let _ = writeln!(o, "{n}");
         }
         let natives = self.native_methods();
-        let jni: Vec<(&String, (String, String))> = e.exports.iter().filter_map(|x| elf::jni_target(x).map(|t| (x, t))).collect();
-        let _ = writeln!(o, "
-// JNI exports -> Java native methods ({})", jni.len());
+        let jni: Vec<(&String, (String, String))> = e
+            .exports
+            .iter()
+            .filter_map(|x| elf::jni_target(x).map(|t| (x, t)))
+            .collect();
+        let _ = writeln!(
+            o,
+            "
+// JNI exports -> Java native methods ({})",
+            jni.len()
+        );
         for (sym, (cls, m)) in &jni {
             let found = natives.binary_search(&(cls.clone(), m.clone())).is_ok();
-            let _ = writeln!(o, "{cls}.{m}(){}    <- {sym}", if found { "" } else { "    (no such native method in the DEX)" });
+            let _ = writeln!(
+                o,
+                "{cls}.{m}(){}    <- {sym}",
+                if found {
+                    ""
+                } else {
+                    "    (no such native method in the DEX)"
+                }
+            );
         }
-        let _ = writeln!(o, "
-// other exports ({})", e.exports.len() - jni.len());
-        for x in e.exports.iter().filter(|x| !x.starts_with("Java_")).take(2000) {
+        let _ = writeln!(
+            o,
+            "
+// other exports ({})",
+            e.exports.len() - jni.len()
+        );
+        for x in e
+            .exports
+            .iter()
+            .filter(|x| !x.starts_with("Java_"))
+            .take(2000)
+        {
             let _ = writeln!(o, "{x}");
         }
         let all = elf::strings(&data, 6);
         let url = regex::Regex::new(URL_RE).unwrap();
         let secret = regex::Regex::new(SECRET_RE).unwrap();
-        let interesting: Vec<&String> = all.iter().filter(|s| url.is_match(&format!("\"{s}\"")) || secret.is_match(&format!("\"{s}\"")) || secret.is_match(s)).collect();
-        let _ = writeln!(o, "
-// URL- or key-like strings ({}). Heuristic: encrypted or computed values won't show", interesting.len());
+        let interesting: Vec<&String> = all
+            .iter()
+            .filter(|s| {
+                url.is_match(&format!("\"{s}\""))
+                    || secret.is_match(&format!("\"{s}\""))
+                    || secret.is_match(s)
+            })
+            .collect();
+        let _ = writeln!(
+            o,
+            "
+// URL- or key-like strings ({}). Heuristic: encrypted or computed values won't show",
+            interesting.len()
+        );
         for s in &interesting {
             let _ = writeln!(o, "{s}");
         }
-        let _ = writeln!(o, "
-// all strings, 6+ characters ({}{})", all.len().min(5000), if all.len() > 5000 { ", first 5000" } else { "" });
+        let _ = writeln!(
+            o,
+            "
+// all strings, 6+ characters ({}{})",
+            all.len().min(5000),
+            if all.len() > 5000 { ", first 5000" } else { "" }
+        );
         for s in all.iter().take(5000) {
             let _ = writeln!(o, "{s}");
         }
@@ -490,13 +728,16 @@ impl State {
     }
 
     /// Strings of the app containing `needle` (case-insensitive), with how many classes use each.
+    #[cfg(feature = "gui")]
     pub fn strings(&self, needle: &str, limit: usize) -> Vec<(String, usize)> {
         let low = needle.to_lowercase();
         let idx = self.index.get();
         let mut out = Vec::new();
         for (d, dx) in self.dexes.iter().enumerate() {
             for id in 0..dx.counts()[0] {
-                let Ok(s) = dx.string(id as u32) else { continue };
+                let Ok(s) = dx.string(id as u32) else {
+                    continue;
+                };
                 if !s.trim().is_empty() && s.to_lowercase().contains(&low) {
                     let users = idx.map_or(0, |i| i.users(d, index::STRING, id).len());
                     out.push((s, users));
@@ -525,8 +766,19 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 8] = [Scope::Code, Scope::String, Scope::Usages, Scope::Class, Scope::Res, Scope::Urls, Scope::Http, Scope::Secrets];
+    #[cfg(feature = "gui")]
+    pub const ALL: [Scope; 8] = [
+        Scope::Code,
+        Scope::String,
+        Scope::Usages,
+        Scope::Class,
+        Scope::Res,
+        Scope::Urls,
+        Scope::Http,
+        Scope::Secrets,
+    ];
 
+    #[cfg(feature = "gui")]
     pub fn label(self) -> &'static str {
         match self {
             Scope::Class => "Class names",
@@ -555,6 +807,7 @@ impl Scope {
     }
 
     /// API scopes list everything they find; the query only narrows them
+    #[cfg(feature = "gui")]
     pub fn query_optional(self) -> bool {
         matches!(self, Scope::Urls | Scope::Http | Scope::Secrets)
     }
@@ -567,14 +820,28 @@ impl Scope {
     /// What the scope can miss: shown next to the results.
     pub fn note(self) -> &'static str {
         match self {
-            Scope::Code => "Searches decompiled Java. Names are shown after deobfuscation, so search for what you see in the viewer.",
-            Scope::String => "Matches string literals as stored in the app. Strings built at runtime, encrypted or loaded from native code won't appear.",
-            Scope::Usages => "Finds classes that reference a method, field, class or string with this name, then the lines that mention it. Calls made via reflection, JNI or dynamic loading are not visible.",
+            Scope::Code => {
+                "Searches decompiled Java. Names are shown after deobfuscation, so search for what you see in the viewer."
+            }
+            Scope::String => {
+                "Matches string literals as stored in the app. Strings built at runtime, encrypted or loaded from native code won't appear."
+            }
+            Scope::Usages => {
+                "Finds classes that reference a method, field, class or string with this name, then the lines that mention it. Calls made via reflection, JNI or dynamic loading are not visible."
+            }
             Scope::Class => "Matches class names (deobfuscated).",
-            Scope::Res => "Searches decoded XML resources and the manifest, plus resource file names.",
-            Scope::Urls => "Heuristic: finds URL-like string literals. Endpoints built at runtime, encrypted, downloaded from a config, or kept in native libraries won't be found, and some hits are documentation or ad URLs.",
-            Scope::Http => "Heuristic: finds common networking APIs (Retrofit, OkHttp, HttpURLConnection). Apps using other libraries, their own wrappers, native code or obfuscated networking may not show up, and library code shows up too.",
-            Scope::Secrets => "Heuristic: finds well-known key formats and key-like names. A hit is not proof of a leaked secret (many keys are meant to be public), and keys that are encrypted, split or fetched at runtime won't be found.",
+            Scope::Res => {
+                "Searches decoded XML resources and the manifest, plus resource file names."
+            }
+            Scope::Urls => {
+                "Heuristic: finds URL-like string literals. Endpoints built at runtime, encrypted, downloaded from a config, or kept in native libraries won't be found, and some hits are documentation or ad URLs."
+            }
+            Scope::Http => {
+                "Heuristic: finds common networking APIs (Retrofit, OkHttp, HttpURLConnection). Apps using other libraries, their own wrappers, native code or obfuscated networking may not show up, and library code shows up too."
+            }
+            Scope::Secrets => {
+                "Heuristic: finds well-known key formats and key-like names. A hit is not proof of a leaked secret (many keys are meant to be public), and keys that are encrypted, split or fetched at runtime won't be found."
+            }
         }
     }
 }
@@ -584,7 +851,15 @@ const HTTP_RE: &str = r"@(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP|Headers?|Q
 const SECRET_RE: &str = r#"AIza[0-9A-Za-z_\-]{35}|AKIA[0-9A-Z]{16}|(sk|pk|rk)_(live|test)_[0-9A-Za-z]{16,}|gh[pousr]_[0-9A-Za-z]{36}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[0-9A-Za-z_\-]{10,}\.[0-9A-Za-z_\-]{10,}|(?i)"(authorization|bearer ?|x-api-key|api[_-]?key|x-auth-token|client[_-]?secret|access[_-]?token)"|(?i)\b\w*(api_?key|secret|token|password|passwd|client_?id|private_?key)\w*\s*=\s*"[^"]{6,}"|(?i)name="[^"]*(api_?key|secret|token|client_?id|app_?id|private_?key)[^"]*">[^<\s]{6,}<"#;
 /// prefilter for HTTP: types and member names a matching line would mention
 const HTTP_TYPES_RE: &str = r"retrofit2/|okhttp3/(Request|HttpUrl|WebSocket|Call|OkHttpClient)|Https?URLConnection|WebSocket";
-const HTTP_MEMBERS: [&str; 7] = ["openConnection", "addHeader", "header", "newCall", "baseUrl", "setRequestMethod", "url"];
+const HTTP_MEMBERS: [&str; 7] = [
+    "openConnection",
+    "addHeader",
+    "header",
+    "newCall",
+    "baseUrl",
+    "setRequestMethod",
+    "url",
+];
 const SECRET_NAME_RE: &str = r"(?i)api_?key|secret|token|password|passwd|client_?id|private_?key";
 
 /// What one search looks for: an optional user query plus the scope's own pattern.
@@ -601,8 +876,17 @@ impl Matcher {
         let query = if q.is_empty() {
             None
         } else {
-            let pat = if use_regex { q.to_string() } else { regex::escape(q) };
-            Some(regex::RegexBuilder::new(&pat).case_insensitive(!case).build().map_err(|e| e.to_string())?)
+            let pat = if use_regex {
+                q.to_string()
+            } else {
+                regex::escape(q)
+            };
+            Some(
+                regex::RegexBuilder::new(&pat)
+                    .case_insensitive(!case)
+                    .build()
+                    .map_err(|e| e.to_string())?,
+            )
         };
         let builtin = match scope {
             Scope::Urls => Some(URL_RE),
@@ -611,7 +895,12 @@ impl Matcher {
             _ => None,
         }
         .map(|p| regex::Regex::new(p).unwrap());
-        Ok(Matcher { scope, app_only: false, query, builtin })
+        Ok(Matcher {
+            scope,
+            app_only: false,
+            query,
+            builtin,
+        })
     }
 
     fn query_hits(&self, s: &str) -> bool {
@@ -625,8 +914,18 @@ impl Matcher {
         match (&self.builtin, self.scope) {
             // XML namespaces and spec URLs are identifiers, not endpoints
             (Some(b), Scope::Urls) => {
-                const NOISE: [&str; 6] = ["schemas.android.com", "www.w3.org", "ns.adobe.com", "www.apache.org/licenses", "xmlpull.org", "schemas.xmlsoap.org"];
-                if !b.captures_iter(l).any(|c| !NOISE.iter().any(|n| c[1].contains(n))) {
+                const NOISE: [&str; 6] = [
+                    "schemas.android.com",
+                    "www.w3.org",
+                    "ns.adobe.com",
+                    "www.apache.org/licenses",
+                    "xmlpull.org",
+                    "schemas.xmlsoap.org",
+                ];
+                if !b
+                    .captures_iter(l)
+                    .any(|c| !NOISE.iter().any(|n| c[1].contains(n)))
+                {
                     return false;
                 }
             }
@@ -668,7 +967,12 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
     let http_types = regex::Regex::new(HTTP_TYPES_RE).unwrap();
     let secret_names = regex::Regex::new(SECRET_NAME_RE).unwrap();
     let mut hit = vec![false; st.classes.len()];
-    let tables: Vec<(usize, usize)> = st.dexes.iter().enumerate().flat_map(|(d, _)| (0..4).filter(|&k| wants(k)).map(move |k| (d, k))).collect();
+    let tables: Vec<(usize, usize)> = st
+        .dexes
+        .iter()
+        .enumerate()
+        .flat_map(|(d, _)| (0..4).filter(|&k| wants(k)).map(move |k| (d, k)))
+        .collect();
     // one table per task: strings of a big DEX are the slow part
     let found = Mutex::new(Vec::new());
     let next = AtomicUsize::new(0);
@@ -678,7 +982,9 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
                 let mut mine = Vec::new();
                 loop {
                     let t = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(&(d, kind)) = tables.get(t) else { break };
+                    let Some(&(d, kind)) = tables.get(t) else {
+                        break;
+                    };
                     let dx = &st.dexes[d];
                     for id in 0..dx.counts()[kind] {
                         let ok = match kind {
@@ -688,20 +994,37 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
                             }),
                             index::TYPE => dx.type_name(id as u32).is_ok_and(|t| match m.scope {
                                 Scope::Http => http_types.is_match(&t),
-                                Scope::Usages => m.query_hits(&dex::java_name(&t)) || crate::deobf::class(&t).is_some_and(|n| m.query_hits(n)),
+                                Scope::Usages => {
+                                    m.query_hits(&dex::java_name(&t))
+                                        || crate::deobf::class(&t).is_some_and(|n| m.query_hits(n))
+                                }
                                 _ => false,
                             }),
                             _ => {
                                 let (owner, name, ty) = if kind == index::FIELD {
-                                    dx.field_parts(id as u32).map(|(c, t, n)| (c, n, t)).unwrap_or_default()
+                                    dx.field_parts(id as u32)
+                                        .map(|(c, t, n)| (c, n, t))
+                                        .unwrap_or_default()
                                 } else {
-                                    dx.method_parts(id as u32).map(|(c, n, _)| (c, n, String::new())).unwrap_or_default()
+                                    dx.method_parts(id as u32)
+                                        .map(|(c, n, _)| (c, n, String::new()))
+                                        .unwrap_or_default()
                                 };
-                                let shown = if kind == index::FIELD { crate::deobf::field(&owner, &name, &ty) } else { crate::deobf::method(&owner, &name) };
+                                let shown = if kind == index::FIELD {
+                                    crate::deobf::field(&owner, &name, &ty)
+                                } else {
+                                    crate::deobf::method(&owner, &name)
+                                };
                                 match m.scope {
-                                    Scope::Http => kind == index::METHOD && HTTP_MEMBERS.contains(&name.as_str()),
+                                    Scope::Http => {
+                                        kind == index::METHOD
+                                            && HTTP_MEMBERS.contains(&name.as_str())
+                                    }
                                     Scope::Secrets => secret_names.is_match(&name),
-                                    Scope::Usages => m.query_hits(&name) || shown.is_some_and(|n| m.query_hits(&n)),
+                                    Scope::Usages => {
+                                        m.query_hits(&name)
+                                            || shown.is_some_and(|n| m.query_hits(&n))
+                                    }
                                     _ => false,
                                 }
                             }
@@ -720,17 +1043,33 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
             *h = true;
         }
     }
-    Some(hit.iter().enumerate().filter(|x| *x.1).map(|x| x.0).collect())
+    Some(
+        hit.iter()
+            .enumerate()
+            .filter(|x| *x.1)
+            .map(|x| x.0)
+            .collect(),
+    )
 }
 
 pub fn search(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
     let mut hits = Vec::new();
     if m.scope == Scope::Class {
         let keep = |k: usize| !m.app_only || st.origin[k] != Origin::Library;
-        hits.extend(st.classes.iter().enumerate().filter(|(k, c)| keep(*k) && m.line(&c.0)).take(LIMIT).map(|(_, c)| (c.0.clone(), 0, String::new())));
+        hits.extend(
+            st.classes
+                .iter()
+                .enumerate()
+                .filter(|(k, c)| keep(*k) && m.line(&c.0))
+                .take(LIMIT)
+                .map(|(_, c)| (c.0.clone(), 0, String::new())),
+        );
         return hits;
     }
-    if matches!(m.scope, Scope::Res | Scope::Urls | Scope::Secrets | Scope::Usages) {
+    if matches!(
+        m.scope,
+        Scope::Res | Scope::Urls | Scope::Secrets | Scope::Usages
+    ) {
         for (p, t) in &st.texts {
             // translations repeat the default strings; API scopes only need res/values
             if m.scope != Scope::Res && p.starts_with("res/values-") {
@@ -743,18 +1082,35 @@ pub fn search(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
             }
         }
         if m.scope == Scope::Res {
-            hits.extend(st.files.keys().filter(|p| m.line(p)).map(|p| (p.clone(), 0, String::new())));
+            hits.extend(
+                st.files
+                    .keys()
+                    .filter(|p| m.line(p))
+                    .map(|p| (p.clone(), 0, String::new())),
+            );
         }
     }
     // endpoints and keys are often kept in native code; one ABI is enough, the others repeat it
     if matches!(m.scope, Scope::Urls | Scope::Secrets) {
         let libs = st.native_libs();
-        let abi = ["lib/arm64-v8a/", "lib/armeabi-v7a/", "lib/x86_64/", "lib/x86/"].into_iter().find(|a| libs.iter().any(|l| l.0.starts_with(a)));
-        for (lib, _) in libs.iter().filter(|l| abi.is_some_and(|a| l.0.starts_with(a))) {
+        let abi = [
+            "lib/arm64-v8a/",
+            "lib/armeabi-v7a/",
+            "lib/x86_64/",
+            "lib/x86/",
+        ]
+        .into_iter()
+        .find(|a| libs.iter().any(|l| l.0.starts_with(a)));
+        for (lib, _) in libs
+            .iter()
+            .filter(|l| abi.is_some_and(|a| l.0.starts_with(a)))
+        {
             if prog.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let Some(data) = st.read_entry(lib) else { continue };
+            let Some(data) = st.read_entry(lib) else {
+                continue;
+            };
             for s in elf::strings(&data, 6) {
                 if m.line(&format!("\"{s}\"")) {
                     // line 0: the report lists strings in its own order, so there is no line to jump to
@@ -779,51 +1135,60 @@ pub fn search(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
 fn scan(st: &State, m: &Matcher, list: &[usize], prog: &Progress) -> Vec<Hit> {
     prog.total.store(list.len(), Ordering::Relaxed);
     let reader = st.cache.read().unwrap().clone();
-    let writer = (reader.is_none() && list.len() == st.classes.len() && CACHE_WRITE.load(Ordering::Relaxed)).then(|| cache::Writer::create(&st.cache_dir, st.classes.len())).flatten();
+    let writer =
+        (reader.is_none() && list.len() == st.classes.len() && CACHE_WRITE.load(Ordering::Relaxed))
+            .then(|| cache::Writer::create(&st.cache_dir, st.classes.len()))
+            .flatten();
     let next = AtomicUsize::new(0);
     let found = Mutex::new(Vec::new());
     let full = AtomicBool::new(false);
     std::thread::scope(|s| {
         for _ in 0..threads() {
-            let _ = std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(s, || {
-                let mut f = reader.as_ref().and_then(|r| r.file());
-                let mut mine = Vec::new();
-                loop {
-                    if prog.cancel.load(Ordering::Relaxed) || full.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let n = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(&k) = list.get(n) else { break };
-                    let text = match (&reader, f.as_mut()) {
-                        (Some(r), Some(f)) => st.java_of(k, Some((r, f))),
-                        _ => st.java_of(k, None),
-                    };
-                    if let Some(text) = text {
-                        if let Some(w) = &writer {
-                            w.put(k, &text);
+            let _ = std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn_scoped(s, || {
+                    let mut f = reader.as_ref().and_then(|r| r.file());
+                    let mut mine = Vec::new();
+                    loop {
+                        if prog.cancel.load(Ordering::Relaxed) || full.load(Ordering::Relaxed) {
+                            break;
                         }
-                        for (ln, l) in text.lines().enumerate() {
-                            if m.line(l) {
-                                mine.push((st.classes[k].0.clone(), ln + 1, l.trim().to_string()));
+                        let n = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&k) = list.get(n) else { break };
+                        let text = match (&reader, f.as_mut()) {
+                            (Some(r), Some(f)) => st.java_of(k, Some((r, f))),
+                            _ => st.java_of(k, None),
+                        };
+                        if let Some(text) = text {
+                            if let Some(w) = &writer {
+                                w.put(k, &text);
+                            }
+                            for (ln, l) in text.lines().enumerate() {
+                                if m.line(l) {
+                                    mine.push((
+                                        st.classes[k].0.clone(),
+                                        ln + 1,
+                                        l.trim().to_string(),
+                                    ));
+                                }
+                            }
+                            // keep scanning to finish the cache, but stop collecting
+                            if mine.len() >= LIMIT && writer.is_none() {
+                                full.store(true, Ordering::Relaxed);
                             }
                         }
-                        // keep scanning to finish the cache, but stop collecting
-                        if mine.len() >= LIMIT && writer.is_none() {
-                            full.store(true, Ordering::Relaxed);
-                        }
+                        prog.done.fetch_add(1, Ordering::Relaxed);
                     }
-                    prog.done.fetch_add(1, Ordering::Relaxed);
-                }
-                found.lock().unwrap().extend(mine);
-            });
+                    found.lock().unwrap().extend(mine);
+                });
         }
     });
-    if let Some(w) = writer {
-        if !prog.cancel.load(Ordering::Relaxed) && next.load(Ordering::Relaxed) >= list.len() {
-            if let Some(r) = w.finish() {
-                *st.cache.write().unwrap() = Some(Arc::new(r));
-            }
-        }
+    if let Some(w) = writer
+        && !prog.cancel.load(Ordering::Relaxed)
+        && next.load(Ordering::Relaxed) >= list.len()
+        && let Some(r) = w.finish()
+    {
+        *st.cache.write().unwrap() = Some(Arc::new(r));
     }
     let mut v = found.into_inner().unwrap();
     v.sort();
@@ -841,16 +1206,33 @@ pub enum Format {
 pub fn excerpt(lines: &[&str], at: usize, ctx: usize, method: bool) -> (usize, usize) {
     let indent = |l: &str| l.len() - l.trim_start().len();
     if method {
-        const NOT_METHOD: [&str; 9] = ["if ", "for ", "while ", "switch ", "try ", "catch ", "} catch", "else", "synchronized "];
+        const NOT_METHOD: [&str; 9] = [
+            "if ",
+            "for ",
+            "while ",
+            "switch ",
+            "try ",
+            "catch ",
+            "} catch",
+            "else",
+            "synchronized ",
+        ];
         let hit_ind = indent(lines.get(at).copied().unwrap_or(""));
-        let head = (0..=at.min(lines.len().saturating_sub(1))).rev().find(|&k| {
-            let l = lines[k];
-            let t = l.trim();
-            indent(l) < hit_ind.max(1) && t.ends_with('{') && t.contains('(') && !NOT_METHOD.iter().any(|n| t.starts_with(n))
-        });
+        let head = (0..=at.min(lines.len().saturating_sub(1)))
+            .rev()
+            .find(|&k| {
+                let l = lines[k];
+                let t = l.trim();
+                indent(l) < hit_ind.max(1)
+                    && t.ends_with('{')
+                    && t.contains('(')
+                    && !NOT_METHOD.iter().any(|n| t.starts_with(n))
+            });
         if let Some(h) = head {
             let ind = indent(lines[h]);
-            let end = (h + 1..lines.len()).find(|&k| indent(lines[k]) == ind && lines[k].trim() == "}").map_or(lines.len(), |e| e + 1);
+            let end = (h + 1..lines.len())
+                .find(|&k| indent(lines[k]) == ind && lines[k].trim() == "}")
+                .map_or(lines.len(), |e| e + 1);
             return (h, end);
         }
     }
@@ -882,7 +1264,13 @@ fn csv_field(s: &str) -> String {
 }
 
 /// Write hits with their surrounding code. `text_of` gives a target's full text.
-pub fn export(hits: &[Hit], ctx: usize, method: bool, fmt: Format, mut text_of: impl FnMut(&str) -> Option<String>) -> String {
+pub fn export(
+    hits: &[Hit],
+    ctx: usize,
+    method: bool,
+    fmt: Format,
+    mut text_of: impl FnMut(&str) -> Option<String>,
+) -> String {
     let mut out = String::new();
     match fmt {
         Format::Csv => out += "target,line,match,excerpt\n",
@@ -908,11 +1296,23 @@ pub fn export(hits: &[Hit], ctx: usize, method: bool, fmt: Format, mut text_of: 
                 let _ = writeln!(out, "== {t}:{ln}\n{snippet}\n");
             }
             Format::Csv => {
-                let _ = writeln!(out, "{},{ln},{},{}", csv_field(t), csv_field(text), csv_field(&snippet));
+                let _ = writeln!(
+                    out,
+                    "{},{ln},{},{}",
+                    csv_field(t),
+                    csv_field(text),
+                    csv_field(&snippet)
+                );
             }
             Format::Json => {
                 let sep = if n + 1 < hits.len() { "," } else { "" };
-                let _ = writeln!(out, "  {{\"target\":{},\"line\":{ln},\"match\":{},\"excerpt\":{}}}{sep}", json_str(t), json_str(text), json_str(&snippet));
+                let _ = writeln!(
+                    out,
+                    "  {{\"target\":{},\"line\":{ln},\"match\":{},\"excerpt\":{}}}{sep}",
+                    json_str(t),
+                    json_str(text),
+                    json_str(&snippet)
+                );
             }
         }
     }
@@ -930,38 +1330,92 @@ pub fn attr(s: &str, name: &str) -> Option<String> {
 
 /// Security-relevant summary of the manifest and APK layout, as readable text.
 pub fn overview(st: &State) -> String {
-    let m = st.texts.get("AndroidManifest.xml").map(String::as_str).unwrap_or("");
+    let m = st
+        .texts
+        .get("AndroidManifest.xml")
+        .map(String::as_str)
+        .unwrap_or("");
     // elements as (tag, attributes text, depth-ordered); the decoder writes one element per `<`
-    let elems: Vec<(&str, &str)> = m.split('<').skip(1).filter_map(|e| {
-        let e = e.split('>').next()?;
-        let tag = e.split_whitespace().next()?;
-        Some((tag, e))
-    }).collect();
+    let elems: Vec<(&str, &str)> = m
+        .split('<')
+        .skip(1)
+        .filter_map(|e| {
+            let e = e.split('>').next()?;
+            let tag = e.split_whitespace().next()?;
+            Some((tag, e))
+        })
+        .collect();
     let a = |e: &str, n: &str| attr(e, &format!("android:{n}"));
     let mut o = String::new();
     let _ = writeln!(o, "// Overview of {}\n", st.path);
     let _ = writeln!(o, "package           {}", st.package);
     if let Some((_, e)) = elems.iter().find(|x| x.0 == "manifest") {
-        let _ = writeln!(o, "version           {} ({})", a(e, "versionName").unwrap_or_default(), a(e, "versionCode").unwrap_or_default());
+        let _ = writeln!(
+            o,
+            "version           {} ({})",
+            a(e, "versionName").unwrap_or_default(),
+            a(e, "versionCode").unwrap_or_default()
+        );
     }
     if let Some((_, e)) = elems.iter().find(|x| x.0 == "uses-sdk") {
-        let _ = writeln!(o, "min / target SDK  {} / {}", a(e, "minSdkVersion").unwrap_or("?".into()), a(e, "targetSdkVersion").unwrap_or("?".into()));
+        let _ = writeln!(
+            o,
+            "min / target SDK  {} / {}",
+            a(e, "minSdkVersion").unwrap_or("?".into()),
+            a(e, "targetSdkVersion").unwrap_or("?".into())
+        );
     }
-    let _ = writeln!(o, "classes           {} top-level, {} methods, {} dex", st.classes.len(), st.methods, st.dexes.len());
+    let _ = writeln!(
+        o,
+        "classes           {} top-level, {} methods, {} dex",
+        st.classes.len(),
+        st.methods,
+        st.dexes.len()
+    );
     if let Some((_, e)) = elems.iter().find(|x| x.0 == "application") {
         let _ = writeln!(o, "\n// application flags");
-        for f in ["debuggable", "allowBackup", "usesCleartextTraffic", "networkSecurityConfig", "requestLegacyExternalStorage", "name"] {
+        for f in [
+            "debuggable",
+            "allowBackup",
+            "usesCleartextTraffic",
+            "networkSecurityConfig",
+            "requestLegacyExternalStorage",
+            "name",
+        ] {
             if let Some(v) = a(e, f) {
-                let warn = matches!((f, v.as_str()), ("debuggable", "true") | ("usesCleartextTraffic", "true") | ("allowBackup", "true"));
+                let warn = matches!(
+                    (f, v.as_str()),
+                    ("debuggable", "true")
+                        | ("usesCleartextTraffic", "true")
+                        | ("allowBackup", "true")
+                );
                 let _ = writeln!(o, "{f:<29}{v}{}", if warn { "    <- review" } else { "" });
             }
         }
     }
     const DANGEROUS: [&str; 16] = [
-        "READ_CONTACTS", "WRITE_CONTACTS", "READ_SMS", "SEND_SMS", "RECEIVE_SMS", "READ_CALL_LOG", "CALL_PHONE", "RECORD_AUDIO", "CAMERA", "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "READ_PHONE_STATE", "READ_EXTERNAL_STORAGE", "BODY_SENSORS", "REQUEST_INSTALL_PACKAGES",
+        "READ_CONTACTS",
+        "WRITE_CONTACTS",
+        "READ_SMS",
+        "SEND_SMS",
+        "RECEIVE_SMS",
+        "READ_CALL_LOG",
+        "CALL_PHONE",
+        "RECORD_AUDIO",
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "READ_PHONE_STATE",
+        "READ_EXTERNAL_STORAGE",
+        "BODY_SENSORS",
+        "REQUEST_INSTALL_PACKAGES",
     ];
-    let perms: Vec<String> = elems.iter().filter(|x| x.0.starts_with("uses-permission")).filter_map(|x| a(x.1, "name")).collect();
+    let perms: Vec<String> = elems
+        .iter()
+        .filter(|x| x.0.starts_with("uses-permission"))
+        .filter_map(|x| a(x.1, "name"))
+        .collect();
     let _ = writeln!(o, "\n// permissions ({})", perms.len());
     for p in &perms {
         let flag = DANGEROUS.iter().any(|d| p.ends_with(d));
@@ -990,7 +1444,12 @@ pub fn overview(st: &State) -> String {
         match *tag {
             "activity" | "activity-alias" | "service" | "receiver" | "provider" => {
                 flush(cur.take(), &mut o);
-                cur = Some((tag.to_string(), a(e, "name").unwrap_or_default(), a(e, "exported"), false));
+                cur = Some((
+                    tag.to_string(),
+                    a(e, "name").unwrap_or_default(),
+                    a(e, "exported"),
+                    false,
+                ));
             }
             "intent-filter" => {
                 if let Some(c) = cur.as_mut() {
@@ -998,9 +1457,18 @@ pub fn overview(st: &State) -> String {
                 }
             }
             "data" => {
-                let (s, h, p) = (a(e, "scheme"), a(e, "host"), a(e, "path").or(a(e, "pathPrefix")).or(a(e, "pathPattern")));
+                let (s, h, p) = (
+                    a(e, "scheme"),
+                    a(e, "host"),
+                    a(e, "path").or(a(e, "pathPrefix")).or(a(e, "pathPattern")),
+                );
                 if s.is_some() || h.is_some() {
-                    deep.push(format!("{}://{}{}", s.unwrap_or("*".into()), h.unwrap_or("*".into()), p.unwrap_or_default()));
+                    deep.push(format!(
+                        "{}://{}{}",
+                        s.unwrap_or("*".into()),
+                        h.unwrap_or("*".into()),
+                        p.unwrap_or_default()
+                    ));
                 }
             }
             _ => {}
@@ -1013,15 +1481,26 @@ pub fn overview(st: &State) -> String {
     for d in &deep {
         let _ = writeln!(o, "{d}");
     }
-    let _ = writeln!(o, "
-// signature");
+    let _ = writeln!(
+        o,
+        "
+// signature"
+    );
     o += &crate::sign::summary(&st.file, &st.entries, |p| st.read_entry(p));
-    let libs: Vec<&String> = st.entries.iter().filter(|e| e.starts_with("lib/") && e.ends_with(".so")).collect();
+    let libs: Vec<&String> = st
+        .entries
+        .iter()
+        .filter(|e| e.starts_with("lib/") && e.ends_with(".so"))
+        .collect();
     let _ = writeln!(o, "\n// native libraries ({})", libs.len());
     for l in &libs {
         let _ = writeln!(o, "{l}");
     }
-    let assets = st.entries.iter().filter(|e| e.starts_with("assets/")).count();
+    let assets = st
+        .entries
+        .iter()
+        .filter(|e| e.starts_with("assets/"))
+        .count();
     let _ = writeln!(o, "\n// assets: {assets} files");
     o
 }
@@ -1038,20 +1517,33 @@ mod tests {
         assert!(!urls.line(r#"String s = "hello world";"#));
         assert!(!urls.line(r#"xmlns:android="http://schemas.android.com/apk/res/android""#));
         let http = Matcher::new("", Scope::Http, false, false).unwrap();
-        assert!(http.line(r#"@POST("v2/token")"#) && http.line("Request request = new Request.Builder().url(str).build();"));
+        assert!(
+            http.line(r#"@POST("v2/token")"#)
+                && http.line("Request request = new Request.Builder().url(str).build();")
+        );
         assert!(!http.line("int getHeight() {"));
-        assert!(!http.line("IntentSenderRequest.Builder builder = new IntentSenderRequest.Builder(x);"));
+        assert!(
+            !http.line("IntentSenderRequest.Builder builder = new IntentSenderRequest.Builder(x);")
+        );
         assert!(!http.line("import okhttp3.Request.Builder;"));
         let sec = Matcher::new("", Scope::Secrets, false, false).unwrap();
-        assert!(sec.line(r#"<string name="google_api_key">AIzaSyA1234567890abcdefghijklmnopqrstuv</string>"#));
+        assert!(sec.line(
+            r#"<string name="google_api_key">AIzaSyA1234567890abcdefghijklmnopqrstuv</string>"#
+        ));
         assert!(sec.line(r#"builder.addHeader("Authorization", "Bearer " + token);"#));
         assert!(!sec.line("return x + 1;"));
-        assert!(!sec.line(r#"<string name="password_toggle_content_description">Show password</string>"#));
+        assert!(
+            !sec.line(
+                r#"<string name="password_toggle_content_description">Show password</string>"#
+            )
+        );
         assert!(sec.line(r#"private static final String API_KEY = "k3y-1234567890";"#));
         assert!(sec.line(r#"<string name="facebook_client_token">abcdef123456</string>"#));
         // query narrows a scope; String scope looks only inside literals
         let narrowed = Matcher::new("example", Scope::Urls, false, false).unwrap();
-        assert!(narrowed.line(r#""https://example.com""#) && !narrowed.line(r#""https://other.com""#));
+        assert!(
+            narrowed.line(r#""https://example.com""#) && !narrowed.line(r#""https://other.com""#)
+        );
         let lit = Matcher::new("abc", Scope::String, false, false).unwrap();
         assert!(lit.line(r#"f("xabcx");"#) && !lit.line("abc();"));
         assert!(Matcher::new("(", Scope::Code, true, false).is_err());
@@ -1067,26 +1559,44 @@ mod tests {
         assert_eq!(excerpt(&lines, 0, 5, false), (0, 6));
         let hits = vec![("A".to_string(), 4, "call(\"/api/auth\");".to_string())];
         let json = export(&hits, 0, true, Format::Json, |_| Some(src.to_string()));
-        assert!(json.contains("\"excerpt\":\"    void f(int x) {\\n") && json.trim_end().ends_with(']'), "{json}");
+        assert!(
+            json.contains("\"excerpt\":\"    void f(int x) {\\n") && json.trim_end().ends_with(']'),
+            "{json}"
+        );
         let csv = export(&hits, 0, false, Format::Csv, |_| None);
-        assert_eq!(csv.lines().nth(1), Some("\"A\",4,\"call(\"\"/api/auth\"\");\",\"call(\"\"/api/auth\"\");\""));
+        assert_eq!(
+            csv.lines().nth(1),
+            Some("\"A\",4,\"call(\"\"/api/auth\"\");\",\"call(\"\"/api/auth\"\");\"")
+        );
     }
 
     #[test]
     fn origins() {
-        assert_eq!(origin("oncode.apps.zestle.MainActivity", "oncode.apps.zestle"), Origin::App);
+        assert_eq!(
+            origin("oncode.apps.zestle.MainActivity", "oncode.apps.zestle"),
+            Origin::App
+        );
         // a sibling package with the same prefix is not the app
         // code beside the launcher package is the app's too, a different organization is not
-        assert_eq!(origin("com.unciv.logic.GameInfo", "com.unciv.app"), Origin::App);
+        assert_eq!(
+            origin("com.unciv.logic.GameInfo", "com.unciv.app"),
+            Origin::App
+        );
         assert_eq!(origin("com.uncivx.A", "com.unciv.app"), Origin::Other);
-        assert_eq!(origin("androidx.core.view.ViewCompat", "oncode.apps.zestle"), Origin::Library);
+        assert_eq!(
+            origin("androidx.core.view.ViewCompat", "oncode.apps.zestle"),
+            Origin::Library
+        );
         assert_eq!(origin("pkg_a.ClassB", "oncode.apps.zestle"), Origin::Other);
         assert_eq!(origin("com.google.gson.Gson", ""), Origin::Library);
     }
 
     #[test]
     fn manifest_attrs() {
-        assert_eq!(attr("<x android:name=\"a.B\" package=\"p.q\">", "package").as_deref(), Some("p.q"));
+        assert_eq!(
+            attr("<x android:name=\"a.B\" package=\"p.q\">", "package").as_deref(),
+            Some("p.q")
+        );
         assert_eq!(attr("<x>", "package"), None);
     }
 }
@@ -1096,14 +1606,28 @@ pub fn smali(dx: &Dex, c: usize) -> String {
     let mut out = String::new();
     let mut stack = vec![c];
     while let Some(x) = stack.pop() {
-        let _ = writeln!(out, ".class {}
-", dx.class_descriptor(x).unwrap_or_default());
+        let _ = writeln!(
+            out,
+            ".class {}
+",
+            dx.class_descriptor(x).unwrap_or_default()
+        );
         for m in dx.methods(x).unwrap_or_default() {
-            let _ = writeln!(out, ".method {:#x} {}", m.access, dx.method_ref(m.method_idx).unwrap_or_default());
+            let _ = writeln!(
+                out,
+                ".method {:#x} {}",
+                m.access,
+                dx.method_ref(m.method_idx).unwrap_or_default()
+            );
             if let Some(code) = &m.code {
                 let _ = writeln!(out, "    .registers {}", code.registers);
                 for i in bytecode::decode(code.insns).unwrap_or_default() {
-                    let _ = writeln!(out, "    {:04x}: {}", i.off, crate::render(dx, &i).unwrap_or_else(|e| e));
+                    let _ = writeln!(
+                        out,
+                        "    {:04x}: {}",
+                        i.off,
+                        crate::render(dx, &i).unwrap_or_else(|e| e)
+                    );
                 }
             }
             out += ".end method

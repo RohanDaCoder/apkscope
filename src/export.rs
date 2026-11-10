@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::dex::{self, Dex};
 use crate::java;
@@ -26,12 +26,19 @@ pub fn open(path: &str) -> Result<Apk, String> {
         // only root-level classes*.dex are loaded by Android
         if name.starts_with("classes") && name.ends_with(".dex") && !name.contains('/') {
             let mut buf = Vec::with_capacity(entry.size() as usize);
-            entry.read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("{name}: {e}"))?;
             dex.push((name, buf));
         }
     }
     // classes.dex, classes2.dex, ... (first definition of a class wins at runtime)
-    dex.sort_by_key(|(n, _)| n.trim_start_matches("classes").trim_end_matches(".dex").parse::<u32>().unwrap_or(1));
+    dex.sort_by_key(|(n, _)| {
+        n.trim_start_matches("classes")
+            .trim_end_matches(".dex")
+            .parse::<u32>()
+            .unwrap_or(1)
+    });
     Ok(Apk { zip, dex })
 }
 
@@ -44,17 +51,36 @@ impl Apk {
     }
 }
 
-const RESERVED: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3"];
+const RESERVED: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3",
+];
 
 /// Unique, filesystem-safe path for a class. Obfuscated `a` and `A` collide on Windows/macOS,
 /// so names are de-duplicated case-insensitively.
 fn class_path(desc: &str, taken: &Mutex<HashSet<String>>) -> PathBuf {
-    let inner = desc.strip_prefix('L').and_then(|s| s.strip_suffix(';')).unwrap_or(desc);
+    let inner = desc
+        .strip_prefix('L')
+        .and_then(|s| s.strip_suffix(';'))
+        .unwrap_or(desc);
     let safe: Vec<String> = inner
         .split('/')
         .map(|p| {
-            let p: String = p.chars().map(|c| if c.is_alphanumeric() || "$_-".contains(c) { c } else { '_' }).collect();
-            if RESERVED.contains(&p.to_lowercase().as_str()) { format!("{p}_") } else { p }
+            let p: String = p
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || "$_-".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if RESERVED.contains(&p.to_lowercase().as_str()) {
+                format!("{p}_")
+            } else {
+                p
+            }
         })
         .collect();
     let base = safe.join("/");
@@ -70,7 +96,11 @@ fn class_path(desc: &str, taken: &Mutex<HashSet<String>>) -> PathBuf {
 
 /// Decompile every class into `src_dir`, in parallel. Returns (classes written, classes failed).
 pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
-    let dexes: Vec<Dex> = apk.dex.iter().filter_map(|(n, b)| Dex::parse(b).map_err(|e| eprintln!("{n}: {e}")).ok()).collect();
+    let dexes: Vec<Dex> = apk
+        .dex
+        .iter()
+        .filter_map(|(n, b)| Dex::parse(b).map_err(|e| eprintln!("{n}: {e}")).ok())
+        .collect();
     if deobf {
         crate::deobf::init(&dexes);
     }
@@ -85,10 +115,10 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
             if nest.parent[c].is_some() {
                 continue;
             }
-            if let Ok(desc) = dex.class_descriptor(c) {
-                if seen.insert(desc) {
-                    jobs.push((d, c));
-                }
+            if let Ok(desc) = dex.class_descriptor(c)
+                && seen.insert(desc)
+            {
+                jobs.push((d, c));
             }
         }
     }
@@ -97,7 +127,10 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
     let failed = AtomicUsize::new(0);
     let taken = Mutex::new(HashSet::new());
     // one core stays free for the writer thread
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).max(1);
+    let threads = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .saturating_sub(1)
+        .max(1);
     // decompile on all cores, write from one thread: parallel file creation is slower on NTFS
     let (tx, rx) = std::sync::mpsc::sync_channel::<(PathBuf, String)>(256);
     std::thread::scope(|s| {
@@ -105,10 +138,10 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
         s.spawn(move || {
             let mut made = HashSet::new();
             for (path, text) in rx {
-                if let Some(dir) = path.parent() {
-                    if made.insert(dir.to_path_buf()) {
-                        let _ = fs::create_dir_all(dir);
-                    }
+                if let Some(dir) = path.parent()
+                    && made.insert(dir.to_path_buf())
+                {
+                    let _ = fs::create_dir_all(dir);
                 }
                 if let Err(e) = fs::write(&path, text) {
                     eprintln!("{}: {e}", path.display());
@@ -122,18 +155,25 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
             std::thread::Builder::new()
                 // structuring recurses per nesting level
                 .stack_size(64 << 20)
-                .spawn_scoped(s, move || loop {
-                    let k = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(&(d, c)) = jobs.get(k) else { break };
-                    let dex = &dexes[d];
-                    let Ok(desc) = dex.class_descriptor(c) else { continue };
-                    let text = java::class(dex, c).unwrap_or_else(|e| {
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        format!("/* class {} failed: {e} */
-", dex::java_name(&desc))
-                    });
-                    let desc = crate::deobf::class(&desc).unwrap_or(&desc);
-                    let _ = tx.send((src_dir.join(class_path(desc, &taken)), text));
+                .spawn_scoped(s, move || {
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&(d, c)) = jobs.get(k) else { break };
+                        let dex = &dexes[d];
+                        let Ok(desc) = dex.class_descriptor(c) else {
+                            continue;
+                        };
+                        let text = java::class(dex, c).unwrap_or_else(|e| {
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            format!(
+                                "/* class {} failed: {e} */
+",
+                                dex::java_name(&desc)
+                            )
+                        });
+                        let desc = crate::deobf::class(&desc).unwrap_or(&desc);
+                        let _ = tx.send((src_dir.join(class_path(desc, taken)), text));
+                    }
                 })
                 .unwrap();
         }
@@ -160,7 +200,10 @@ fn write(path: &Path, data: &[u8]) -> Result<(), String> {
 /// Manifest, res/ (values + files with their real names), assets/ and native libs into `main_dir`.
 pub fn resources(apk: &mut Apk, main_dir: &Path) -> Result<(ResStats, Option<Manifest>), String> {
     let mut st = ResStats::default();
-    let table = apk.read("resources.arsc").map(|d| crate::res::parse_table(&d)).transpose()?;
+    let table = apk
+        .read("resources.arsc")
+        .map(|d| crate::res::parse_table(&d))
+        .transpose()?;
     let names = table.as_ref().map(crate::res::Names::new);
     let mut manifest = None;
     if let Some(m) = apk.read("AndroidManifest.xml") {
@@ -190,7 +233,11 @@ pub fn resources(apk: &mut Apk, main_dir: &Path) -> Result<(ResStats, Option<Man
         }
     }
     // assets and native libraries are copied as-is
-    let names_in_zip: Vec<String> = apk.zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
+    let names_in_zip: Vec<String> = apk
+        .zip
+        .file_names()
+        .filter_map(|n| n.ok().map(|n| n.into_owned()))
+        .collect();
     for name in names_in_zip {
         let dest = if let Some(rest) = name.strip_prefix("assets/") {
             main_dir.join("assets").join(rest)
@@ -240,11 +287,28 @@ impl Manifest {
 
 /// settings.gradle, build.gradle and app/build.gradle for Android Studio.
 pub fn gradle(root: &Path, m: &Manifest) -> Result<(), String> {
-    let or = |v: &str, d: &str| if v.is_empty() { d.to_string() } else { v.to_string() };
-    let name = m.package.rsplit('.').next().filter(|s| !s.is_empty()).unwrap_or("app");
-    write(&root.join("settings.gradle"), format!("rootProject.name = '{name}'
+    let or = |v: &str, d: &str| {
+        if v.is_empty() {
+            d.to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    let name = m
+        .package
+        .rsplit('.')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("app");
+    write(
+        &root.join("settings.gradle"),
+        format!(
+            "rootProject.name = '{name}'
 include ':app'
-").as_bytes())?;
+"
+        )
+        .as_bytes(),
+    )?;
     write(
         &root.join("build.gradle"),
         b"// Decompiled by apkscope. Sources are reconstructed and may not compile as-is.
@@ -287,15 +351,34 @@ mod tests {
     #[test]
     fn class_paths_are_unique_and_safe() {
         let taken = Mutex::new(HashSet::new());
-        assert_eq!(class_path("Lcom/a/B;", &taken), PathBuf::from("com/a/B.java"));
-        assert_eq!(class_path("Lcom/a/b;", &taken), PathBuf::from("com/a/b_2.java"));
-        assert_eq!(class_path("Lcon/Aux;", &taken), PathBuf::from("con_/Aux_.java"));
+        assert_eq!(
+            class_path("Lcom/a/B;", &taken),
+            PathBuf::from("com/a/B.java")
+        );
+        assert_eq!(
+            class_path("Lcom/a/b;", &taken),
+            PathBuf::from("com/a/b_2.java")
+        );
+        assert_eq!(
+            class_path("Lcon/Aux;", &taken),
+            PathBuf::from("con_/Aux_.java")
+        );
     }
 
     #[test]
     fn manifest_fields() {
-        let m = Manifest::from_xml("<manifest package=\"a.b\" android:versionCode=\"7\">
-<uses-sdk android:minSdkVersion=\"24\" android:targetSdkVersion=\"34\" />");
-        assert_eq!((m.package.as_str(), m.min_sdk.as_str(), m.target_sdk.as_str(), m.version_code.as_str()), ("a.b", "24", "34", "7"));
+        let m = Manifest::from_xml(
+            "<manifest package=\"a.b\" android:versionCode=\"7\">
+<uses-sdk android:minSdkVersion=\"24\" android:targetSdkVersion=\"34\" />",
+        );
+        assert_eq!(
+            (
+                m.package.as_str(),
+                m.min_sdk.as_str(),
+                m.target_sdk.as_str(),
+                m.version_code.as_str()
+            ),
+            ("a.b", "24", "34", "7")
+        );
     }
 }

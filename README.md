@@ -217,9 +217,27 @@ library really does, and anyone who hands APKs to an AI agent.
 
 ## Get started
 
-**1. Get it:** Windows `apkscope.exe`, Linux `apkscope_<version>_amd64.deb` (Debian/Ubuntu) or
-`apkscope-<version>-x86_64.AppImage` (any distro), from
-[Releases](https://github.com/suffixing/apkscope/releases) — or build:
+**1. Get it:**
+
+Linux (x86_64, aarch64) or macOS — one command, detects your CPU and verifies the checksum:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.sh | sh
+# or a pinned version:
+curl -fsSL https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.sh | sh -s 0.9.1
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps1 | iex
+```
+
+Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
+(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
+the Linux/macOS binaries are fully static, CLI + MCP server only). The viewer ships as
+`apkscope_<version>_<arch>.deb` (Debian/Ubuntu) or `apkscope-<version>-<arch>.AppImage` (any distro)
+in the same releases, and as `apkscope.exe` on Windows; on macOS, build from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
@@ -228,6 +246,8 @@ cargo build --release --no-default-features    # CLI + MCP only (servers)
 
 The viewer needs no system GUI libraries at build time: it loads the desktop's X11 or Wayland
 stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro.
+
+To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
 **2. Give it to your agent:**
 
@@ -350,8 +370,8 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 - Cold one-shot queries: rust_ASC is still quicker at string xrefs (0.78-0.97x, 5-40 ms) and a
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
-- The viewer is tested on Windows; the Linux build (`.deb`, AppImage) is smoke-tested under Xvfb
-  in CI, but day-to-day use on Linux isn't validated yet.
+- The viewer is tested on Windows; the Linux build (`.deb`, AppImage) installs and launches under
+  WSLg on Windows 11, but day-to-day use on a native Linux desktop isn't validated yet.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).
 - `decrypt` only runs decryptors that compute from constants.
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
