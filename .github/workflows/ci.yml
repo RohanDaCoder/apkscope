@@ -74,13 +74,28 @@ jobs:
             target/release/apkscope
             target/release/apkscope.exe
           if-no-files-found: ignore
-      # the Linux binary, packaged like the release (.deb + AppImage); pinned
-      # to 24.04 because it links glibc dynamically — building on the oldest
-      # supported LTS keeps it installable everywhere.
+      # the static CLI + MCP server on Linux, like the release: for servers,
+      # containers and musl distros (Alpine) — no viewer, and it says so when
+      # asked (a static binary cannot dlopen() the desktop's X11/Wayland/GL)
+      - if: matrix.os == 'ubuntu-24.04'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - if: matrix.os == 'ubuntu-24.04'
+        run: sudo apt-get install -y musl-tools
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      # the Linux binaries, packaged like the release (.deb + AppImage); pinned
+      # to 24.04 because the glibc build links glibc dynamically — building on
+      # the oldest supported LTS keeps it installable everywhere.
       - if: matrix.os == 'ubuntu-24.04'
         run: |
           mkdir -p dist
           cp target/release/apkscope dist/apkscope_linux_x86_64
+          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_cli_linux_x86_64
           packaging/linux/package.sh target/release/apkscope dist
       - if: matrix.os == 'ubuntu-24.04'
         uses: actions/upload-artifact@v7

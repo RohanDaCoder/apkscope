@@ -234,12 +234,16 @@ irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps
 ```
 
 Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases):
-`apkscope_windows_x86_64.exe`, `apkscope_linux_x86_64` and `apkscope_linux_aarch64` — each one
-binary with the viewer, the CLI and the MCP server (the same build, packaged as
-`apkscope_<version>_<arch>.deb` for Debian/Ubuntu and `apkscope-<version>-<arch>.AppImage` for
-any distro). The Linux binaries are built on Ubuntu 24.04, so they need its glibc (2.39) or
-newer — on older distros or Alpine, build from source. `apkscope_macos_*` are CLI + MCP server
-only — on macOS, build the viewer from source:
+
+- `apkscope_windows_x86_64.exe` / `apkscope_linux_x86_64` / `apkscope_linux_aarch64` — one
+  binary with the viewer, the CLI and the MCP server. On Linux also packaged as
+  `apkscope_<version>_<arch>.deb` (Debian/Ubuntu) and `apkscope-<version>-<arch>.AppImage`
+  (any distro); those binaries are glibc builds from Ubuntu 24.04, so they need glibc 2.39+.
+- `apkscope_cli_linux_x86_64` / `apkscope_cli_linux_aarch64` — the fully static CLI + MCP
+  server for servers, containers and musl distros (Alpine); runs on any glibc distro too.
+  No viewer: a fully static binary cannot load the desktop's X11/Wayland/GL libraries —
+  ask it for the gui and it says exactly that.
+- `apkscope_macos_*` — CLI + MCP server; on macOS, build the viewer from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
@@ -374,6 +378,9 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
 - The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
+- The static CLI binary (`apkscope_cli_linux_*`) has no viewer, and cannot have one: a fully
+  static binary cannot dlopen() the desktop's X11/Wayland/GL libraries. Use the glibc binary
+  or the .deb/AppImage packages for the window.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).
 - `decrypt` only runs decryptors that compute from constants.
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally
