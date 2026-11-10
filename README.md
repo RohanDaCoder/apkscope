@@ -233,11 +233,13 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps1 | iex
 ```
 
-Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
-(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
-the Linux/macOS binaries are fully static, CLI + MCP server only). The viewer ships as
-`apkscope_<version>_<arch>.deb` (Debian/Ubuntu) or `apkscope-<version>-<arch>.AppImage` (any distro)
-in the same releases, and as `apkscope.exe` on Windows; on macOS, build from source:
+Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases):
+`apkscope_windows_x86_64.exe`, `apkscope_linux_x86_64` and `apkscope_linux_aarch64` — each one
+binary with the viewer, the CLI and the MCP server (the same build, packaged as
+`apkscope_<version>_<arch>.deb` for Debian/Ubuntu and `apkscope-<version>-<arch>.AppImage` for
+any distro). The Linux binaries are built on Ubuntu 24.04, so they need its glibc (2.39) or
+newer — on older distros or Alpine, build from source. `apkscope_macos_*` are CLI + MCP server
+only — on macOS, build the viewer from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
@@ -245,7 +247,8 @@ cargo build --release --no-default-features    # CLI + MCP only (servers)
 ```
 
 The viewer needs no system GUI libraries at build time: it loads the desktop's X11 or Wayland
-stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro.
+stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro
+with a new-enough glibc.
 
 To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
@@ -359,7 +362,7 @@ under half a second of tool time.
 
 <p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview" width="760"></p>
 
-Double-click `apkscope.exe` (or launch the Linux .deb/AppImage) and drop in an APK. Security overview first, then your app's code apart
+Double-click `apkscope.exe` (or run the Linux binary / .deb / AppImage) and drop in an APK. Security overview first, then your app's code apart
 from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
 callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
 **Edit smali** on a class to patch its code, then **Build & sign** with undo.

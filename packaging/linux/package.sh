@@ -7,6 +7,8 @@
 # the xdg-desktop-portal file dialogs are dlopen()'d at runtime. So the .deb just
 # declares the runtime libraries as Depends, and the AppImage bundles only the
 # binary, the desktop file and the icon (no libraries, no GL driver conflicts).
+# The raw binary itself is shipped by the caller (release.yml / ci.yml copy it
+# to apkscope_linux_<arch>), so it is not duplicated here.
 #
 # appimagetool is fetched from the AppImage project's continuous release unless
 # APPIMAGETOOL points at an existing one.
@@ -101,7 +103,3 @@ appimage="$out/apkscope-${version}-${arch_app}.AppImage"
 # APPIMAGE_EXTRACT_AND_RUN: hosted runners (and minimal CI containers) have no FUSE
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$arch_app "$tool" "$appdir" "$appimage"
 echo "built $appimage"
-
-# raw binary alongside the packages, for distros without dpkg that skip AppImage
-install -m 755 "$bin" "$out/apkscope_gui_linux_${arch_app}"
-echo "built $out/apkscope_gui_linux_${arch_app}"

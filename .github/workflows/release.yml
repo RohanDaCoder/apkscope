@@ -2,9 +2,12 @@ name: release
 
 # Builds every platform when a version tag (v*) is pushed and attaches the
 # binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
-# publishes as a pre-release. Linux CLI/MCP binaries are static musl builds;
-# the Linux viewer is a glibc build packaged as .deb + AppImage. The lint job
-# gates the matrix so a broken tag wastes no compute.
+# publishes as a pre-release. Linux and Windows ship one binary each — the
+# viewer, the CLI and the MCP server together; the Linux binary is a glibc
+# build (Ubuntu 24.04, the oldest supported LTS, sets the glibc floor),
+# packaged as .deb and AppImage next to the raw binary. macOS ships the
+# CLI + MCP build only. The lint job gates the matrix so a broken tag wastes
+# no compute.
 on:
   push:
     tags:
@@ -13,15 +16,20 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # checks both feature configs now; the viewer tree adds a few minutes
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      # CLI + MCP server only — matches the Linux/macOS release build
+      # CLI + MCP server only — the macOS release build
       - run: cargo check --release --no-default-features
+      # the default-feature build — what Linux and Windows releases ship
+      # (viewer + CLI + MCP server in one binary); compiles with no system GUI
+      # packages, since the desktop's X11/Wayland/GL are dlopen()'d at runtime
+      - run: cargo check --release
       - run: cargo clippy --release --no-default-features -- -D warnings
 
   linux-x86_64:
@@ -31,19 +39,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - run: sudo apt-get install -y musl-tools
-      - run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
-        env:
-          CC_x86_64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      # one binary, like the Windows exe: viewer + CLI + MCP server. It links
+      # nothing beyond libc — X11, Wayland and GL are dlopen()'d at runtime —
+      # and 24.04 is the oldest supported LTS, so the glibc it needs is the
+      # floor every newer distro meets.
+      - run: cargo build --release
       - run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_x86_64
-      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
-      # runtime, so nothing is statically linked), packaged as .deb and AppImage
-      - run: cargo build --release
+          cp target/release/apkscope dist/apkscope_linux_x86_64
+      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage for any distro
       - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
@@ -57,19 +61,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-musl
-      - run: sudo apt-get install -y musl-tools
-      - run: cargo build --release --no-default-features --target aarch64-unknown-linux-musl
-        env:
-          CC_aarch64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      # one binary, like the Windows exe: viewer + CLI + MCP server. It links
+      # nothing beyond libc — X11, Wayland and GL are dlopen()'d at runtime —
+      # and 24.04 is the oldest supported LTS, so the glibc it needs is the
+      # floor every newer distro meets.
+      - run: cargo build --release
       - run: |
           mkdir -p dist
-          cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_aarch64
-      # the viewer: a glibc build (it dlopens the desktop's X11/Wayland/GL at
-      # runtime, so nothing is statically linked), packaged as .deb and AppImage
-      - run: cargo build --release
+          cp target/release/apkscope dist/apkscope_linux_aarch64
+      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage for any distro
       - run: packaging/linux/package.sh target/release/apkscope dist
       - uses: actions/upload-artifact@v7
         with:
@@ -99,7 +99,7 @@ jobs:
 
   windows:
     needs: [lint]
-    # the GUI viewer, built where it is tested
+    # one binary — viewer + CLI + MCP server — built where it is tested
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
