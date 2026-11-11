@@ -46,6 +46,13 @@ install -m 644 "$root/assets/logo-256.png" "$debroot/usr/share/icons/hicolor/256
 install -m 644 "$root/LICENSE" "$debroot/usr/share/doc/apkscope/copyright"
 install -m 644 "$root/NOTICE" "$debroot/usr/share/doc/apkscope/"
 
+# AppStream metadata: __VERSION__/__DATE__ filled in from this build, so the
+# <releases> entry never goes stale. Software centers read it, and appimagetool
+# warns when an AppImage ships without it.
+mkdir -p "$debroot/usr/share/metainfo"
+sed -e "s/__VERSION__/$version/" -e "s/__DATE__/$(date -u +%F)/" \
+    "$root/packaging/linux/apkscope.appdata.xml" > "$debroot/usr/share/metainfo/apkscope.appdata.xml"
+
 # dlopen()'d runtime libraries (see ldd: nothing beyond libc is linked)
 cat > "$debroot/DEBIAN/control" <<EOF
 Package: apkscope
@@ -91,6 +98,8 @@ install -m 755 "$bin" "$appdir/usr/bin/apkscope"
 install -m 755 "$root/packaging/linux/AppRun" "$appdir/AppRun"
 install -m 644 "$root/packaging/linux/apkscope.desktop" "$appdir/apkscope.desktop"
 install -m 644 "$root/assets/logo-256.png" "$appdir/apkscope.png"
+mkdir -p "$appdir/usr/share/metainfo"
+install -m 644 "$debroot/usr/share/metainfo/apkscope.appdata.xml" "$appdir/usr/share/metainfo/"
 
 tool=${APPIMAGETOOL:-$work/appimagetool}
 if [ ! -x "$tool" ]; then

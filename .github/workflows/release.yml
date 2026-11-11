@@ -156,7 +156,7 @@ jobs:
           cd dist
           sha256sum apkscope* > checksums.txt
           cat checksums.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3.0.4
         with:
           files: |
             dist/apkscope*
