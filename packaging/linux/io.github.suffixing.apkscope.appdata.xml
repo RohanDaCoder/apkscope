@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>apkscope.desktop</id>
+  <id>io.github.suffixing.apkscope</id>
   <name>apkscope</name>
   <summary>Android APK decompiler, xref engine and MCP server for AI agents</summary>
   <description>
@@ -19,8 +19,11 @@
   <project_license>Apache-2.0</project_license>
   <url type="homepage">https://github.com/suffixing/apkscope</url>
   <url type="bugtracker">https://github.com/suffixing/apkscope/issues</url>
-  <launchable type="desktop-id">apkscope.desktop</launchable>
-  <developer_name>suffixing</developer_name>
+  <launchable type="desktop-id">io.github.suffixing.apkscope.desktop</launchable>
+  <developer id="io.github.suffixing">
+    <name>suffixing</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
   <releases>
     <release version="__VERSION__" date="__DATE__"/>
   </releases>

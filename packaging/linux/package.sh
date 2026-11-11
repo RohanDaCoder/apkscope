@@ -41,7 +41,7 @@ mkdir -p "$debroot/DEBIAN" \
          "$debroot/usr/share/icons/hicolor/256x256/apps" \
          "$debroot/usr/share/doc/apkscope"
 install -m 755 "$bin" "$debroot/usr/bin/apkscope"
-install -m 644 "$root/packaging/linux/apkscope.desktop" "$debroot/usr/share/applications/"
+install -m 644 "$root/packaging/linux/io.github.suffixing.apkscope.desktop" "$debroot/usr/share/applications/"
 install -m 644 "$root/assets/logo-256.png" "$debroot/usr/share/icons/hicolor/256x256/apps/apkscope.png"
 install -m 644 "$root/LICENSE" "$debroot/usr/share/doc/apkscope/copyright"
 install -m 644 "$root/NOTICE" "$debroot/usr/share/doc/apkscope/"
@@ -51,7 +51,7 @@ install -m 644 "$root/NOTICE" "$debroot/usr/share/doc/apkscope/"
 # warns when an AppImage ships without it.
 mkdir -p "$debroot/usr/share/metainfo"
 sed -e "s/__VERSION__/$version/" -e "s/__DATE__/$(date -u +%F)/" \
-    "$root/packaging/linux/apkscope.appdata.xml" > "$debroot/usr/share/metainfo/apkscope.appdata.xml"
+    "$root/packaging/linux/io.github.suffixing.apkscope.appdata.xml" > "$debroot/usr/share/metainfo/io.github.suffixing.apkscope.appdata.xml"
 
 # dlopen()'d runtime libraries (see ldd: nothing beyond libc is linked)
 cat > "$debroot/DEBIAN/control" <<EOF
@@ -96,10 +96,15 @@ appdir=$work/AppDir
 mkdir -p "$appdir/usr/bin"
 install -m 755 "$bin" "$appdir/usr/bin/apkscope"
 install -m 755 "$root/packaging/linux/AppRun" "$appdir/AppRun"
-install -m 644 "$root/packaging/linux/apkscope.desktop" "$appdir/apkscope.desktop"
+# the desktop file lives at the AppDir root (where appimagetool reads it) and
+# in usr/share/applications/ (where appstreamcli validate-tree resolves the
+# appdata's launchable desktop-id from)
+mkdir -p "$appdir/usr/share/applications"
+install -m 644 "$root/packaging/linux/io.github.suffixing.apkscope.desktop" "$appdir/"
+install -m 644 "$root/packaging/linux/io.github.suffixing.apkscope.desktop" "$appdir/usr/share/applications/"
 install -m 644 "$root/assets/logo-256.png" "$appdir/apkscope.png"
 mkdir -p "$appdir/usr/share/metainfo"
-install -m 644 "$debroot/usr/share/metainfo/apkscope.appdata.xml" "$appdir/usr/share/metainfo/"
+install -m 644 "$debroot/usr/share/metainfo/io.github.suffixing.apkscope.appdata.xml" "$appdir/usr/share/metainfo/"
 
 tool=${APPIMAGETOOL:-$work/appimagetool}
 if [ ! -x "$tool" ]; then
