@@ -239,7 +239,7 @@ Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/
   binary with the viewer, the CLI and the MCP server. On Linux also packaged as
   `apkscope_<version>_<arch>.deb` (Debian/Ubuntu) and `apkscope-<version>-<arch>.AppImage`
   (any distro); those binaries are glibc builds from Ubuntu 24.04, so they need glibc 2.39+.
-- `apkscope_cli_linux_x86_64` / `apkscope_cli_linux_aarch64` — the fully static CLI + MCP
+- `apkscope_linux_musl_x86_64` / `apkscope_linux_musl_aarch64` — the fully static CLI + MCP
   server for servers, containers and musl distros (Alpine); runs on any glibc distro too.
   No viewer: a fully static binary cannot load the desktop's X11/Wayland/GL libraries —
   ask it for the gui and it says exactly that.
@@ -378,7 +378,7 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
 - The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
-- The static CLI binary (`apkscope_cli_linux_*`) has no viewer, and cannot have one: a fully
+- The static musl binary (`apkscope_linux_musl_*`) has no viewer, and cannot have one: a fully
   static binary cannot dlopen() the desktop's X11/Wayland/GL libraries. Use the glibc binary
   or the .deb/AppImage packages for the window.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).

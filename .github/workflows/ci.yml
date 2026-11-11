@@ -95,7 +95,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/apkscope dist/apkscope_linux_x86_64
-          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_cli_linux_x86_64
+          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
           packaging/linux/package.sh target/release/apkscope dist
       - if: matrix.os == 'ubuntu-24.04'
         uses: actions/upload-artifact@v7

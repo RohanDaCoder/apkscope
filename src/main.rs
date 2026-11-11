@@ -911,11 +911,12 @@ mod gui {
     pub fn no_viewer_note() {
         eprintln!(
             "apkscope: no viewer in this build (compiled without the `gui` feature).\n\
-             On Linux this is the static binary, for servers, containers and musl distros:\n\
-             a fully static binary cannot load the desktop's X11/Wayland/GL libraries at\n\
-             runtime, so it cannot open a window. The viewer ships in the Windows exe, the\n\
-             glibc Linux binaries (apkscope_linux_x86_64/aarch64) and the .deb/AppImage\n\
-             packages; on macOS, build from source with `cargo build --release`.\n\
+             On Linux this is the static musl binary (apkscope_linux_musl_x86_64/aarch64),\n\
+             for servers, containers and musl distros: a fully static binary cannot load\n\
+             the desktop's X11/Wayland/GL libraries at runtime, so it cannot open a\n\
+             window. The viewer ships in the Windows exe, the glibc Linux binaries\n\
+             (apkscope_linux_x86_64/aarch64) and the .deb/AppImage packages; on macOS,\n\
+             build from source with `cargo build --release`.\n\
              Every other command works - see `apkscope --help` for the list."
         );
     }

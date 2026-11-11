@@ -104,8 +104,8 @@ fi
 
 asset="apkscope_${os}_${arch}"
 if [ "$is_musl" -eq 1 ]; then
-  asset="apkscope_cli_${os}_${arch}"
-  note "musl libc detected: installing the static CLI + MCP build — it has no viewer (a fully static binary cannot load the desktop's X11/Wayland/GL libraries); the glibc binary and the .deb/AppImage packages have it"
+  asset="apkscope_${os}_musl_${arch}"
+  note "musl libc detected: installing the static CLI + MCP build (apkscope_linux_musl_${arch}) — it has no viewer (a fully static binary cannot load the desktop's X11/Wayland/GL libraries); the glibc binary and the .deb/AppImage packages have it"
 fi
 
 # --- resolve the download URL ---------------------------------------------------
