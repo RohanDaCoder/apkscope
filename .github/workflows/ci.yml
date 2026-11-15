@@ -1,8 +1,9 @@
 name: ci
 
-# Quality gate + cross-platform test/build matrix; release tags (v*) are
-# handled by release.yml instead. Pinned actions are Node 24-compatible —
-# Node 20 was removed from GitHub-hosted runners on 2026-09-23.
+# Pre-merge gate for every branch and PR. Release tags (v*) are built and
+# published by release.yml instead; this workflow ignores them so a release
+# build never runs twice. Toolchain, action pins and cache keys are shared
+# with release.yml — change them in both files in one commit.
 
 on:
   push:
@@ -12,37 +13,86 @@ on:
       - "v*"
   pull_request:
 
+# One run per ref. head_ref is set on pull_request (the source branch) and
+# empty on push, where github.ref is the branch; so a PR and the branch push
+# behind it share a group and the older run is cancelled. Only PR runs are
+# cancelled: default-branch pushes are never cut off mid-run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: everything here only needs the source tree. The repo has
+# no branch protection yet; when protection is added, "ci-ok" below is the
+# job to make required (it fails if any job it needs failed or was cancelled,
+# and it runs even on docs-only changes, so it can be a required check).
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_NET_RETRY: 5
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   fmt:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo fmt --all -- --check
 
   check:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      # CLI + MCP server only — the macOS release build; the Linux and
-      # Windows release builds (default features, viewer included) are
-      # compiled by the build matrix below
-      - run: cargo check --release --no-default-features
-
-  clippy:
+    # Compile both shipped feature configs without producing artifacts. This
+    # is the cheap smoke of the compilers; clippy below is the real lint gate.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          components: clippy
-      - run: cargo clippy --release --no-default-features -- -D warnings
+          shared-key: check
+      # CLI + MCP server only — the macOS release build; the Linux and
+      # Windows release builds (default features, viewer included) are
+      # compiled by the build matrix below
+      - run: cargo check --locked --workspace --no-default-features
+      # the default-feature build — what the Linux and Windows releases ship
+      # (viewer + CLI + MCP server in one binary); needs no system GUI
+      # packages, the desktop's X11/Wayland/GL are dlopen()'d at runtime
+      - run: cargo check --locked --workspace
+
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: clippy
+      # No --all-targets / -D warnings here: the current test and GUI trees
+      # carry pre-existing warnings (see the PR description) that would fail
+      # the gate today. The dev-profile lint covers all non-test code of both
+      # shipped feature sets; the warning debt is inventoried in the PR and
+      # separate commits turn on the strict flags.
+      # CLI + MCP server only — the macOS release build
+      - run: cargo clippy --locked --workspace --no-default-features -- -D warnings
+      # default features: the viewer tree the Linux and Windows releases ship
+      - run: cargo clippy --locked --workspace -- -D warnings
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+      # dev profile, not --release: debug assertions and overflow checks are
+      # part of what the tests exist to catch. Both shipped feature sets run;
+      # the GUI tests are pure logic (highlighting, tree building, event
+      # ingest) and need no display — the viewer itself is exercised by the
+      # build matrix compile and by hand.
+      - run: cargo test --locked --workspace --no-default-features
+      - run: cargo test --locked --workspace
 
   build:
     strategy:
@@ -50,55 +100,78 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-24.04, name: linux-x64 }
-          - { os: macos-latest, name: macos-arm64, optional: true }
+          - { os: macos-latest, name: macos-arm64 }
           - { os: windows-latest, name: windows-x64 }
     runs-on: ${{ matrix.os }}
-    # macOS arm64 runners are often unavailable (GitHub capacity); don't fail the run for that
-    continue-on-error: ${{ matrix.optional == true }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --release --no-default-features
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: build-${{ matrix.name }}
       # build what the release ships: macOS the CLI + MCP server, Linux and
       # Windows the viewer build — one binary with the GUI, the CLI and the
       # MCP server, exactly the binaries the release attaches
-      - if: matrix.os == 'macos-latest'
-        run: cargo build --release --no-default-features
-      - if: matrix.os != 'macos-latest'
-        run: cargo build --release
-      - uses: actions/upload-artifact@v7
+      - if: runner.os == 'macOS'
+        run: cargo build --locked --workspace --release --no-default-features
+      - if: runner.os != 'macOS'
+        run: cargo build --locked --workspace --release
+      - name: Copy binary (posix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/apkscope dist/apkscope-bin
+      - name: Copy binary (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/apkscope.exe dist/apkscope-bin.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apkscope-${{ matrix.name }}
-          path: |
-            target/release/apkscope
-            target/release/apkscope.exe
-          if-no-files-found: ignore
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
       # the static CLI + MCP server on Linux, like the release: for servers,
       # containers and musl distros (Alpine) — no viewer, and it says so when
       # asked (a static binary cannot dlopen() the desktop's X11/Wayland/GL)
-      - if: matrix.os == 'ubuntu-24.04'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - if: matrix.os == 'ubuntu-24.04'
-        run: sudo apt-get install -y musl-tools
-      - if: matrix.os == 'ubuntu-24.04'
-        run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - if: runner.os == 'Linux'
+        run: cargo build --locked --workspace --release --no-default-features --target x86_64-unknown-linux-musl
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-      # the Linux binaries, packaged like the release (.deb + AppImage); pinned
-      # to 24.04 because the glibc build links glibc dynamically — building on
-      # the oldest supported LTS keeps it installable everywhere.
-      - if: matrix.os == 'ubuntu-24.04'
+      # the Linux binaries, packaged like the release (.deb + AppImage). The
+      # glibc this links is the Ubuntu 24.04 one (glibc 2.39) — the actual
+      # floor for the plain binaries and the AppImage, NOT "the oldest
+      # supported LTS": building on an older image is a deliberate, separate
+      # change because it costs a container or a pinned older runner.
+      - if: runner.os == 'Linux'
         run: |
-          mkdir -p dist
-          cp target/release/apkscope dist/apkscope_linux_x86_64
-          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
-          packaging/linux/package.sh target/release/apkscope dist
-      - if: matrix.os == 'ubuntu-24.04'
-        uses: actions/upload-artifact@v7
+          mkdir -p pkg
+          cp target/release/apkscope pkg/apkscope_linux_x86_64
+          cp target/x86_64-unknown-linux-musl/release/apkscope pkg/apkscope_linux_musl_x86_64
+          packaging/linux/package.sh target/release/apkscope pkg
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apkscope-packages-linux-x64
-          path: dist/
+          path: pkg/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Required-check candidate: reports the matrix's verdict. `always()` makes
+  # it run even when a needed job was skipped or failed; it fails itself if
+  # any dependency failed or was cancelled. Point branch protection here.
+  ci-ok:
+    if: always()
+    needs: [fmt, check, clippy, test, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any needed job failed or was cancelled
+        run: |
+          [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "false" ]]
