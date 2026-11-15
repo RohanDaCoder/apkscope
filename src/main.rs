@@ -1,7 +1,3 @@
-mod apksign;
-mod arsc;
-mod axml;
-mod bytecode;
 mod cache;
 mod cfg;
 mod deobf;
@@ -20,11 +16,11 @@ mod mcp;
 mod opt;
 mod quick;
 mod re;
-mod rebuild;
-mod res;
 mod session;
-mod sign;
-mod smali;
+
+// the editing core is its own crate, usable as a library
+use apkscope_core::dex::render;
+use apkscope_core::{apksign, arsc, axml, bytecode, rebuild, res, sign, smali};
 
 use std::fmt::Write as _;
 use std::{
@@ -73,8 +69,10 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope comment   <apk> <Class|member> <text>
   apkscope map <apk> export <out.jobf|out.mapping>  |  map <apk> import <file>   JADX / Enigma names
 Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
+         apkscope res <apk> <out-dir>      the manifest and res/ as editable files (edit, then build --res)
          apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
-                  [--string name[@config]=value]... [--smali edited.smali]... [--key k.pk8 --cert c.crt]
+                  [--res dir] [--string name[@config]=value]... [--smali edited.smali]...
+                  [--key k.pk8 --cert c.crt | --no-sign]   a .jar is never signed
          apkscope verify <apk>
 Agents:  apkscope mcp                      MCP server over stdio (see README)
 Other:   apkscope disasm <apk> [Class]     apkscope gui [apk]
@@ -460,8 +458,9 @@ fn il2cpp_cmd(mut a: Vec<String>) -> Result<(), String> {
 
 fn manifest_cmd(apk: &str) -> Result<(), String> {
     let m = quick::read_entry(apk, "AndroidManifest.xml")?.ok_or("no AndroidManifest.xml")?;
-    let names =
-        quick::read_entry(apk, "resources.arsc")?.and_then(|d| res::Names::from_arsc(&d).ok());
+    let table =
+        quick::read_entry(apk, "resources.arsc")?.and_then(|d| apkscope_core::table::read(&d).ok());
+    let names = table.as_ref().map(res::Names::new);
     emit(&res::decode_xml(&m, names.as_ref())?)
 }
 
@@ -564,7 +563,7 @@ fn decompile(path: &str, class: Option<&str>, deobf: bool) -> Result<(), String>
     let mut found = false;
     'all: for dex in &dexes {
         let nest = dex.nesting();
-        for c in 0..dex.class_count {
+        for (c, parent) in nest.parent.iter().enumerate() {
             let desc = dex.class_descriptor(c).unwrap_or_default();
             // accept the readable name or the original one
             let raw = desc
@@ -573,7 +572,7 @@ fn decompile(path: &str, class: Option<&str>, deobf: bool) -> Result<(), String>
                 .replace('/', ".");
             match class {
                 Some(want) if want != dex::java_name(&desc) && want != raw => continue,
-                None if nest.parent[c].is_some() => continue, // printed inside its outer class
+                None if parent.is_some() => continue, // printed inside its outer class
                 _ => {}
             }
             found = true;
@@ -595,51 +594,6 @@ fn decompile(path: &str, class: Option<&str>, deobf: bool) -> Result<(), String>
         Some(c) if !found => Err(format!("class {c} not found")),
         _ => Ok(()),
     }
-}
-
-fn render(dex: &dex::Dex, i: &bytecode::Insn) -> Result<String, String> {
-    use bytecode::{Fmt::*, Ref};
-    let (name, f, r) = bytecode::info(i.op).unwrap();
-    let mut parts = Vec::new();
-    let regs: Vec<String> = if i.range {
-        (0..i.nregs as u16)
-            .map(|k| format!("v{}", i.regs[0] + k))
-            .collect()
-    } else {
-        i.regs[..i.nregs as usize]
-            .iter()
-            .map(|r| format!("v{r}"))
-            .collect()
-    };
-    if matches!(f, F35c | F3rc | F45cc | F4rcc) {
-        parts.push(format!("{{{}}}", regs.join(", ")));
-    } else {
-        parts.extend(regs);
-    }
-    match f {
-        F10t | F20t | F30t | F21t | F22t | F31t => {
-            parts.push(format!("{:04x}", i.off as i64 + i.lit))
-        }
-        F11n | F21s | F21h | F31i | F51l | F22b | F22s => parts.push(format!("#{}", i.lit)),
-        _ => {}
-    }
-    match r {
-        Ref::None => {}
-        Ref::String => parts.push(format!("{:?}", dex.string(i.idx)?)),
-        Ref::Type => parts.push(dex.type_name(i.idx)?),
-        Ref::Field => parts.push(dex.field_ref(i.idx)?),
-        Ref::Method => parts.push(dex.method_ref(i.idx)?),
-        Ref::Proto => parts.push(dex.proto(i.idx)?),
-        // shortcut: call sites / method handles shown by index, resolve when lambdas get decompiled
-        Ref::CallSite => parts.push(format!("call_site@{}", i.idx)),
-        Ref::MethodHandle => parts.push(format!("method_handle@{}", i.idx)),
-    }
-    if matches!(f, F45cc | F4rcc) {
-        parts.push(dex.proto(i.idx2)?);
-    }
-    Ok(format!("{name} {}", parts.join(", "))
-        .trim_end()
-        .to_string())
 }
 
 /// Structuring recurses per nesting level; deep methods need more than Windows' 1 MB main stack.
@@ -801,13 +755,57 @@ fn search_cmd(args: &[String], deobf: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// `apkscope build`: apply edits, zipalign, sign v2 + v3, then verify the result.
+/// `apkscope res`: the manifest and `res/` of an APK as files, for `build --res`.
+fn res_cmd(apk: &str, out: &str) -> Result<(), String> {
+    let mut a = export::open(&session::prepare(apk)?)?;
+    let files = apkscope_core::resources::decode(&mut a)?;
+    for (path, data) in &files {
+        let to = std::path::Path::new(out).join(path);
+        if let Some(dir) = to.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::write(&to, data).map_err(|e| format!("{}: {e}", to.display()))?;
+    }
+    eprintln!("wrote {} file(s) to {out}", files.len());
+    Ok(())
+}
+
+/// Every file under `dir`, by its path from there with `/` between names.
+fn read_tree(dir: &std::path::Path) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let path = e.map_err(|e| e.to_string())?.path();
+            if path.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            let rel = path.strip_prefix(dir).map_err(|e| e.to_string())?;
+            let name = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            files.insert(
+                name,
+                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+            );
+        }
+    }
+    Ok(files)
+}
+
+/// `apkscope build`: apply edits, zipalign, sign v2 + v3, then verify the result. `--no-sign`
+/// leaves the APK unsigned; a JAR never is signed, Android does not verify one.
 fn build_cmd(args: &[String]) -> Result<(), String> {
     let mut pos = Vec::new();
     let mut edits = rebuild::Edits::new();
     let (mut key, mut cert, mut manifest) = (None, None, None);
+    let mut sign = true;
     let mut strings = std::collections::BTreeMap::new();
     let mut smali_srcs: Vec<String> = Vec::new();
+    let mut res_dir = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -822,6 +820,8 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
             "--delete" => {
                 edits.insert(it.next().ok_or("--delete needs a name")?.clone(), None);
             }
+            "--no-sign" => sign = false,
+            "--res" => res_dir = Some(it.next().ok_or("--res needs a directory")?.clone()),
             "--string" => {
                 let v = it.next().ok_or("--string needs name=value")?;
                 let (k, text) = v.split_once('=').ok_or("--string needs name=value")?;
@@ -843,24 +843,45 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
     let [input, output] = pos.as_slice() else {
         return Err("usage: apkscope build <in.apk> <out.apk> [options]".into());
     };
+    let jar = input.to_lowercase().ends_with(".jar");
+    if (jar || !sign) && (key.is_some() || cert.is_some()) {
+        return Err("--key and --cert sign an APK: not a .jar, and not with --no-sign".into());
+    }
     let key = match (key, cert) {
-        (Some(k), Some(c)) => apksign::load(std::path::Path::new(&k), std::path::Path::new(&c))?,
+        _ if jar || !sign => None,
+        (Some(k), Some(c)) => Some(apksign::load(
+            std::path::Path::new(&k),
+            std::path::Path::new(&c),
+        )?),
         (None, None) => {
             let (k, dir) = apksign::default_key()?;
             eprintln!("signing with apkscope's key in {}", dir.display());
-            k
+            Some(k)
         }
         _ => return Err("--key and --cert go together".into()),
     };
     let t = std::time::Instant::now();
     let src = session::prepare(input)?;
+    if res_dir.is_some() && (manifest.is_some() || !strings.is_empty()) {
+        return Err(
+            "--res has the manifest and the strings: not with --manifest or --string".into(),
+        );
+    }
+    if let Some(dir) = &res_dir {
+        // everything `apkscope res` wrote: a values file that is gone has no values
+        let files = read_tree(std::path::Path::new(dir))?;
+        let mut apk = export::open(&src)?;
+        let changed = apkscope_core::resources::edits(&mut apk, &files, true)?;
+        eprintln!("{} resource file(s) changed", changed.len());
+        edits.extend(changed);
+    }
     if let Some(m) = manifest {
         // text manifest -> binary XML, typed like the original
         let text = std::fs::read_to_string(&m).map_err(|e| format!("{m}: {e}"))?;
         let mut a = export::open(&src)?;
         let table = a
             .read("resources.arsc")
-            .and_then(|d| res::parse_table(&d).ok());
+            .and_then(|d| apkscope_core::table::read(&d).ok());
         let names = table
             .as_ref()
             .map(res::Names::new)
@@ -887,7 +908,10 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
         );
     }
     let (apk, cd) = rebuild::rebuild(&src, &edits)?;
-    let signed = apksign::sign(apk, cd, &key)?;
+    let signed = match &key {
+        Some(key) => apksign::sign(apk, cd, key)?,
+        None => apk,
+    };
     std::fs::write(output, &signed).map_err(|e| format!("{output}: {e}"))?;
     eprintln!(
         "wrote {output} ({} bytes, {} edits) in {:.1}s",
@@ -895,16 +919,37 @@ fn build_cmd(args: &[String]) -> Result<(), String> {
         edits.len(),
         t.elapsed().as_secs_f64()
     );
-    for l in apksign::verify(output)? {
-        eprintln!("{l}");
+    if key.is_some() {
+        for l in apksign::verify(output)? {
+            eprintln!("{l}");
+        }
     }
     Ok(())
 }
 
 #[cfg(not(feature = "gui"))]
 mod gui {
+    /// Printed when this build is asked for a window it cannot open. The
+    /// static Linux build (musl) is compiled without the viewer on purpose:
+    /// a fully static binary cannot dlopen() the desktop's X11/Wayland/GL
+    /// libraries, so no window is possible there. Spell the limitation out
+    /// and point at the builds that ship the viewer.
+    pub fn no_viewer_note() {
+        eprintln!(
+            "apkscope: no viewer in this build (compiled without the `gui` feature).\n\
+             On Linux this is the static musl binary (apkscope_linux_musl_x86_64/aarch64),\n\
+             for servers, containers and musl distros: a fully static binary cannot load\n\
+             the desktop's X11/Wayland/GL libraries at runtime, so it cannot open a\n\
+             window. The viewer ships in the Windows exe, the glibc Linux binaries\n\
+             (apkscope_linux_x86_64/aarch64) and the .deb/AppImage packages; on macOS,\n\
+             build from source with `cargo build --release`.\n\
+             Every other command works - see `apkscope --help` for the list."
+        );
+    }
+
     pub fn run(_: Option<&str>, _: bool) -> Result<(), String> {
-        Err("this is the CLI-only build (no viewer); every other command works. Build with the default `gui` feature for the window.".into())
+        no_viewer_note();
+        Err("the viewer is not available in this build".into())
     }
 }
 
@@ -948,6 +993,15 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // No command given and this build has no viewer: nothing can open, so
+    // explain the limitation and show what this build can do instead of
+    // failing on a stub. (The viewer build opens its window here.)
+    #[cfg(not(feature = "gui"))]
+    if args.len() < 2 {
+        gui::no_viewer_note();
+        eprintln!();
+        return usage();
+    }
     let rest: Vec<String> = args.get(2..).unwrap_or_default().to_vec();
     let result = match args.get(1..).unwrap_or_default() {
         [cmd, ..] if cmd == "classes" || cmd == "listclass" => (|| {
@@ -1162,15 +1216,16 @@ fn main() -> ExitCode {
         [cmd, path] if cmd == "worker" => run_big_stack(|| mcp::worker(path, deobf)),
         [cmd, path] if cmd == "disasm" => disasm(path, None),
         [cmd, path, class] if cmd == "disasm" => disasm(path, Some(class)),
-        [cmd, path, class] if cmd == "smali" => {
-            smali::export_class(path, class).and_then(|t| emit(&t))
-        }
+        [cmd, path, class] if cmd == "smali" => smali::export_class(path, class)
+            .map_err(String::from)
+            .and_then(|t| emit(&t)),
         [cmd, path, out] if cmd == "export" => export_cmd(path, out, deobf),
+        [cmd, path, out] if cmd == "res" => res_cmd(path, out),
         [cmd, ..] if cmd == "search" => run_big_stack(|| search_cmd(&rest, deobf)),
         [cmd, ..] if cmd == "build" => build_cmd(&rest),
-        [cmd, path] if cmd == "verify" => {
-            apksign::verify(path).map(|lines| lines.iter().for_each(|l| println!("{l}")))
-        }
+        [cmd, path] if cmd == "verify" => apksign::verify(path)
+            .map(|lines| lines.iter().for_each(|l| println!("{l}")))
+            .map_err(String::from),
         [cmd] if cmd == "--version" || cmd == "-V" => {
             println!("apkscope {}", env!("CARGO_PKG_VERSION"));
             Ok(())

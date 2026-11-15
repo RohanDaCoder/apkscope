@@ -199,10 +199,11 @@ pub struct State {
 }
 
 /// What apkscope opens, for file dialogs and the start screen.
-pub const INPUTS: [&str; 4] = ["apk", "apks", "xapk", "dex"];
+pub const INPUTS: [&str; 5] = ["apk", "jar", "apks", "xapk", "dex"];
 
-/// Turn any supported input into an APK path: split bundles (`.apks`, `.xapk`) give their
-/// `base.apk`, a bare `.dex` is wrapped in a minimal APK. Both land in the cache folder.
+/// Turn any supported input into an APK path: a `.jar` of DEX files (Android's framework JARs)
+/// reads as one, split bundles (`.apks`, `.xapk`) give their `base.apk`, a bare `.dex` is
+/// wrapped in a minimal APK. Both land in the cache folder.
 pub fn prepare(path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
     let ext = std::path::Path::new(path)
@@ -214,7 +215,7 @@ pub fn prepare(path: &str) -> Result<String, String> {
         .map_or("input".into(), |s| s.to_string_lossy().into_owned());
     let dir = cache::root().join("inputs");
     match ext.as_str() {
-        "apk" => Ok(path.to_string()),
+        "apk" | "jar" => Ok(path.to_string()),
         "apks" | "xapk" => {
             let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("{path}: {e}"))?;
@@ -297,8 +298,8 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let mut seen = std::collections::HashSet::new();
     for (d, dx) in dexes.iter().enumerate() {
         let nest = dx.nesting();
-        for c in 0..dx.class_count {
-            if nest.parent[c].is_none()
+        for (c, parent) in nest.parent.iter().enumerate() {
+            if parent.is_none()
                 && let Ok(desc) = dx.class_descriptor(c)
                 && seen.insert(desc.clone())
             {
@@ -314,7 +315,7 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
         .collect();
     let table = apk
         .read("resources.arsc")
-        .and_then(|d| res::parse_table(&d).ok());
+        .and_then(|d| apkscope_core::table::read(&d).ok());
     let names = table.as_ref().map(res::Names::new);
     let mut texts = BTreeMap::new();
     let mut files = BTreeMap::new();
@@ -468,11 +469,11 @@ impl State {
             .names
             .as_ref()
             .ok_or("this APK has no resources.arsc to resolve @references")?;
-        crate::axml::encode(
+        Ok(crate::axml::encode(
             text,
             self.read_entry("AndroidManifest.xml").as_deref(),
             names,
-        )
+        )?)
     }
 
     pub fn read_entry(&self, name: &str) -> Option<Vec<u8>> {
@@ -1626,7 +1627,7 @@ pub fn smali(dx: &Dex, c: usize) -> String {
                         out,
                         "    {:04x}: {}",
                         i.off,
-                        crate::render(dx, &i).unwrap_or_else(|e| e)
+                        crate::render(dx, &i).unwrap_or_else(|e| e.to_string())
                     );
                 }
             }

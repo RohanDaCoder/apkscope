@@ -233,16 +233,26 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps1 | iex
 ```
 
-Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases)
-(`apkscope_linux_x86_64` / `apkscope_linux_aarch64` / `apkscope_macos_*` / `apkscope_windows_x86_64.exe` —
-the Linux builds are fully static). Note: the Linux/macOS release binaries are CLI + MCP server only
-(no GUI viewer); the Windows binary includes the native viewer. Build from source to get the viewer
-on Linux/macOS:
+Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases):
+
+- `apkscope_windows_x86_64.exe` / `apkscope_linux_x86_64` / `apkscope_linux_aarch64` — one
+  binary with the viewer, the CLI and the MCP server. On Linux also packaged as
+  `apkscope_<version>_<arch>.deb` (Debian/Ubuntu) and `apkscope-<version>-<arch>.AppImage`
+  (any distro); those binaries are glibc builds from Ubuntu 24.04, so they need glibc 2.39+.
+- `apkscope_linux_musl_x86_64` / `apkscope_linux_musl_aarch64` — the fully static CLI + MCP
+  server for servers, containers and musl distros (Alpine); runs on any glibc distro too.
+  No viewer: a fully static binary cannot load the desktop's X11/Wayland/GL libraries —
+  ask it for the gui and it says exactly that.
+- `apkscope_macos_*` — CLI + MCP server; on macOS, build the viewer from source:
 
 ```bash
 cargo build --release                          # viewer + CLI + MCP server
-cargo build --release --no-default-features    # CLI + MCP only (Linux, macOS, servers)
+cargo build --release --no-default-features    # CLI + MCP only (servers)
 ```
+
+The viewer needs no system GUI libraries at build time: it loads the desktop's X11 or Wayland
+stack (and xdg-desktop-portal for file dialogs) at runtime, so the same binary runs on any distro
+with a new-enough glibc.
 
 To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
@@ -283,9 +293,24 @@ apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild,
 # patch the code
 apkscope smali     app.apk com.example.Api > Api.smali          # one class as editable Smali
 apkscope build     app.apk out.apk --smali Api.smali            # assemble it back in, rebuild, sign
+
+# edit the resources
+apkscope res       app.apk app/                                 # manifest and res/ as editable files
+apkscope build     app.apk out.apk --res app/                   # put back what changed, rebuild, sign
 ```
 
-`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.apks`, `.xapk`, `.dex`.
+`apkscope res` writes `AndroidManifest.xml` and `res/` as apktool lays them out: values as
+`res/values*/*.xml` with a `public.xml` that keeps every resource's ID, layouts, drawables and other
+XML as text, everything else as it is. `build --res` puts back only the files that changed, so
+whatever you don't touch stays exactly as it was: a string or a layout attribute you change, a value
+you add (with the ID `public.xml` gives it, or the next free one), a value or a whole `values-xx/`
+directory you delete. New files under `res/` add their resources, with XML compiled as aapt2 would
+(a layout can use a string added with it), and files you delete are removed. A new directory gets
+the configuration aapt2 would give it for the app's `minSdkVersion`. Images aren't processed, so a
+new `.9.png` must already be compiled, as one taken from another APK is. Renaming resources isn't
+supported yet.
+
+`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.jar` (Android framework JARs), `.apks`, `.xapk`, `.dex`.
 `apkscope --help` lists everything.
 
 <details>
@@ -356,10 +381,65 @@ under half a second of tool time.
 
 <p align="center"><img src="docs/viewer-overview.png" alt="apkscope viewer showing AntennaPod's security overview" width="760"></p>
 
-Double-click `apkscope.exe` and drop in an APK. Security overview first, then your app's code apart
+Double-click `apkscope.exe` (or run the Linux binary / .deb / AppImage) and drop in an APK. Security overview first, then your app's code apart
 from the libraries. **Click** a name to mark it, **Ctrl+click** to jump to it, **right-click** for
 callers, call graph, field access, Frida hook, Smali, rename. Results jump to the exact line.
 **Edit smali** on a class to patch its code, then **Build & sign** with undo.
+
+## As a library
+
+The editing half is its own crate, `apkscope-core` (in `core/`), for tools that patch APKs
+themselves: the DEX reader and writer, the Smali round trip, resources, rebuild and signing, without
+the decompiler, the command line or the viewer.
+
+```toml
+apkscope-core = { git = "https://github.com/suffixing/apkscope" }
+```
+
+```rust
+use apkscope_core::{apksign, rebuild, smali};
+
+let class = smali::export_class("app.apk", "com.example.Api")?;
+let mut edits = rebuild::Edits::new();
+smali::inject("app.apk", &[class.replace("const/4 v0, 0x0", "const/4 v0, 0x1")], &mut edits)?;
+let (apk, central_dir) = rebuild::rebuild("app.apk", &edits)?;
+let key = apksign::load("key.pk8".as_ref(), "cert.crt".as_ref())?;
+std::fs::write("out.apk", apksign::sign(apk, central_dir, &key)?)?;
+```
+
+The same works on an APK that is already in memory, or anything else that reads and seeks:
+`apk::Apk::new(reader)` opens it once, `smali::export_class_from` and `smali::inject_into` work on
+the open APK, and `rebuild::rebuild_from` takes the reader.
+
+```rust
+use apkscope_core::{apk::Apk, rebuild, smali};
+use std::io::Cursor;
+
+let mut apk = Apk::new(Cursor::new(&bytes))?;
+let class = smali::export_class_from(&mut apk, "com.example.Api")?;
+let mut edits = rebuild::Edits::new();
+smali::inject_into(&mut apk, &[class.replace("const/4 v0, 0x0", "const/4 v0, 0x1")], &mut edits)?;
+let (unsigned, _) = rebuild::rebuild_from(Cursor::new(&bytes), &edits)?;
+```
+
+Resources are files you edit as text, the same as `apkscope res` writes them:
+
+```rust
+use apkscope_core::{apk::Apk, rebuild, resources};
+
+let mut apk = Apk::new(std::fs::File::open("app.apk")?)?;
+let mut files = resources::decode(&mut apk)?;     // "res/values/strings.xml" -> bytes, ...
+let strings = String::from_utf8(files["res/values/strings.xml"].clone())?;
+files.insert("res/values/strings.xml".into(), strings.replace(">Old<", ">New<").into_bytes());
+let edits = resources::edits(&mut apk, &files, false)?;  // only resources.arsc changes
+let (unsigned, _) = rebuild::rebuild("app.apk", &edits)?;
+```
+
+Underneath are `table` (`resources.arsc` as a model you can change: `find`, `set`, `add`, `remove`),
+`values` (values XML into a table), and `xml` (binary XML as a model, and edited text back into it).
+Each writes back what it read byte for byte.
+
+Nothing is signed unless you call `sign`. Fallible functions return `apkscope_core::Error`, a `thiserror` enum: `Io`, `Zip`, `Key` and `Rsa` keep the underlying error as their `source()`; `In` says which file or entry an error is in; `ClassNotFound` and `EntryNotFound` name what's missing; `Smali` has the line; and `Dex`, `Assemble`, `Resources`, `Xml` and `Signature` describe what is wrong with that kind of input. `Error::report()` joins a message with its causes, which is what the command prints.
 
 ## Honest limits
 
@@ -367,7 +447,10 @@ callers, call graph, field access, Frida hook, Smali, rename. Results jump to th
 - Cold one-shot queries: rust_ASC is still quicker at string xrefs (0.78-0.97x, 5-40 ms) and a
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
-- The viewer is tested on Windows; CLI and MCP pass CI on Linux and macOS.
+- The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
+- The static musl binary (`apkscope_linux_musl_*`) has no viewer, and cannot have one: a fully
+  static binary cannot dlopen() the desktop's X11/Wayland/GL libraries. Use the glibc binary
+  or the .deb/AppImage packages for the window.
 - Scans are heuristics and findings are leads, not verdicts (see finding 6).
 - `decrypt` only runs decryptors that compute from constants.
 - `dump` needs a rooted device. Some protectors crash when Frida spawns the app: start it normally

@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,46 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::dex::{self, Dex};
 use crate::java;
 
-pub struct Apk {
-    pub zip: zip::ZipArchive<fs::File>,
-    /// raw bytes of root-level classes*.dex, in load order
-    pub dex: Vec<(String, Vec<u8>)>,
-}
-
-pub fn open(path: &str) -> Result<Apk, String> {
-    let file = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{path}: {e}"))?;
-    let mut dex = Vec::new();
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name().map_err(|e| e.to_string())?.into_owned();
-        // only root-level classes*.dex are loaded by Android
-        if name.starts_with("classes") && name.ends_with(".dex") && !name.contains('/') {
-            let mut buf = Vec::with_capacity(entry.size() as usize);
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("{name}: {e}"))?;
-            dex.push((name, buf));
-        }
-    }
-    // classes.dex, classes2.dex, ... (first definition of a class wins at runtime)
-    dex.sort_by_key(|(n, _)| {
-        n.trim_start_matches("classes")
-            .trim_end_matches(".dex")
-            .parse::<u32>()
-            .unwrap_or(1)
-    });
-    Ok(Apk { zip, dex })
-}
-
-impl Apk {
-    pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
-        let mut e = self.zip.by_name(name).ok()?;
-        let mut buf = Vec::with_capacity(e.size() as usize);
-        e.read_to_end(&mut buf).ok()?;
-        Some(buf)
-    }
-}
+pub use apkscope_core::apk::{Apk, open};
 
 const RESERVED: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
@@ -110,9 +70,9 @@ pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
     let mut jobs = Vec::new();
     for (d, dex) in dexes.iter().enumerate() {
         let nest = dex.nesting();
-        for c in 0..dex.class_count {
+        for (c, parent) in nest.parent.iter().enumerate() {
             // inner classes are written inside their outer class's file
-            if nest.parent[c].is_some() {
+            if parent.is_some() {
                 continue;
             }
             if let Ok(desc) = dex.class_descriptor(c)
@@ -200,37 +160,19 @@ fn write(path: &Path, data: &[u8]) -> Result<(), String> {
 /// Manifest, res/ (values + files with their real names), assets/ and native libs into `main_dir`.
 pub fn resources(apk: &mut Apk, main_dir: &Path) -> Result<(ResStats, Option<Manifest>), String> {
     let mut st = ResStats::default();
-    let table = apk
-        .read("resources.arsc")
-        .map(|d| crate::res::parse_table(&d))
-        .transpose()?;
-    let names = table.as_ref().map(crate::res::Names::new);
     let mut manifest = None;
-    if let Some(m) = apk.read("AndroidManifest.xml") {
-        let text = crate::res::decode_xml(&m, names.as_ref())?;
-        manifest = Some(Manifest::from_xml(&text));
-        write(&main_dir.join("AndroidManifest.xml"), text.as_bytes())?;
-    }
-    let mut used = HashSet::new();
-    if let (Some(t), Some(n)) = (&table, &names) {
-        let dec = crate::res::decode_table(t, n);
-        for (path, text) in &dec.values {
-            write(&main_dir.join("res").join(path), text.as_bytes())?;
+    for (path, data) in apkscope_core::resources::decode(apk)? {
+        if path == "AndroidManifest.xml" {
+            manifest = Some(Manifest::from_xml(&String::from_utf8_lossy(&data)));
+        } else if path.starts_with("res/values") {
             st.values += 1;
-        }
-        for (path, src) in &dec.files {
-            let Some(data) = apk.read(src) else { continue };
-            used.insert(src.clone());
-            let out = main_dir.join("res").join(path);
-            match crate::res::decode_xml(&data, Some(n)) {
-                Ok(text) => {
-                    write(&out, text.as_bytes())?;
-                    st.xml_decoded += 1;
-                }
-                Err(_) => write(&out, &data)?,
-            }
+        } else {
             st.files += 1;
+            if data.starts_with(b"<?xml") {
+                st.xml_decoded += 1;
+            }
         }
+        write(&main_dir.join(&path), &data)?;
     }
     // assets and native libraries are copied as-is
     let names_in_zip: Vec<String> = apk

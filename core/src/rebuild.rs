@@ -2,8 +2,9 @@
 //! replaced or added files are written fresh, old v1 signature files are dropped, and
 //! uncompressed data is aligned the way `zipalign` does (4 bytes, 4096 for native libraries).
 
+use crate::{Error, Result};
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Seek};
 
 /// name -> new content, or None to delete
 pub type Edits = BTreeMap<String, Option<Vec<u8>>>;
@@ -19,6 +20,8 @@ struct Entry {
     usize: u32,
     offset: u32,
 }
+
+const MANIFEST: &str = "META-INF/MANIFEST.MF";
 
 /// v1 (JAR) signature files: stale once the APK changes, and replaced by v2/v3
 pub fn is_v1_signature(name: &str) -> bool {
@@ -60,8 +63,8 @@ fn write_entry(
     crc: u32,
     usize: u32,
     data: &[u8],
-) -> Result<Entry, String> {
-    let offset = u32::try_from(out.len()).map_err(|_| "APK larger than 4 GB")?;
+) -> Result<Entry> {
+    let offset = u32::try_from(out.len()).map_err(|_| Error::TooLarge("the APK".into()))?;
     let align = alignment(name, method);
     let base = out.len() + 30 + name.len();
     // pad with Android's alignment extra field (id 0xd935): id, size, alignment, zeros
@@ -106,34 +109,56 @@ fn write_entry(
 
 /// Rebuild `src` with `edits` applied. Returns the unsigned APK and its central directory
 /// offset (where a signing block goes).
-pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
-    let f = std::fs::File::open(src).map_err(|e| format!("{src}: {e}"))?;
-    let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("{src}: {e}"))?;
-    let mut out = Vec::with_capacity(std::fs::metadata(src).map_or(0, |m| m.len() as usize));
+pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize)> {
+    let f = std::fs::File::open(src).map_err(Error::io(src))?;
+    rebuild_from(f, edits).map_err(|e| e.at(src))
+}
+
+/// [`rebuild`] from anything that reads and seeks, such as a `Cursor` over the APK's bytes.
+pub fn rebuild_from<R: Read + Seek>(mut src: R, edits: &Edits) -> Result<(Vec<u8>, usize)> {
+    let size = src
+        .seek(std::io::SeekFrom::End(0))
+        .map_err(zip::result::ZipError::Io)?;
+    let mut zip = zip::ZipArchive::new(src)?;
+    let mut out = Vec::with_capacity(size as usize);
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // a manifest without signature files beside it is a plain JAR's, not a v1 signature
+    let v1_signed = zip
+        .file_names()
+        .flatten()
+        .any(|n| is_v1_signature(&n) && !n.eq_ignore_ascii_case(MANIFEST));
     for i in 0..zip.len() {
-        let mut e = zip.by_index_raw(i).map_err(|e| e.to_string())?;
-        let name = e.name().map_err(|e| e.to_string())?.into_owned();
-        if name.ends_with('/') || is_v1_signature(&name) || !seen.insert(name.clone()) {
+        let mut e = zip.by_index_raw(i)?;
+        let name = e.name()?.into_owned();
+        let stale = is_v1_signature(&name) && (v1_signed || !name.eq_ignore_ascii_case(MANIFEST));
+        if name.ends_with('/') || stale || !seen.insert(name.clone()) {
             continue;
         }
         match edits.get(&name) {
             Some(None) => continue,
             Some(Some(new)) => {
+                // a file the APK kept uncompressed stays that way: Android runs uncompressed
+                // DEX (useEmbeddedDex, system JARs) and maps other stored files in place
+                let stored = e.compression() == zip::CompressionMethod::Stored;
                 drop(e);
-                entries.push(fresh(&mut out, &name, new)?);
+                entries.push(fresh(&mut out, &name, new, stored)?);
             }
             None => {
                 let method = match e.compression() {
                     zip::CompressionMethod::Stored => 0,
                     zip::CompressionMethod::Deflated => 8,
-                    other => return Err(format!("{name}: unsupported compression {other:?}")),
+                    other => {
+                        return Err(Error::UnsupportedCompression {
+                            entry: name,
+                            method: format!("{other:?}"),
+                        });
+                    }
                 };
                 let (crc, usize) = (e.crc32(), e.size() as u32);
                 let mut raw = Vec::with_capacity(e.compressed_size() as usize);
                 e.read_to_end(&mut raw)
-                    .map_err(|err| format!("{name}: {err}"))?;
+                    .map_err(|err| Error::from(zip::result::ZipError::Io(err)).at(&name))?;
                 entries.push(write_entry(&mut out, &name, method, crc, usize, &raw)?);
             }
         }
@@ -143,11 +168,11 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
         if let Some(new) = new
             && !seen.contains(name)
         {
-            entries.push(fresh(&mut out, name, new)?);
+            entries.push(fresh(&mut out, name, new, false)?);
         }
     }
     if entries.len() > 0xffff {
-        return Err("more than 65535 files: Android can't read ZIP64 APKs".into());
+        return Err(Error::TooManyEntries);
     }
     let cd = out.len();
     for e in &entries {
@@ -175,17 +200,18 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize), String> {
     push32(&mut out, cd_size as u32);
     push32(
         &mut out,
-        u32::try_from(cd).map_err(|_| "APK larger than 4 GB")?,
+        u32::try_from(cd).map_err(|_| Error::TooLarge("the APK".into()))?,
     );
     push16(&mut out, 0);
     Ok((out, cd))
 }
 
-/// A new or replaced file: stored when Android needs it uncompressed, else deflated.
-fn fresh(out: &mut Vec<u8>, name: &str, data: &[u8]) -> Result<Entry, String> {
+/// A new or replaced file: stored when Android needs it uncompressed or the file it replaces
+/// was (`stored`), else deflated.
+fn fresh(out: &mut Vec<u8>, name: &str, data: &[u8], stored: bool) -> Result<Entry> {
     let crc = crc32fast::hash(data);
-    let usize = u32::try_from(data.len()).map_err(|_| format!("{name}: larger than 4 GB"))?;
-    if must_store(name) {
+    let usize = u32::try_from(data.len()).map_err(|_| Error::TooLarge(name.into()))?;
+    if stored || must_store(name) {
         return write_entry(out, name, 0, crc, usize, data);
     }
     let z = miniz_oxide::deflate::compress_to_vec(data, 6);
@@ -215,6 +241,8 @@ mod tests {
         w.write_all(b"\x7fELF-not-really").unwrap();
         w.start_file("assets/a.txt", deflated).unwrap();
         w.write_all(b"hello hello hello hello").unwrap();
+        w.start_file("classes.dex", stored).unwrap();
+        w.write_all(&[0u8; 200]).unwrap();
         w.start_file("META-INF/CERT.RSA", stored).unwrap();
         w.write_all(b"old signature").unwrap();
         w.finish().unwrap();
@@ -227,6 +255,7 @@ mod tests {
         let mut edits = Edits::new();
         edits.insert("assets/a.txt".into(), Some(b"replaced".to_vec()));
         edits.insert("assets/new.bin".into(), Some(vec![7; 10]));
+        edits.insert("classes.dex".into(), Some(vec![1; 300]));
         edits.insert("AndroidManifest.xml".into(), None);
         let (bytes, cd) = rebuild(src.to_str().unwrap(), &edits).unwrap();
         let out = std::env::temp_dir().join(format!("apkscope-rebuilt-{}.apk", std::process::id()));
@@ -238,7 +267,27 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["lib/arm64-v8a/libx.so", "assets/a.txt", "assets/new.bin"]
+            vec![
+                "lib/arm64-v8a/libx.so",
+                "assets/a.txt",
+                "classes.dex",
+                "assets/new.bin"
+            ]
+        );
+        // a replaced file is stored when the one it replaces was, deflated otherwise
+        let method =
+            |z: &mut zip::ZipArchive<std::fs::File>, n| z.by_name(n).unwrap().compression();
+        assert_eq!(
+            method(&mut z, "classes.dex"),
+            zip::CompressionMethod::Stored
+        );
+        assert_eq!(
+            z.by_name("classes.dex").unwrap().data_start().unwrap() % 4,
+            0
+        );
+        assert_eq!(
+            method(&mut z, "assets/new.bin"),
+            zip::CompressionMethod::Deflated
         );
         let mut s = String::new();
         z.by_name("assets/a.txt")
@@ -256,6 +305,24 @@ mod tests {
         );
         let _ = std::fs::remove_file(src);
         let _ = std::fs::remove_file(out);
+    }
+
+    #[test]
+    fn plain_jar_keeps_its_manifest() {
+        use std::io::Write;
+        let p = std::env::temp_dir().join(format!("apkscope-rebuild-{}.jar", std::process::id()));
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&p).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("META-INF/MANIFEST.MF", opts).unwrap();
+        w.write_all(b"Manifest-Version: 1.0\n").unwrap();
+        w.start_file("classes.dex", opts).unwrap();
+        w.write_all(&[0u8; 100]).unwrap();
+        w.finish().unwrap();
+        let (bytes, _) = rebuild(p.to_str().unwrap(), &Edits::new()).unwrap();
+        let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let names: Vec<_> = z.file_names().flatten().collect();
+        assert_eq!(names, ["META-INF/MANIFEST.MF", "classes.dex"]);
+        let _ = std::fs::remove_file(p);
     }
 
     #[test]

@@ -4,10 +4,11 @@
 use super::model::*;
 use super::read;
 use crate::bytecode::{self, Fmt};
+use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-type R<T> = Result<T, String>;
+type R<T> = Result<T>;
 const NO_INDEX: u32 = u32::MAX;
 
 fn uleb(out: &mut Vec<u8>, mut v: u32) {
@@ -197,10 +198,10 @@ impl Collect {
                         }
                         i.proto.iter().for_each(|p| self.proto(p));
                     }
-                    Item::Local { name, ty, sig, .. } => [name, ty, sig]
-                        .into_iter()
-                        .flatten()
-                        .for_each(|x| self.str(x)),
+                    Item::Local { name, ty, sig, .. } => {
+                        [name, sig].into_iter().flatten().for_each(|x| self.str(x));
+                        ty.iter().for_each(|t| self.ty(t));
+                    }
                     Item::SetFile(Some(x)) => self.str(x),
                     _ => {}
                 }
@@ -290,9 +291,9 @@ impl Pools {
             ("methods", methods.len()),
         ] {
             if n > 0x10000 {
-                return Err(format!(
+                return Err(Error::assemble(format!(
                     "too many {what} for one DEX file ({n}, the limit is 65536)"
-                ));
+                )));
             }
         }
         let hi = c
@@ -431,7 +432,7 @@ fn fits(v: i64, bits: u32) -> bool {
 }
 
 fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
-    let err = |m: String| format!("{}: {m}", what());
+    let err = |m: String| Error::assemble(format!("{}: {m}", what()));
     // choose final opcodes: const-string widens past 65535 strings, gotos widen to reach
     let mut ops: Vec<u8> = code
         .items
@@ -886,7 +887,7 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         .map(|(i, c)| (&*c.name, i))
         .collect();
     if by_name.len() != classes.len() {
-        return Err("a class is defined twice".into());
+        return Err(Error::assemble("a class is defined twice"));
     }
     let mut order = Vec::with_capacity(classes.len());
     let mut state = vec![0u8; classes.len()];
@@ -900,10 +901,10 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         match st[i] {
             2 => return Ok(()),
             1 => {
-                return Err(format!(
+                return Err(Error::assemble(format!(
                     "class {} inherits from itself",
                     String::from_utf8_lossy(&cs[i].name)
-                ));
+                )));
             }
             _ => {}
         }
@@ -1210,12 +1211,12 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
                         )
                     };
                     if m.ins() > code.registers {
-                        return Err(format!(
+                        return Err(Error::assemble(format!(
                             "{}: .registers {} is less than the {} the parameters need",
                             what(),
                             code.registers,
                             m.ins()
-                        ));
+                        )));
                     }
                     Some((assemble(code, &p, &what)?, m.ins()))
                 }
@@ -1282,7 +1283,7 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
                         o.push(if sig.is_some() { 4 } else { 3 });
                         uleb(o, *reg as u32);
                         uleb(o, p.p1(name));
-                        uleb(o, p.p1(ty));
+                        uleb(o, ty.as_ref().map_or(0, |t| p.ti[t] + 1));
                         if sig.is_some() {
                             uleb(o, p.p1(sig));
                         }
@@ -1374,9 +1375,11 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
 
     let (start, mut count) = (out.pos(), 0);
     let mut data_off = Vec::with_capacity(nc);
+    let mut hidden: Vec<Vec<Option<u32>>> = Vec::with_capacity(nc);
     for (c, codes) in classes.iter().zip(&code_off) {
         if c.fields.is_empty() && c.methods.is_empty() {
             data_off.push(0);
+            hidden.push(vec![]);
             continue;
         }
         let fid = |f: &Field| {
@@ -1393,22 +1396,22 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
                 proto: m.proto.clone(),
             }]
         };
-        let mut sf: Vec<(u32, u32)> = c
+        let mut sf: Vec<(u32, u32, Option<u32>)> = c
             .fields
             .iter()
             .filter(|f| f.access & ACC_STATIC != 0)
-            .map(|f| (fid(f), f.access))
+            .map(|f| (fid(f), f.access, f.hidden))
             .collect();
-        let mut inf: Vec<(u32, u32)> = c
+        let mut inf: Vec<(u32, u32, Option<u32>)> = c
             .fields
             .iter()
             .filter(|f| f.access & ACC_STATIC == 0)
-            .map(|f| (fid(f), f.access))
+            .map(|f| (fid(f), f.access, f.hidden))
             .collect();
-        let mut dm: Vec<(u32, u32, u32)> = vec![];
-        let mut vm: Vec<(u32, u32, u32)> = vec![];
+        let mut dm: Vec<(u32, u32, u32, Option<u32>)> = vec![];
+        let mut vm: Vec<(u32, u32, u32, Option<u32>)> = vec![];
         for (m, &co) in c.methods.iter().zip(codes) {
-            (if m.is_direct() { &mut dm } else { &mut vm }).push((mid(m), m.access, co));
+            (if m.is_direct() { &mut dm } else { &mut vm }).push((mid(m), m.access, co, m.hidden));
         }
         sf.sort_unstable();
         inf.sort_unstable();
@@ -1416,13 +1419,16 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         vm.sort_unstable();
         data_off.push(out.pos());
         count += 1;
+        // hiddenapi flags follow the members' order in class_data
+        let flags = (sf.iter().chain(&inf).map(|x| x.2)).chain(dm.iter().chain(&vm).map(|x| x.3));
+        hidden.push(flags.collect());
         let o = &mut out.buf;
         for n in [sf.len(), inf.len(), dm.len(), vm.len()] {
             uleb(o, n as u32);
         }
         for list in [&sf, &inf] {
             let mut prev = 0;
-            for &(i, a) in list.iter() {
+            for &(i, a, _) in list.iter() {
                 uleb(o, i - prev);
                 uleb(o, a);
                 prev = i;
@@ -1430,12 +1436,12 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         }
         for list in [&dm, &vm] {
             let mut prev = 0;
-            for &(i, a, co) in list.iter() {
+            for &(i, a, co, _) in list.iter() {
                 if i == prev && prev != 0 {
-                    return Err(format!(
+                    return Err(Error::assemble(format!(
                         "{}: method defined twice",
                         String::from_utf8_lossy(&c.name)
-                    ));
+                    )));
                 }
                 uleb(o, i - prev);
                 uleb(o, a);
@@ -1445,6 +1451,29 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         }
     }
     out.section(0x2000, count, start);
+
+    // hiddenapi class data: the section's size, an offset per class_def (0 for a class without
+    // flags), then the flags
+    if hidden.iter().flatten().any(|h| h.is_some()) {
+        out.align();
+        let start = out.pos();
+        let mut flags = vec![];
+        let mut offsets = Vec::with_capacity(nc);
+        for members in &hidden {
+            if members.iter().all(|h| h.is_none()) {
+                offsets.push(0);
+                continue;
+            }
+            offsets.push((4 + nc * 4 + flags.len()) as u32);
+            for h in members {
+                uleb(&mut flags, h.unwrap_or(0));
+            }
+        }
+        out.u32((4 + nc * 4 + flags.len()) as u32);
+        offsets.into_iter().for_each(|o| out.u32(o));
+        out.buf.extend_from_slice(&flags);
+        out.section(0xf000, 1, start);
+    }
 
     // map list
     out.align();
@@ -1616,6 +1645,7 @@ fn shell_eq(a: &Class, b: &Class) -> bool {
             x.name == y.name
                 && x.proto == y.proto
                 && x.access == y.access
+                && x.hidden == y.hidden
                 && x.annos == y.annos
                 && x.param_annos == y.param_annos
         })

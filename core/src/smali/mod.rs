@@ -13,10 +13,13 @@ pub fn version(dex: &[u8]) -> [u8; 3] {
         .unwrap_or(*b"035")
 }
 
+use crate::apk::Apk;
+use crate::{Error, Result};
 use model::Class;
+use std::io::{Read, Seek};
 
 /// `classesN.dex` entries, in load order (classes.dex, classes2.dex, ...).
-fn dex_entries(apk: &crate::export::Apk) -> Vec<String> {
+fn dex_entries<R: Read + Seek>(apk: &Apk<R>) -> Vec<String> {
     let mut v: Vec<String> = apk
         .zip
         .file_names()
@@ -28,21 +31,25 @@ fn dex_entries(apk: &crate::export::Apk) -> Vec<String> {
 }
 
 /// Round-trippable Smali of one class (dotted or `L..;` name), for editing then re-assembling.
-pub fn export_class(path: &str, class: &str) -> Result<String, String> {
-    let desc = crate::quick::descriptor(class);
-    let mut apk = crate::export::open(path)?;
-    for name in dex_entries(&apk) {
+pub fn export_class(path: &str, class: &str) -> Result<String> {
+    export_class_from(&mut crate::apk::open(path)?, class)
+}
+
+/// [`export_class`] from an APK already open.
+pub fn export_class_from<R: Read + Seek>(apk: &mut Apk<R>, class: &str) -> Result<String> {
+    let desc = crate::dex::descriptor(class);
+    for name in dex_entries(apk) {
         let Some(bytes) = apk.read(&name) else {
             continue;
         };
         if let Ok(Some(i)) = crate::dex::Dex::parse(&bytes).map(|dx| dx.find_class(&desc)) {
             let c = read::Reader::new(&bytes)
                 .and_then(|r| r.class(i))
-                .map_err(|e| format!("{name}: {e}"))?;
+                .map_err(|e| e.at(&name))?;
             return Ok(text::print(&c));
         }
     }
-    Err(format!("class {class} not found"))
+    Err(Error::ClassNotFound(class.to_owned()))
 }
 
 /// Assemble edited Smali `sources` into `edits`: each class replaces the one of the same name in
@@ -52,13 +59,21 @@ pub fn inject(
     path: &str,
     sources: &[String],
     edits: &mut crate::rebuild::Edits,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>> {
+    inject_into(&mut crate::apk::open(path)?, sources, edits)
+}
+
+/// [`inject`] into an APK already open.
+pub fn inject_into<R: Read + Seek>(
+    apk: &mut Apk<R>,
+    sources: &[String],
+    edits: &mut crate::rebuild::Edits,
+) -> Result<Vec<String>> {
     let classes: Vec<Class> = sources
         .iter()
         .map(|s| text::parse(s))
         .collect::<Result<_, _>>()?;
-    let mut apk = crate::export::open(path)?;
-    let entries = dex_entries(&apk);
+    let entries = dex_entries(apk);
     // group each edited class under the dex entry it belongs to
     let mut by_dex: std::collections::BTreeMap<String, Vec<Class>> = Default::default();
     'next: for c in classes {
@@ -80,11 +95,11 @@ pub fn inject(
     for (name, edited) in by_dex {
         let bytes = apk
             .read(&name)
-            .ok_or_else(|| format!("{name} not in the APK"))?;
+            .ok_or_else(|| Error::EntryNotFound(name.clone()))?;
         // fast path: patch instruction bytes in place when the edits only change existing methods'
         // code, so a one-class edit doesn't model and rewrite the whole DEX
         let patched = {
-            let dx = crate::dex::Dex::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
+            let dx = crate::dex::Dex::parse(&bytes).map_err(|e| e.at(&name))?;
             let indexed: Option<Vec<(usize, &Class)>> = edited
                 .iter()
                 .map(|c| {
@@ -93,21 +108,21 @@ pub fn inject(
                 })
                 .collect();
             match indexed {
-                Some(ix) => write::patch(&bytes, &ix).map_err(|e| format!("{name}: {e}"))?,
+                Some(ix) => write::patch(&bytes, &ix).map_err(|e| e.at(&name))?,
                 None => None, // a brand-new class: no in-place slot
             }
         };
         let dex = match patched {
             Some(d) => d,
             None => {
-                let mut all = read::read(&bytes).map_err(|e| format!("{name}: {e}"))?;
+                let mut all = read::read(&bytes).map_err(|e| e.at(&name))?;
                 for c in edited {
                     match all.iter().position(|x| x.name == c.name) {
                         Some(k) => all[k] = c,
                         None => all.push(c),
                     }
                 }
-                write::write(&all, version(&bytes)).map_err(|e| format!("{name}: {e}"))?
+                write::write(&all, version(&bytes)).map_err(|e| e.at(&name))?
             }
         };
         edits.insert(name.clone(), Some(dex));
@@ -251,7 +266,7 @@ mod tests {
                         c.tries.len()
                     ));
                     for i in crate::bytecode::decode(c.insns).unwrap() {
-                        v.push(crate::render(d, &i).unwrap_or_else(|e| e));
+                        v.push(crate::dex::render(d, &i).unwrap_or_else(|e| e.to_string()));
                     }
                 }
             }
@@ -350,14 +365,67 @@ mod tests {
     }
 
     #[test]
+    fn local_type_is_a_type_index() {
+        let src = ".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 1\n    const/4 v0, 0x0\n    .local v0, \"s\":Ljava/lang/String;\n    return-void\n.end method\n";
+        let c = text::parse(src).unwrap();
+        let d = write::write(std::slice::from_ref(&c), *b"035").unwrap();
+        assert_eq!(read::read(&d).unwrap(), [c]);
+        let at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap()) as usize;
+        // the one code item's debug info: line start, no parameters, advance pc, start local
+        let map = at(0x34);
+        let code = (0..at(map))
+            .map(|k| map + 4 + k * 12)
+            .find(|&o| d[o..o + 2] == [0x01, 0x20])
+            .map(|o| at(o + 8))
+            .unwrap();
+        let debug = at(code + 8);
+        assert_eq!(d[debug + 1..debug + 6], [0, 1, 1, 3, 0]);
+        // DBG_START_LOCAL names its type by type index (plus one), not by string index
+        let ty = d[debug + 7] as usize - 1;
+        let string = at(at(0x3c) + at(at(0x44) + ty * 4) * 4);
+        assert_eq!(&d[string + 1..string + 19], b"Ljava/lang/String;");
+    }
+
+    #[test]
     fn reports_errors_with_line() {
-        let e = text::parse(".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 0\n    bogus-op v0\n.end method\n").unwrap_err();
+        let e = text::parse(".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 0\n    bogus-op v0\n.end method\n").unwrap_err().to_string();
         assert!(e.starts_with("line 5:"), "{e}");
         let e = text::parse(
             ".class LA;\n.method static f()V\n    .locals 0\n    goto :nowhere\n.end method\n",
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains(":nowhere"), "{e}");
+    }
+
+    #[test]
+    fn edits_an_apk_in_memory() {
+        use std::io::{Cursor, Write};
+        let src = ".class public Lcom/ex/M;\n.super Ljava/lang/Object;\n\
+                   .method public static f()I\n    .registers 1\n    const/16 v0, 0x64\n    return v0\n.end method\n";
+        let dex = write::write(&[text::parse(src).unwrap()], *b"035").unwrap();
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        w.start_file("classes.dex", stored).unwrap();
+        w.write_all(&dex).unwrap();
+        let apk = w.finish().unwrap().into_inner();
+
+        let mut open = Apk::new(Cursor::new(&apk)).unwrap();
+        let class = export_class_from(&mut open, "com.ex.M").unwrap();
+        let edited = class.replace("0x64", "0x65");
+        let mut edits = crate::rebuild::Edits::new();
+        let changed = inject_into(&mut open, &[edited], &mut edits).unwrap();
+        assert_eq!(changed, ["classes.dex"]);
+        let (out, _) = crate::rebuild::rebuild_from(Cursor::new(&apk), &edits).unwrap();
+
+        let mut rebuilt = Apk::new(Cursor::new(out)).unwrap();
+        assert_eq!(rebuilt.dex.len(), 1);
+        assert!(
+            export_class_from(&mut rebuilt, "Lcom/ex/M;")
+                .unwrap()
+                .contains("0x65")
+        );
     }
 
     #[test]
@@ -391,6 +459,55 @@ mod tests {
         // adding an instruction changes the layout, so it must fall back (returns None)
         let grew = text::parse(&src.replace("    return v0", "    nop\n    return v0")).unwrap();
         assert!(write::patch(&dex, &[(ci, &grew)]).unwrap().is_none());
+    }
+
+    #[test]
+    fn keeps_hiddenapi_flags() {
+        let hidden = r#"
+.class public Lcom/example/Hidden;
+.super Ljava/lang/Object;
+
+.field public static whitelist test-api OPEN:I
+.field private blacklist whitelist:I
+
+.method public constructor greylist-max-o core-platform-api <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
+.method public greylist-max-s later()V
+    .locals 0
+    return-void
+.end method
+
+.method public hiddenapi-0x48 unknown()V
+    .locals 0
+    return-void
+.end method
+"#;
+        let plain =
+            ".class public Lcom/example/Plain;\n.super Ljava/lang/Object;\n\n.field public a:I\n";
+        let classes = [text::parse(plain).unwrap(), text::parse(hidden).unwrap()];
+        assert_eq!(classes[1].fields[0].hidden, Some(0x20));
+        assert_eq!(classes[1].fields[1].hidden, Some(2));
+        assert_eq!(classes[1].fields[1].name, model::s(b"whitelist"));
+        let d = write::write(&classes, *b"039").unwrap();
+        let back = read::read(&d).unwrap();
+        assert_eq!(back, classes);
+        let flags = |c: &model::Class| c.methods.iter().map(|m| m.hidden).collect::<Vec<_>>();
+        assert_eq!(flags(&back[1]), [Some(0x13), Some(7), Some(0x48)]);
+        // a class without flags has none after the round trip, not the public list
+        assert_eq!(back[0].fields[0].hidden, None);
+        let printed = text::print(&back[1]);
+        assert!(printed.contains(".method public hiddenapi-0x48 unknown()V"));
+        assert_eq!(text::parse(&printed).unwrap(), back[1]);
+        // a DEX without flags gets no hiddenapi section
+        let d = write::write(&classes[..1], *b"039").unwrap();
+        assert_eq!(read::Reader::new(&d).unwrap().class(0).unwrap(), classes[0]);
+        let map = u32::from_le_bytes(d[0x34..0x38].try_into().unwrap()) as usize;
+        let n = u32::from_le_bytes(d[map..map + 4].try_into().unwrap()) as usize;
+        assert!((0..n).all(|k| d[map + 4 + k * 12..][..2] != [0x00, 0xf0]));
     }
 
     /// APKSCOPE_ROUNDTRIP=<dir of .apk> cargo test --release roundtrip_apks -- --ignored --nocapture
