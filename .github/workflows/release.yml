@@ -91,6 +91,8 @@ jobs:
         with:
           shared-key: build-linux-x64
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # rust-toolchain.toml installs the compiler but not cross targets
+      - run: rustup target add x86_64-unknown-linux-musl
       # the desktop binary, like the Windows exe: viewer + CLI + MCP server
       # in one. At build time it links libc, libm and libgcc only — the GUI
       # stack (X11, Wayland, GL, xdg-desktop-portal) is dlopen()'d at
@@ -161,6 +163,8 @@ jobs:
         with:
           shared-key: build-linux-arm64
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # rust-toolchain.toml installs the compiler but not cross targets
+      - run: rustup target add aarch64-unknown-linux-musl
       - run: cargo build --locked --workspace --release
       - run: |
           mkdir -p dist
@@ -220,6 +224,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: build-macos
+      # rust-toolchain.toml installs the compiler but not cross targets
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       # arm64 build is native; x86_64 cross-compiles with the Apple toolchain.
       # Both are CLI + MCP server only (no viewer) — that is the shipped
       # macOS configuration.
