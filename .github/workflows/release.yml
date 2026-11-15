@@ -7,8 +7,8 @@ name: release
 # as .deb and AppImage), and the static musl CLI + MCP server for servers,
 # containers and Alpine — no viewer there, a fully static binary cannot
 # dlopen() the desktop's X11/Wayland/GL stack, and the binary says so when
-# asked. Windows ships the viewer exe, macOS the CLI + MCP build. The lint
-# job gates the matrix so a broken tag wastes no compute.
+# asked. Windows ships the viewer exe per arch, macOS the CLI + MCP build. The
+# lint job gates the matrix so a broken tag wastes no compute.
 on:
   push:
     tags:
@@ -103,8 +103,15 @@ jobs:
 
   windows:
     needs: [lint]
-    # one binary — viewer + CLI + MCP server — built where it is tested
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: windows-latest }
+          - { arch: aarch64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    # one binary per arch — viewer + CLI + MCP server — built where it runs,
+    # like the Linux job: no cross toolchain, each arch compiles on its own runner
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -112,10 +119,10 @@ jobs:
       - run: cargo build --release
       - run: |
           mkdir dist
-          cp target/Release/apkscope.exe dist/apkscope_windows_x86_64.exe
+          cp target/Release/apkscope.exe dist/apkscope_windows_${{ matrix.arch }}.exe
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-windows
+          name: dist-windows-${{ matrix.arch }}
           path: dist/
 
   release:
