@@ -985,6 +985,8 @@ pub struct App {
     edits: rebuild::Edits,
     /// edited Smali class sources, assembled into DEX at build time
     smali_edits: Vec<String>,
+    /// a folder of edited resources (the `apkscope res` layout), applied at build time
+    res_dir: Option<String>,
     /// "Add file" dialog: (path inside the APK, content)
     adding: Option<(String, Vec<u8>)>,
     build: Option<BuildDlg>,
@@ -1081,6 +1083,7 @@ impl App {
             files: None,
             edits: rebuild::Edits::new(),
             smali_edits: vec![],
+            res_dir: None,
             adding: None,
             build: None,
             strings_dlg: None,
@@ -1698,6 +1701,38 @@ impl App {
                         });
                     }
                 }
+                if ui
+                    .button("Decode resources…")
+                    .on_hover_text(
+                        "Write the manifest and res/ as editable files, like `apkscope res`",
+                    )
+                    .clicked()
+                {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        let (tx, file) = (self.tx.clone(), st.file.clone());
+                        spawn(&self.tx, "save", move || {
+                            let r = (|| -> Result<String, String> {
+                                let mut apk = apkscope_core::apk::open(&file)?;
+                                let files = apkscope_core::resources::decode(&mut apk)?;
+                                for (path, data) in &files {
+                                    let to = std::path::Path::new(&dir).join(path);
+                                    if let Some(parent) = to.parent() {
+                                        std::fs::create_dir_all(parent)
+                                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                                    }
+                                    std::fs::write(&to, data)
+                                        .map_err(|e| format!("{}: {e}", to.display()))?;
+                                }
+                                Ok(format!(
+                                    "Decoded {} resource file(s) to {}",
+                                    files.len(),
+                                    dir.display()
+                                ))
+                            })();
+                            let _ = tx.send(Msg::Saved(r));
+                        });
+                    }
+                }
             });
             let mut verify = false;
             ui.horizontal(|ui| {
@@ -1723,7 +1758,22 @@ impl App {
                         }
                     }
                 }
-                let n = self.edits.len();
+                if ui
+                    .button("Resources folder…")
+                    .on_hover_text(
+                        "Apply a folder of edited resources (from Decode resources) on build, like `build --res`",
+                    )
+                    .clicked()
+                {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        self.res_dir = Some(dir.display().to_string());
+                        self.toast = Some((
+                            "Resources folder staged — use Build & sign to apply it".into(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+                let n = self.edits.len() + self.smali_edits.len() + self.res_dir.is_some() as usize;
                 let build = ui.add_enabled(
                     n > 0,
                     egui::Button::new(RichText::new(format!("Build & sign ({n})")).strong())
@@ -1754,6 +1804,18 @@ impl App {
                         r.map(|l| format!("Signature: {l}")).map_err(String::from),
                     ));
                 });
+            }
+            let mut clear_res = false;
+            if let Some(dir) = self.res_dir.clone() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("clear").clicked() {
+                        clear_res = true;
+                    }
+                    ui.label(RichText::new(format!("resources: {dir}")).color(p.accent));
+                });
+            }
+            if clear_res {
+                self.res_dir = None;
             }
             if !self.edits.is_empty() {
                 let mut undo = None;
@@ -2532,6 +2594,9 @@ impl App {
             let smali_n = self.smali_edits.len();
             let smali_note = if smali_n > 0 { format!(" (incl. {smali_n} edited smali class(es), assembled on build)") } else { String::new() };
             ui.label(format!("{} change(s){smali_note}. The new APK is zipaligned and signed with APK Signature Scheme v2 + v3.", self.edits.len() + smali_n));
+            if let Some(dir) = &self.res_dir {
+                ui.label(format!("Applying edited resources from {dir}."));
+            }
             ui.add_space(6.0);
             ui.radio_value(&mut dlg.own_key, false, "apkscope's key (created on first use)");
             ui.radio_value(&mut dlg.own_key, true, "My own key");
@@ -2572,6 +2637,7 @@ impl App {
                 let own = dlg.own_key.then(|| (dlg.key.clone(), dlg.cert.clone()));
                 let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file.clone());
                 let smali_srcs = self.smali_edits.clone();
+                let res_dir = self.res_dir.clone();
                 spawn(&self.tx, "save", move || {
                     let r = (|| {
                         let key = match own {
@@ -2580,6 +2646,12 @@ impl App {
                             }
                             None => apksign::default_key()?.0,
                         };
+                        if let Some(dir) = &res_dir {
+                            // everything Decode resources wrote: a values file that is gone has no values
+                            let files = crate::read_tree(std::path::Path::new(dir))?;
+                            let mut apk = apkscope_core::apk::open(&file)?;
+                            edits.extend(apkscope_core::resources::edits(&mut apk, &files, true)?);
+                        }
                         if !smali_srcs.is_empty() {
                             smali::inject(&file, &smali_srcs, &mut edits)?;
                         }
