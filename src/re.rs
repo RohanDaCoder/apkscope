@@ -10,6 +10,7 @@ use std::rc::Rc;
 use crate::bytecode::{self, Ref};
 use crate::deobf::Notes;
 use crate::dex::{self, Dex};
+use crate::proguard;
 
 // ---------- members and cross-references ----------
 
@@ -1896,8 +1897,72 @@ pub fn real_member(dexes: &[Dex], class: &str, shown: &str, method: bool) -> Opt
     None
 }
 
-/// Export the user's renames (and comments, for Enigma) as a JADX `.jobf` or Enigma `.mapping` file.
-pub fn export_mapping(dexes: &[Dex], n: &Notes, enigma: bool) -> String {
+/// The mapping-file formats `map <apk> export` writes and `map <apk> import`
+/// reads. ProGuard/R8 is one of them: obfuscated builds ship `mapping.txt`
+/// next to crash reports, so it is worth the same round trip as the others.
+#[derive(Clone, Copy, PartialEq)]
+pub enum MappingFormat {
+    Jobf,
+    Enigma,
+    ProGuard,
+}
+
+impl MappingFormat {
+    /// From the output/input file name: `.jobf` is JADX, `.mapping` (the
+    /// old default for anything unnamed) is Enigma, and `.txt` — the
+    /// conventional `mapping.txt` — is ProGuard.
+    pub fn from_file(file: &str) -> Self {
+        if file.ends_with(".jobf") {
+            Self::Jobf
+        } else if file.ends_with(".txt") {
+            Self::ProGuard
+        } else {
+            Self::Enigma
+        }
+    }
+}
+
+/// Export the user's renames (and comments, for Enigma) as a JADX `.jobf`,
+/// Split a dex method signature `(desc,…)ret` into Java-style argument list
+/// and return descriptor, for the ProGuard export.
+fn split_proto(sig: &str) -> (String, String) {
+    // the signature is `(args)ret`: the `)` closing the arguments is the
+    // first one, and everything after it is the return descriptor
+    let open = sig.find('(');
+    let close = sig.find(')');
+    let (args, ret) = match (open, close) {
+        (Some(o), Some(c)) if c > o => (&sig[o + 1..c], &sig[c + 1..]),
+        _ => ("", ""),
+    };
+    // args are concatenated descriptors (`ILjava/lang/String;`): walk them
+    let mut out = String::new();
+    let mut i = 0;
+    while i < args.len() {
+        // array prefixes (`[[B`) belong to the one descriptor they wrap
+        let arrays = args[i..].bytes().take_while(|b| *b == b'[').count();
+        let start = i;
+        i += arrays;
+        let d = if args.as_bytes()[i] == b'L' {
+            let end = args[i..].find(';').map(|x| i + x + 1).unwrap_or(args.len());
+            let d = &args[start..end];
+            i = end;
+            d
+        } else {
+            let c = args[i..].chars().next().unwrap();
+            let d = &args[start..i + c.len_utf8()];
+            i += c.len_utf8();
+            d
+        };
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(&frida_type(d));
+    }
+    (out, ret.to_string())
+}
+
+/// Enigma `.mapping` or ProGuard/R8 `mapping.txt` file.
+pub fn export_mapping(dexes: &[Dex], n: &Notes, fmt: MappingFormat) -> String {
     let mut o = String::new();
     // per class: (new class name, [(kind, old, new, descriptor)])
     let mut classes: std::collections::BTreeMap<String, Vec<(char, String, String, String)>> =
@@ -1951,7 +2016,7 @@ pub fn export_mapping(dexes: &[Dex], n: &Notes, enigma: bool) -> String {
     let path = |d: &str| d.trim_start_matches('L').trim_end_matches(';').to_string();
     for (cls, members) in &classes {
         let new = n.classes.get(cls);
-        if enigma {
+        if fmt == MappingFormat::Enigma {
             let _ = writeln!(
                 o,
                 "CLASS {}{}",
@@ -1978,6 +2043,29 @@ pub fn export_mapping(dexes: &[Dex], n: &Notes, enigma: bool) -> String {
                     }
                 }
             }
+        } else if fmt == MappingFormat::ProGuard {
+            // `a.b.C -> c.d.E:` then indented members. The left side is the
+            // name users chose (the note's target), the right side the full
+            // dotted class as the APK has it — both sides full paths, the
+            // way ProGuard writes them.
+            let dotted = path(cls).replace('/', ".");
+            let new_dotted = new.map(|x| path(x).replace('/', "."));
+            let _ = writeln!(
+                o,
+                "{} -> {}:",
+                new_dotted.as_deref().unwrap_or(&dotted),
+                dotted
+            );
+            for (k, old, nn, sig) in members {
+                if *k == 'm' {
+                    // `    ret name(arg,..) -> obf`; the dex signature is
+                    // `(desc,..)ret`, so split it apart and Java-ify it
+                    let (args, ret) = split_proto(sig);
+                    let _ = writeln!(o, "    {} {}({}) -> {old}", frida_type(&ret), nn, args);
+                } else {
+                    let _ = writeln!(o, "    {} {nn} -> {old}", frida_type(sig));
+                }
+            }
         } else {
             let dotted = path(cls).replace('/', ".");
             if let Some(x) = new {
@@ -1999,10 +2087,19 @@ pub fn export_mapping(dexes: &[Dex], n: &Notes, enigma: bool) -> String {
     o
 }
 
-/// Merge a JADX `.jobf` or Enigma `.mapping` file into the notes; returns how many names were read.
+/// Merge a JADX `.jobf`, Enigma `.mapping` or ProGuard/R8 `mapping.txt` file
+/// into the notes; returns how many names were read.
 pub fn import_mapping(text: &str, n: &mut Notes) -> usize {
     let mut count = 0;
     let enigma = text.lines().any(|l| l.starts_with("CLASS "));
+    // ProGuard: `a.b.C -> c.d.E:` class lines with `->`, never `=` like jobf
+    if !enigma
+        && text
+            .lines()
+            .any(|l| l.contains(" -> ") && !l.contains(" = "))
+    {
+        return proguard::into_notes(proguard::parse(text), n);
+    }
     if enigma {
         let mut cls = String::new();
         let mut member: Option<String> = None;
@@ -2145,6 +2242,63 @@ mod tests {
         assert_eq!(e.members["La/b/C;->a()"], "check");
         assert_eq!(e.comments["La/b/C;->a()"], "validates");
         assert_eq!(e.comments["La/b/C;"], "main screen");
+    }
+
+    #[test]
+    fn mapping_format_from_file() {
+        use MappingFormat as M;
+        assert!(matches!(M::from_file("out.jobf"), M::Jobf));
+        assert!(matches!(M::from_file("out.mapping"), M::Enigma));
+        assert!(matches!(M::from_file("mapping.txt"), M::ProGuard));
+        // the old default (no/other extension) stays Enigma
+        assert!(matches!(M::from_file("out"), M::Enigma));
+        assert!(matches!(M::from_file("out.pro"), M::Enigma));
+    }
+
+    #[test]
+    fn split_proto_javas_the_signature() {
+        assert_eq!(
+            split_proto("(ILjava/lang/String;)V"),
+            ("int,java.lang.String".to_string(), "V".to_string())
+        );
+        assert_eq!(split_proto("()V"), (String::new(), "V".to_string()));
+        assert_eq!(
+            split_proto("(La/b/C;[B)I"),
+            ("a.b.C,[B".to_string(), "I".to_string())
+        );
+    }
+
+    #[test]
+    fn proguard_export_writes_the_headers() {
+        // no dex needed for the class-header side; members only come from
+        // dex lookups, so a notes-only export exercises headers + comments
+        let mut n = Notes::default();
+        n.classes
+            .insert("La/b/C;".to_string(), "La/b/Login;".to_string());
+        let o = export_mapping(&[], &n, MappingFormat::ProGuard);
+        assert_eq!(o, "a.b.Login -> a.b.C:\n");
+    }
+
+    #[test]
+    fn proguard_import_detects_the_arrow_format() {
+        // a mapping.txt routed through import_mapping, not proguard::parse,
+        // proves the detection: `->` and no ` = ` like a .jobf line
+        let mut n = Notes::default();
+        let proguard = concat!(
+            "# R8\n",
+            "com.example.app.MainActivity -> a.b:\n",
+            "    int status -> a\n",
+            "    void onCreate(android.os.Bundle) -> a\n",
+        );
+        assert_eq!(import_mapping(proguard, &mut n), 3);
+        assert_eq!(n.classes["La/b;"], "Lcom/example/app/MainActivity;");
+        assert_eq!(n.members["La/b;->a"], "status");
+        assert_eq!(n.members["La/b;->a()"], "onCreate");
+        // and a .jobf line still routes to the jobf branch: ` = `, no `->`
+        let mut j = Notes::default();
+        let jobf = "c a.b.C = Login\n";
+        assert_eq!(import_mapping(jobf, &mut j), 1);
+        assert_eq!(j.classes["La/b/C;"], "La/b/Login;");
     }
 
     #[test]
