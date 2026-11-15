@@ -2768,7 +2768,7 @@ impl App {
                     } else {
                         ui.label(RichText::new(if dragging { "Release to open" } else { "Drop an APK here" }).size(22.0).strong().color(p.text));
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Also opens split bundles (.apks, .xapk) and .dex files").color(p.dim));
+                        ui.label(RichText::new("Also opens split bundles (.apks, .xapk, .apkm) and .dex files").color(p.dim));
                         ui.add_space(14.0);
                         pick = ui.add(egui::Button::new(RichText::new("Open file…").size(15.0).strong()).fill(p.accent.gamma_multiply(0.55)).min_size(egui::vec2(160.0, 34.0))).clicked();
                     }
