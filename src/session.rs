@@ -1506,6 +1506,44 @@ pub fn overview(st: &State) -> String {
     o
 }
 
+/// Smali of class `c` and its nested classes, outer first.
+pub fn smali(dx: &Dex, c: usize) -> String {
+    let mut out = String::new();
+    let mut stack = vec![c];
+    while let Some(x) = stack.pop() {
+        let _ = writeln!(
+            out,
+            ".class {}
+",
+            dx.class_descriptor(x).unwrap_or_default()
+        );
+        for m in dx.methods(x).unwrap_or_default() {
+            let _ = writeln!(
+                out,
+                ".method {:#x} {}",
+                m.access,
+                dx.method_ref(m.method_idx).unwrap_or_default()
+            );
+            if let Some(code) = &m.code {
+                let _ = writeln!(out, "    .registers {}", code.registers);
+                for i in bytecode::decode(code.insns).unwrap_or_default() {
+                    let _ = writeln!(
+                        out,
+                        "    {:04x}: {}",
+                        i.off,
+                        crate::render(dx, &i).unwrap_or_else(|e| e.to_string())
+                    );
+                }
+            }
+            out += ".end method
+
+";
+        }
+        stack.extend(dx.nesting().kids[x].iter().rev());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1600,42 +1638,4 @@ mod tests {
         );
         assert_eq!(attr("<x>", "package"), None);
     }
-}
-
-/// Smali of class `c` and its nested classes, outer first.
-pub fn smali(dx: &Dex, c: usize) -> String {
-    let mut out = String::new();
-    let mut stack = vec![c];
-    while let Some(x) = stack.pop() {
-        let _ = writeln!(
-            out,
-            ".class {}
-",
-            dx.class_descriptor(x).unwrap_or_default()
-        );
-        for m in dx.methods(x).unwrap_or_default() {
-            let _ = writeln!(
-                out,
-                ".method {:#x} {}",
-                m.access,
-                dx.method_ref(m.method_idx).unwrap_or_default()
-            );
-            if let Some(code) = &m.code {
-                let _ = writeln!(out, "    .registers {}", code.registers);
-                for i in bytecode::decode(code.insns).unwrap_or_default() {
-                    let _ = writeln!(
-                        out,
-                        "    {:04x}: {}",
-                        i.off,
-                        crate::render(dx, &i).unwrap_or_else(|e| e.to_string())
-                    );
-                }
-            }
-            out += ".end method
-
-";
-        }
-        stack.extend(dx.nesting().kids[x].iter().rev());
-    }
-    out
 }
