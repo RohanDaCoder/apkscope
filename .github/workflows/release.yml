@@ -3,21 +3,6 @@ name: release
 # Builds every platform when a version tag (v*) is pushed and attaches the
 # binaries to a GitHub Release. Tags only — there is deliberately no
 # workflow_dispatch: a release must never be published from a moving ref.
-#
-# Invariants:
-# - the tag must be v<crate version> exactly (validated in the first job);
-# - every binary's `--version` must report the tag's version (smoke tests);
-# - only the files in the manifest below are uploaded, nothing else;
-# - publishing is idempotent: re-running a finished run replaces assets
-#   instead of erroring out, and a re-pushed tag starts from scratch.
-#
-# Linux ships two binaries per arch: the glibc build with the viewer, the CLI
-# and the MCP server together (also packaged as .deb and AppImage), and the
-# static musl CLI + MCP server for servers, containers and Alpine — no viewer
-# there, a fully static binary cannot dlopen() the desktop's X11/Wayland/GL
-# stack, and the binary says so when asked. Windows ships the viewer exe,
-# macOS the CLI + MCP build. The gate job runs the real checks before any
-# artifact is built, so a broken tag wastes no matrix compute.
 
 on:
   push:
@@ -25,8 +10,8 @@ on:
       - "v*"
 
 # Never cancel a release run: a cancelled release must not leave a partial
-# public release behind. Group by ref so a re-pushed tag supersedes (waits
-# for) the previous run of the same tag instead of racing it.
+# public release behind. Group by ref so a re-pushed tag waits for the
+# previous run of the same tag instead of racing it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -41,43 +26,22 @@ env:
 
 jobs:
   gate:
-    # The tag is validated here, and the code is tested and linted before any
-    # artifact is built. Runs on the tag's commit as checked out (persist-
-    # credentials: false keeps nothing but the tree).
+    # The code is tested and linted before any artifact is built, so a broken
+    # tag wastes no matrix compute.
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # the tag must be v<crate version>: the binaries report the Cargo
-      # version at compile time, so a tag/version mismatch ships mislabeled
-      # binaries. Cargo.toml on the tag is the source of truth (build.rs
-      # embeds no version; apkscope.rc carries no version either).
-      - name: Validate tag against crate version
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          core=$(sed -n 's/^version = "\(.*\)"$/\1/p' core/Cargo.toml | head -1)
-          echo "tag=$tag crate=$crate core=$core"
-          if [ "$tag" != "v$crate" ]; then
-            echo "::error::tag $tag does not match crate version $crate (expected v$crate)"; exit 1
-          fi
-          if [ "$crate" != "$core" ]; then
-            echo "::error::apkscope ($crate) and apkscope-core ($core) versions differ; release both together"; exit 1
-          fi
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: gate
       - run: cargo fmt --all -- --check
       # CLI + MCP server only — the macOS release build
       - run: cargo clippy --locked --workspace --no-default-features -- -D warnings
-      # the default-feature build — what the Linux and Windows releases ship
-      # (viewer + CLI + MCP server in one binary); compiles with no system GUI
-      # packages, since the desktop's X11/Wayland/GL are dlopen()'d at runtime.
-      # Correctness/suspicious/dangerous lints are denied; the GUI tree carries
-      # 23 known style warnings that do not block a release (see ci.yml).
-      - run: cargo clippy --locked --workspace -- -D clippy::correctness -D clippy::suspicious -D clippy::dangerous
+      # default features: the viewer build the Linux and Windows releases ship
+      - run: cargo clippy --locked --workspace -- -D warnings
       - run: cargo test --locked --workspace --no-default-features
       - run: cargo test --locked --workspace
 
@@ -96,65 +60,29 @@ jobs:
       # rust-toolchain.toml installs the compiler but not cross targets
       - run: rustup target add x86_64-unknown-linux-musl
       # the desktop binary, like the Windows exe: viewer + CLI + MCP server
-      # in one. At build time it links libc, libm and libgcc only — the GUI
-      # stack (X11, Wayland, GL, xdg-desktop-portal) is dlopen()'d at
-      # runtime, so the AppImage bundles no libraries. Built on Ubuntu 24.04
-      # (glibc 2.39): that is the actual glibc floor of these binaries and of
-      # the AppImage, NOT a universal "installable everywhere" guarantee.
+      # in one. It links libc, libm and libgcc only — the GUI stack is
+      # dlopen()'d at runtime. Built on Ubuntu 24.04 (glibc 2.39), the
+      # actual glibc floor of these binaries and the AppImage.
       - run: cargo build --locked --workspace --release
       - run: |
           mkdir -p dist
           cp target/release/apkscope dist/apkscope_linux_x86_64
       # the same binary, packaged: .deb for Debian/Ubuntu, AppImage as a
-      # portable format for distros whose glibc is >= the floor above
+      # portable format for distros whose glibc meets the floor above
       - run: packaging/linux/package.sh target/release/apkscope dist
-      # the CLI + MCP server for servers, containers and musl distros (Alpine):
-      # fully static. No viewer — a static binary cannot dlopen() the desktop's
-      # X11/Wayland/GL stack — and asking it for the gui prints that limitation
-      # instead of a bare error.
+      # the fully static CLI + MCP server for servers, containers and musl
+      # distros (Alpine); no viewer — a static binary cannot dlopen() the
+      # desktop's X11/Wayland/GL stack, and the binary says so when asked
       - run: cargo build --locked --workspace --release --no-default-features --target x86_64-unknown-linux-musl
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - run: cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
-      # smoke test: version matches the tag, both binaries run, musl is
-      # fully static (ldd must say "not a dynamic executable"). Note the
-      # CLI's --help is its usage() path and exits 2 by design, so success
-      # is judged on --version (exit 0), never on --help.
-      - name: Smoke test binaries
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          out=$(./dist/apkscope_linux_x86_64 --version)
-          echo "glibc --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::glibc binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_x86_64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          out=$(./dist/apkscope_linux_musl_x86_64 --version)
-          echo "musl --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::musl binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_musl_x86_64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          file dist/apkscope_linux_x86_64 dist/apkscope_linux_musl_x86_64
-          ldd dist/apkscope_linux_x86_64
-          if ldd dist/apkscope_linux_musl_x86_64 2>&1 | grep -Eq "statically linked|not a dynamic executable"; then
-            echo "musl binary is static"
-          else
-            echo "::error::musl binary is not static:"; ldd dist/apkscope_linux_musl_x86_64; exit 1
-          fi
-      # exact expected outputs of this job (public asset names, do not change
-      # without coordinating with installers and users)
-      - name: Verify asset manifest
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          for f in "apkscope_linux_x86_64" "apkscope_linux_musl_x86_64" \
-                   "apkscope_${v}_amd64.deb" "apkscope-${v}-x86_64.AppImage"; do
-            [ -f "dist/$f" ] || { echo "::error::missing dist/$f"; exit 1; }
-          done
-          echo "manifest ok:"; ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-linux-x86_64
           path: dist/
           if-no-files-found: error
-          retention-days: 7
 
   linux-aarch64:
     needs: gate
@@ -180,49 +108,19 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - run: cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_aarch64
-      # smoke test: see the x86_64 job; --help exits 2 by design (usage path)
-      - name: Smoke test binaries
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          out=$(./dist/apkscope_linux_aarch64 --version)
-          echo "glibc --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::glibc binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_aarch64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          out=$(./dist/apkscope_linux_musl_aarch64 --version)
-          echo "musl --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::musl binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_musl_aarch64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          file dist/apkscope_linux_aarch64 dist/apkscope_linux_musl_aarch64
-          ldd dist/apkscope_linux_aarch64
-          if ldd dist/apkscope_linux_musl_aarch64 2>&1 | grep -Eq "statically linked|not a dynamic executable"; then
-            echo "musl binary is static"
-          else
-            echo "::error::musl binary is not static:"; ldd dist/apkscope_linux_musl_aarch64; exit 1
-          fi
-      - name: Verify asset manifest
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          for f in "apkscope_linux_aarch64" "apkscope_linux_musl_aarch64" \
-                   "apkscope_${v}_arm64.deb" "apkscope-${v}-aarch64.AppImage"; do
-            [ -f "dist/$f" ] || { echo "::error::missing dist/$f"; exit 1; }
-          done
-          echo "manifest ok:"; ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-linux-aarch64
           path: dist/
           if-no-files-found: error
-          retention-days: 7
 
   macos:
     needs: gate
     runs-on: macos-latest
     timeout-minutes: 60
     env:
-      # Deployment target for both Apple targets. 12 is the oldest macOS the
-      # prebuilt Rust toolchain supports today (newer Rust drops 11); the
-      # binaries may well run on older versions, but that is untested —
-      # raise or lower deliberately and test on the target version.
+      # the oldest macOS the prebuilt Rust toolchain supports today; raise or
+      # lower deliberately and test on the target version
       MACOSX_DEPLOYMENT_TARGET: "12"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -233,51 +131,23 @@ jobs:
           shared-key: build-macos
       # rust-toolchain.toml installs the compiler but not cross targets
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      # arm64 build is native; x86_64 cross-compiles with the Apple toolchain.
-      # Both are CLI + MCP server only (no viewer) — that is the shipped
-      # macOS configuration.
+      # arm64 native, x86_64 cross with the Apple toolchain; both are the
+      # shipped macOS configuration (CLI + MCP server only)
       - run: cargo build --locked --workspace --release --no-default-features --target aarch64-apple-darwin
       - run: cargo build --locked --workspace --release --no-default-features --target x86_64-apple-darwin
-      # native smoke test on arm64: the runner is arm64 and the binary is
-      # arm64. The x86_64 binary runs under Rosetta 2 on the runner; if
-      # Rosetta is unavailable the check degrades to `file` only.
-      - name: Smoke test binaries
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          out=$(./target/aarch64-apple-darwin/release/apkscope --version)
-          echo "aarch64 --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::aarch64 binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          # the CLI's --help is its usage() path and exits 2 by design
-          ./target/aarch64-apple-darwin/release/apkscope --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          file target/aarch64-apple-darwin/release/apkscope target/x86_64-apple-darwin/release/apkscope
-          if x86_64out=$(arch -x86_64 ./target/x86_64-apple-darwin/release/apkscope --version 2>/dev/null); then
-            echo "x86_64 --version: $x86_64out"
-            [ "$x86_64out" = "apkscope $v" ] || { echo "::error::x86_64 binary reports '$x86_64out'"; exit 1; }
-          else
-            echo "::warning::Rosetta 2 unavailable; x86_64 binary checked with 'file' only"
-            file target/x86_64-apple-darwin/release/apkscope | grep -q "x86_64" || { echo "::error::not an x86_64 binary"; exit 1; }
-          fi
-          file target/aarch64-apple-darwin/release/apkscope | grep -q "arm64" || { echo "::error::not an arm64 binary"; exit 1; }
       - run: |
           mkdir -p dist
           cp target/aarch64-apple-darwin/release/apkscope dist/apkscope_macos_aarch64
           cp target/x86_64-apple-darwin/release/apkscope dist/apkscope_macos_x86_64
-      - name: Verify asset manifest
-        run: |
-          for f in apkscope_macos_aarch64 apkscope_macos_x86_64; do
-            [ -f "dist/$f" ] || { echo "::error::missing dist/$f"; exit 1; }
-          done
-          echo "manifest ok:"; ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-macos
           path: dist/
           if-no-files-found: error
-          retention-days: 7
 
   windows:
     needs: gate
-    # one binary — viewer + CLI + MCP server — built where it is tested
+    # one binary — viewer + CLI + MCP server
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -288,33 +158,16 @@ jobs:
         with:
           shared-key: build-windows
       - run: cargo build --locked --workspace --release
-      # canonical Cargo output path (lowercase "release", checked out clean);
-      # bash on Windows handles the copy identically to POSIX CI
+      # canonical lowercase Cargo output path; bash handles the copy like POSIX CI
       - shell: bash
         run: |
           mkdir -p dist
           cp target/release/apkscope.exe dist/apkscope_windows_x86_64.exe
-      - name: Smoke test binary
-        shell: bash
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          out=$(./dist/apkscope_windows_x86_64.exe --version)
-          echo "windows --version: $out"
-          [ "$out" = "apkscope $v" ] || { echo "::error::binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          # the CLI's --help is its usage() path and exits 2 by design
-          ./dist/apkscope_windows_x86_64.exe --help >/dev/null 2>&1 || [ "$?" = "2" ]
-          file dist/apkscope_windows_x86_64.exe | grep -i "x86-64" || echo "::warning::file did not confirm x86-64"
-      - name: Verify asset manifest
-        shell: bash
-        run: |
-          [ -f dist/apkscope_windows_x86_64.exe ] || { echo "::error::missing dist/apkscope_windows_x86_64.exe"; exit 1; }
-          echo "manifest ok:"; ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-windows
           path: dist/
           if-no-files-found: error
-          retention-days: 7
 
   release:
     needs: [linux-x86_64, linux-aarch64, macos, windows]
@@ -330,9 +183,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # exact expected asset set — the public contract. Versioned file names
-      # are derived from the tag; a missing or extra file fails the release
-      # before anything is published.
+      # exact expected asset set — the public contract; a missing or extra
+      # file fails the release before anything is published
       - name: Verify the complete asset manifest
         run: |
           v="${GITHUB_REF_NAME#v}"

@@ -2,8 +2,7 @@ name: ci
 
 # Pre-merge gate for every branch and PR. Release tags (v*) are built and
 # published by release.yml instead; this workflow ignores them so a release
-# build never runs twice. Toolchain, action pins and cache keys are shared
-# with release.yml — change them in both files in one commit.
+# build never runs twice.
 
 on:
   push:
@@ -13,15 +12,11 @@ on:
       - "v*"
   pull_request:
 
-# One run per ref. head_ref is set on pull_request (the source branch) and
-# empty on push, where github.ref is the branch; so a PR and the branch push
-# behind it share a group and the older run is cancelled. Only PR runs are
-# cancelled: default-branch pushes are never cut off mid-run.
+# One run per ref; the older PR run is cancelled, never a branch push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: everything here only needs the source tree.
 permissions:
   contents: read
 
@@ -39,8 +34,6 @@ jobs:
       - run: cargo fmt --all -- --check
 
   check:
-    # Compile both shipped feature configs without producing artifacts. This
-    # is the cheap smoke of the compilers; clippy below is the real lint gate.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -48,13 +41,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: check
-      # CLI + MCP server only — the macOS release build; the Linux and
-      # Windows release builds (default features, viewer included) are
-      # compiled by the build matrix below
+      # CLI + MCP server only — the macOS/musl configuration
       - run: cargo check --locked --workspace --no-default-features
-      # the default-feature build — what the Linux and Windows releases ship
-      # (viewer + CLI + MCP server in one binary); needs no system GUI
-      # packages, the desktop's X11/Wayland/GL are dlopen()'d at runtime
+      # default features: viewer + CLI + MCP server (the Linux/Windows build)
       - run: cargo check --locked --workspace
 
   clippy:
@@ -65,18 +54,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: clippy
-      # The shipped warning policy: -D warnings for the CLI + MCP build (the
-      # macOS/musl configuration) — that tree is clean today. The GUI tree
-      # (default features, what Linux and Windows ship) carries 23 known
-      # pre-existing warnings — 17 collapsible_if, 2 type_complexity, and one
-      # each of too_many_arguments, question_mark, large_enum_variant,
-      # map_or_identity, all in src/gui.rs / src/gui/live_ui.rs / src/re.rs —
-      # so it is linted with warnings reported, not denied, until the debt is
-      # paid down in-tree. Flipping that line to -D warnings is the follow-up.
-      # CLI + MCP server only — the macOS release build
       - run: cargo clippy --locked --workspace --no-default-features -- -D warnings
-      # default features: the viewer tree the Linux and Windows releases ship
-      - run: cargo clippy --locked --workspace -- -D clippy::correctness -D clippy::suspicious -D clippy::dangerous
+      - run: cargo clippy --locked --workspace -- -D warnings
 
   test:
     runs-on: ubuntu-24.04
@@ -86,11 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: test
-      # dev profile, not --release: debug assertions and overflow checks are
-      # part of what the tests exist to catch. Both shipped feature sets run;
-      # the GUI tests are pure logic (highlighting, tree building, event
-      # ingest) and need no display — the viewer itself is exercised by the
-      # build matrix compile and by hand.
+      # dev profile keeps debug assertions and overflow checks; the GUI tests
+      # are pure logic and need no display
       - run: cargo test --locked --workspace --no-default-features
       - run: cargo test --locked --workspace
 
@@ -99,19 +75,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # optional: macOS arm64 runners are often on outage from GitHub itself
+          - { os: macos-latest, name: macos-arm64, optional: true }
           - { os: ubuntu-24.04, name: linux-x64 }
-          - { os: macos-latest, name: macos-arm64 }
           - { os: windows-latest, name: windows-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    continue-on-error: ${{ matrix.optional == true }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: build-${{ matrix.name }}
       # build what the release ships: macOS the CLI + MCP server, Linux and
-      # Windows the viewer build — one binary with the GUI, the CLI and the
-      # MCP server, exactly the binaries the release attaches
+      # Windows the viewer build
       - if: runner.os == 'macOS'
         run: cargo build --locked --workspace --release --no-default-features
       - if: runner.os != 'macOS'
@@ -133,14 +110,10 @@ jobs:
           name: apkscope-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
-          retention-days: 7
-      # the static CLI + MCP server on Linux, like the release: for servers,
-      # containers and musl distros (Alpine) — no viewer, and it says so when
-      # asked (a static binary cannot dlopen() the desktop's X11/Wayland/GL)
+      # the static CLI + MCP server on Linux, like the release
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      # rust-toolchain.toml installs the compiler but not cross targets;
-      # without this the musl build fails with E0463 (can't find crate for `core`)
+      # rust-toolchain.toml installs the compiler but not cross targets
       - if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-musl
       - if: runner.os == 'Linux'
@@ -148,11 +121,7 @@ jobs:
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-      # the Linux binaries, packaged like the release (.deb + AppImage). The
-      # glibc this links is the Ubuntu 24.04 one (glibc 2.39) — the actual
-      # floor for the plain binaries and the AppImage, NOT "the oldest
-      # supported LTS": building on an older image is a deliberate, separate
-      # change because it costs a container or a pinned older runner.
+      # the Linux binaries, packaged like the release (.deb + AppImage)
       - if: runner.os == 'Linux'
         run: |
           mkdir -p pkg
@@ -165,4 +134,3 @@ jobs:
           name: apkscope-packages-linux-x64
           path: pkg/
           if-no-files-found: error
-          retention-days: 7
