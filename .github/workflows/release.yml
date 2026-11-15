@@ -134,7 +134,7 @@ jobs:
           ./dist/apkscope_linux_musl_x86_64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file dist/apkscope_linux_x86_64 dist/apkscope_linux_musl_x86_64
           ldd dist/apkscope_linux_x86_64
-          if ldd dist/apkscope_linux_musl_x86_64 2>&1 | grep -q "not a dynamic executable"; then
+          if ldd dist/apkscope_linux_musl_x86_64 2>&1 | grep -Eq "statically linked|not a dynamic executable"; then
             echo "musl binary is static"
           else
             echo "::error::musl binary is not static:"; ldd dist/apkscope_linux_musl_x86_64; exit 1
@@ -194,7 +194,7 @@ jobs:
           ./dist/apkscope_linux_musl_aarch64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file dist/apkscope_linux_aarch64 dist/apkscope_linux_musl_aarch64
           ldd dist/apkscope_linux_aarch64
-          if ldd dist/apkscope_linux_musl_aarch64 2>&1 | grep -q "not a dynamic executable"; then
+          if ldd dist/apkscope_linux_musl_aarch64 2>&1 | grep -Eq "statically linked|not a dynamic executable"; then
             echo "musl binary is static"
           else
             echo "::error::musl binary is not static:"; ldd dist/apkscope_linux_musl_aarch64; exit 1
