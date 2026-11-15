@@ -124,16 +124,21 @@ jobs:
 
   windows:
     needs: [lint]
-    # one binary — viewer + CLI + MCP server — built where it is tested
+    # one binary per arch — viewer + CLI + MCP server — built where it is tested
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      # x64 build is native; aarch64 cross-compiles with the MSVC toolchain
       - run: cargo build --release
+      - run: cargo build --release --target aarch64-pc-windows-msvc
       - run: |
           mkdir dist
           cp target/Release/apkscope.exe dist/apkscope_windows_x86_64.exe
+          cp target/aarch64-pc-windows-msvc/Release/apkscope.exe dist/apkscope_windows_aarch64.exe
       - uses: actions/upload-artifact@v7
         with:
           name: dist-windows
