@@ -21,7 +21,8 @@
   <a href="#commands">Commands</a> ·
   <a href="#built-for-ai-agents">MCP</a> ·
   <a href="#the-viewer">Viewer</a> ·
-  <a href="#honest-limits">Limits</a>
+  <a href="#honest-limits">Limits</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 > **In 10 seconds:** one executable, no Java. Drop in an APK and get a security overview, readable
