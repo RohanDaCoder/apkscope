@@ -21,10 +21,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: everything here only needs the source tree. The repo has
-# no branch protection yet; when protection is added, "ci-ok" below is the
-# job to make required (it fails if any job it needs failed or was cancelled,
-# and it runs even on docs-only changes, so it can be a required check).
+# Least privilege: everything here only needs the source tree.
 permissions:
   contents: read
 
@@ -169,16 +166,3 @@ jobs:
           path: pkg/
           if-no-files-found: error
           retention-days: 7
-
-  # Required-check candidate: reports the matrix's verdict. `always()` makes
-  # it run even when a needed job was skipped or failed; it fails itself if
-  # any dependency failed or was cancelled. Point branch protection here.
-  ci-ok:
-    if: always()
-    needs: [fmt, check, clippy, test, build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Fail if any needed job failed or was cancelled
-        run: |
-          [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "false" ]]
