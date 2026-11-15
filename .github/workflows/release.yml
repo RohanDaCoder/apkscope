@@ -117,18 +117,21 @@ jobs:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - run: cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
-      # smoke test: version matches the tag, glibc binary runs, musl binary is
-      # fully static (ldd must say "statically linked")
+      # smoke test: version matches the tag, both binaries run, musl is
+      # fully static (ldd must say "not a dynamic executable"). Note the
+      # CLI's --help is its usage() path and exits 2 by design, so success
+      # is judged on --version (exit 0), never on --help.
       - name: Smoke test binaries
         run: |
           v="${GITHUB_REF_NAME#v}"
           out=$(./dist/apkscope_linux_x86_64 --version)
           echo "glibc --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::glibc binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_x86_64 --help >/dev/null
+          ./dist/apkscope_linux_x86_64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           out=$(./dist/apkscope_linux_musl_x86_64 --version)
           echo "musl --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::musl binary reports '$out', expected 'apkscope $v'"; exit 1; }
+          ./dist/apkscope_linux_musl_x86_64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file dist/apkscope_linux_x86_64 dist/apkscope_linux_musl_x86_64
           ldd dist/apkscope_linux_x86_64
           if ldd dist/apkscope_linux_musl_x86_64 2>&1 | grep -q "not a dynamic executable"; then
@@ -177,16 +180,18 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - run: cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_aarch64
+      # smoke test: see the x86_64 job; --help exits 2 by design (usage path)
       - name: Smoke test binaries
         run: |
           v="${GITHUB_REF_NAME#v}"
           out=$(./dist/apkscope_linux_aarch64 --version)
           echo "glibc --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::glibc binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_linux_aarch64 --help >/dev/null
+          ./dist/apkscope_linux_aarch64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           out=$(./dist/apkscope_linux_musl_aarch64 --version)
           echo "musl --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::musl binary reports '$out', expected 'apkscope $v'"; exit 1; }
+          ./dist/apkscope_linux_musl_aarch64 --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file dist/apkscope_linux_aarch64 dist/apkscope_linux_musl_aarch64
           ldd dist/apkscope_linux_aarch64
           if ldd dist/apkscope_linux_musl_aarch64 2>&1 | grep -q "not a dynamic executable"; then
@@ -242,7 +247,8 @@ jobs:
           out=$(./target/aarch64-apple-darwin/release/apkscope --version)
           echo "aarch64 --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::aarch64 binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./target/aarch64-apple-darwin/release/apkscope --help >/dev/null
+          # the CLI's --help is its usage() path and exits 2 by design
+          ./target/aarch64-apple-darwin/release/apkscope --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file target/aarch64-apple-darwin/release/apkscope target/x86_64-apple-darwin/release/apkscope
           if x86_64out=$(arch -x86_64 ./target/x86_64-apple-darwin/release/apkscope --version 2>/dev/null); then
             echo "x86_64 --version: $x86_64out"
@@ -295,7 +301,8 @@ jobs:
           out=$(./dist/apkscope_windows_x86_64.exe --version)
           echo "windows --version: $out"
           [ "$out" = "apkscope $v" ] || { echo "::error::binary reports '$out', expected 'apkscope $v'"; exit 1; }
-          ./dist/apkscope_windows_x86_64.exe --help >/dev/null
+          # the CLI's --help is its usage() path and exits 2 by design
+          ./dist/apkscope_windows_x86_64.exe --help >/dev/null 2>&1 || [ "$?" = "2" ]
           file dist/apkscope_windows_x86_64.exe | grep -i "x86-64" || echo "::warning::file did not confirm x86-64"
       - name: Verify asset manifest
         shell: bash
