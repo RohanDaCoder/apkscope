@@ -1,0 +1,27 @@
+# Keep pinned actions (see the SHA pins in .github/workflows/*.yml) up to date.
+# versioning-strategy pins the manifest to the tag but opens the PR for the
+# SHA update in the workflow files, so bumps stay reviewable.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Cargo.lock is the build input; only manifest-range bumps get PRs, and
+    # each one re-runs the full CI matrix before merge.
+    versioning-strategy: "lockfile-only"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
