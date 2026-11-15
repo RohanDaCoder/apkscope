@@ -38,43 +38,72 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # both arches build on the x86_64 runner: aarch64 cross-compiles with
+        # gcc-aarch64-linux-gnu (glibc build; links nothing beyond libc, the GUI
+        # stack is dlopen()'d at runtime) and a musl container (musl build;
+        # Ubuntu's musl-tools only ships the host arch's musl-gcc)
         include:
-          - { arch: x86_64, runner: ubuntu-24.04 }
-          - { arch: aarch64, runner: ubuntu-24.04-arm }
-    runs-on: ${{ matrix.runner }}
+          - { arch: x86_64 }
+          - { arch: aarch64 }
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.arch }}-unknown-linux-musl
+          targets: aarch64-unknown-linux-gnu
       # the desktop binary, like the Windows exe: viewer + CLI + MCP server
       # in one. It links nothing beyond libc — X11, Wayland and GL are
       # dlopen()'d at runtime — and 24.04 is the oldest supported LTS, so
-      # the glibc it needs is the floor every newer distro meets. Each arch
-      # builds on its own runner: the viewer's glibc build would need a
-      # cross sysroot otherwise, and musl-tools only ships the host's musl-gcc.
+      # the glibc it needs is the floor every newer distro meets.
+      - run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        if: matrix.arch == 'aarch64'
       - run: cargo build --release
+        if: matrix.arch == 'x86_64'
+      - run: cargo build --release --target aarch64-unknown-linux-gnu
+        if: matrix.arch == 'aarch64'
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       - run: |
           mkdir -p dist
-          cp target/release/apkscope dist/apkscope_linux_${{ matrix.arch }}
-      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage for any distro
+          cp target/release/apkscope dist/apkscope_linux_x86_64
+        if: matrix.arch == 'x86_64'
+      - run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/apkscope dist/apkscope_linux_aarch64
+        if: matrix.arch == 'aarch64'
+      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage for any distro.
+      # TARGETARCH tells package.sh which arch the binary is for — the packaging
+      # runner's uname -m is the host's, not the binary's.
       - run: packaging/linux/package.sh target/release/apkscope dist
+        if: matrix.arch == 'x86_64'
+      - run: packaging/linux/package.sh target/aarch64-unknown-linux-gnu/release/apkscope dist
+        if: matrix.arch == 'aarch64'
+        env:
+          TARGETARCH: aarch64
       # the CLI + MCP server for servers, containers and musl distros (Alpine):
       # fully static. No viewer — a static binary cannot dlopen() the desktop's
       # X11/Wayland/GL stack — and asking it for the gui prints that limitation
-      # instead of a bare error.
+      # instead of a bare error. x86_64 uses the host's musl-tools; aarch64
+      # builds in a musl cross container (musl-tools has no arm64 cross).
       - run: sudo apt-get install -y musl-tools
-      - run: cargo build --release --no-default-features --target ${{ matrix.arch }}-unknown-linux-musl
-        # both arches' pairs are declared because expressions in env var names
-        # are not a documented feature; cargo reads only the pair matching the
-        # --target above and ignores the other
+        if: matrix.arch == 'x86_64'
+      - run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
+        if: matrix.arch == 'x86_64'
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          CC_aarch64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-      - run: cp target/${{ matrix.arch }}-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_${{ matrix.arch }}
+      - run: |
+          docker run --rm -v "$PWD:/home/rust/src" -w /home/rust/src \
+            ghcr.io/rust-cross/rust-musl-cross:aarch64-musl \
+            cargo build --release --no-default-features --target aarch64-unknown-linux-musl
+        if: matrix.arch == 'aarch64'
+      - run: cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
+        if: matrix.arch == 'x86_64'
+      - run: sudo chown -R "$(id -u):$(id -g)" target dist
+        if: matrix.arch == 'aarch64'
+      - run: cp target/aarch64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_aarch64
+        if: matrix.arch == 'aarch64'
       - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-${{ matrix.arch }}
