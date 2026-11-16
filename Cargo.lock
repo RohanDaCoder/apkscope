@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "apkscope"
-version = "0.10.1"
+version = "0.10.0"
 dependencies = [
  "apkscope-core",
  "eframe",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "apkscope-core"
-version = "0.10.1"
+version = "0.10.0"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.8.9",
