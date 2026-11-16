@@ -85,7 +85,49 @@ fn replace_verified(
     ok(format!("installed {}", homepath(exe)));
     cleanup(&backup, staged);
 
-    Ok(super::current_label(&super::identity()))
+    Ok(installed_label(exe, manifest))
+}
+
+/// The label the closing message shows: what the new binary itself says it is,
+/// asked at its installed path. The exiting process's own `identity()` is the
+/// old build's, so it would always report the version being replaced.
+///
+/// The label must not fail the upgrade after it succeeded; if the just-
+/// verified binary somehow does not answer, fall back to the manifest, which
+/// verification has already proven the file carries.
+fn installed_label(exe: &Path, manifest: &Manifest) -> String {
+    use std::process::{Command, Stdio};
+    let asked = Command::new(exe)
+        .args(["--version", "--json"])
+        .stdin(Stdio::null())
+        .output();
+    if let Ok(out) = &asked
+        && out.status.success()
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        && let (Some(version), Some(commit)) = (
+            v.get("version").and_then(|x| x.as_str()),
+            v.get("commit").and_then(|x| x.as_str()),
+        )
+    {
+        let channel = v.get("channel").and_then(|x| x.as_str());
+        return label(version, channel, commit);
+    }
+    label(
+        &manifest.version,
+        Some(manifest.channel.name()),
+        &manifest.commit,
+    )
+}
+
+/// `0.10.0` for a stable build, `0.10.0-canary-4c3eeb` for a canary — the same
+/// shape as [`super::current_label`], over borrowed strings (the identity it
+/// renders was just read from the new binary, not compiled in).
+fn label(version: &str, channel: Option<&str>, commit: &str) -> String {
+    if channel == Some(Channel::Canary.name()) && commit.len() >= 6 {
+        format!("{version}-canary-{}", &commit[..6])
+    } else {
+        version.to_string()
+    }
 }
 
 /// Remove the backup and any staging leftovers; failures are only noted — by

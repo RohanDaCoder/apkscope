@@ -82,7 +82,6 @@ impl Channel {
     }
 
     /// Parse a channel exactly as the manifest and the CLI spell it.
-    #[cfg(test)]
     pub fn parse(s: &str) -> Option<Channel> {
         match s {
             "stable" => Some(Channel::Stable),
