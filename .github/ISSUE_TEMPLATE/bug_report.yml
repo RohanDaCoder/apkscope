@@ -1,0 +1,93 @@
+name: Bug report
+description: Something works wrong — bad decompiler output, a crash, a CLI/MCP/viewer error, a build or packaging failure.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report.
+
+        The most valuable report is wrong decompiler output: include the class name (and the
+        method), and what JADX shows for the same code — that is the comparison the fix is made
+        against. Trim output to the lines that matter.
+
+        Please analyze only apps you own or are authorized to analyze, and don't attach APKs or
+        decompiled output you don't have the rights to share.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where does it go wrong?
+      options:
+        - Decompiler output (Java / Smali / `/* WARNING */` headers)
+        - Fast CLI command (classes, methods, strings, refs, decompile, diff, ...)
+        - Indexed commands (search, info, resource, export)
+        - RE commands (callers, callgraph, access, decrypt, frida, dump, il2cpp)
+        - Editing (smali, res, build, re-signing)
+        - MCP server
+        - Viewer (GUI)
+        - Build from source
+        - Install / packaging / release binary
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+      placeholder: |
+        `apkscope decompile` rendered ... I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command you ran, and the output (trim to the lines that matter).
+      render: text
+      placeholder: apkscope decompile app.apk com.example.Api --method login
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: apkscope version
+      description: Output of `apkscope -V` (or the release you downloaded).
+      placeholder: "apkscope 0.10.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you get apkscope?
+      options:
+        - Release binary (windows_x86_64.exe)
+        - Release binary (linux_x86_64 / linux_aarch64)
+        - .deb package
+        - AppImage
+        - Static musl binary (linux_musl_*)
+        - macOS binary (macos_*)
+        - scripts/install.sh or install.ps1
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Your operating system and version. For viewer issues also add your desktop / display server (e.g. Ubuntu 24.04, Wayland, or WSLg).
+      placeholder: "Windows 11 / Ubuntu 24.04 / macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: jadx-comparison
+    attributes:
+      label: "If the Java output is wrong: class, method, and what JADX shows"
+      description: Optional, but it is what makes an output bug fixable fastest. The class name as `apkscope` prints it, the method, and the equivalent JADX code.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Screenshots, a smaller APK or DEX that reproduces it, `RUST_BACKTRACE=1` output for crashes, what you already tried.

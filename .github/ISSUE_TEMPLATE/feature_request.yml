@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a new capability — a new command, MCP tool, decompiler improvement, output format, packaging target.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good requests are concrete: the exact command or MCP tool you wish existed, on a real app
+        you analyzed, and what you had to do instead today. "Make decompilation better" is not
+        actionable; "typed try-with-resources for AutoCloseable" is.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what blocks you today? Which command did you run, and what was missing from the answer?
+      placeholder: |
+        I was checking ... in <app>, and to find ... I had to ...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: The behavior you want
+      description: The command (or MCP tool, or flag) as you would type it, and what it should print. An example of the output you'd want to see is worth a long description.
+      placeholder: |
+        apkscope <command> <args...>  →  ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Decompiler output (Java / Smali)
+        - Fast CLI command
+        - Indexed commands (search, info, resource, export)
+        - RE commands (callers, callgraph, access, decrypt, frida, dump, il2cpp)
+        - Editing (smali, res, build, re-signing)
+        - MCP server
+        - Viewer (GUI)
+        - Library (apkscope-core)
+        - Packaging / install
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: How you work around it now — which tool (JADX, rust_ASC, apktool, Frida scripting) or which apkscope commands get you part of the way.
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Benchmarks, links, related issues, or a note if you're willing to work on it yourself.

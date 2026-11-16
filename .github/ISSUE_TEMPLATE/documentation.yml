@@ -1,0 +1,29 @@
+name: Documentation
+description: Something in the README, BENCHMARKS.md, release notes or inline help is wrong, unclear or missing.
+labels: ["documentation"]
+body:
+  - type: dropdown
+    id: doc
+    attributes:
+      label: Which document?
+      options:
+        - README.md
+        - BENCHMARKS.md
+        - docs/RELEASE_NOTES.md
+        - "`apkscope --help` / usage text"
+        - Code comments or doc comments
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's wrong or missing?
+      description: Link or quote the section, then say what a reader would need it to say. For a missing topic, describe what you were trying to find.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Optional — the wording or section you'd add. PRs are welcome too; small docs fixes are quick reviews.

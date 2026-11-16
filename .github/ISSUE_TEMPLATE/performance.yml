@@ -1,0 +1,56 @@
+name: Performance
+description: apkscope is slower or uses more memory than it should — or a competitor beats it somewhere.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every number this project quotes comes from a script in `bench/` — see BENCHMARKS.md. If
+        you can, measure with the harnesses there (`bench/asc.ps1`, `bench/search.ps1`,
+        `bench/measure.ps1`, `bench/mcp.py`); a number without its method can't be acted on.
+  - type: textarea
+    id: observation
+    attributes:
+      label: What you measured
+      description: The command, the app (size / class count if you know it), the wall time and/or peak memory, and what you compared it against (a previous apkscope version, JADX, rust_ASC, apktool, grep...).
+      placeholder: |
+        apkscope search <app.apk> code <query>: X s / Y MB on <machine>
+        vs <tool/version>: Z s / W MB
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Where does the time go?
+      options:
+        - Opening / loading the APK (first command on a cold cache)
+        - Cold one-shot query (classes, methods, strings, refs, decompile one class)
+        - Warm / cached session (search, callers, callgraph)
+        - Whole-APK decompile / export
+        - MCP agent session
+        - Viewer startup or interaction
+        - Build / edit / rebuild / sign
+        - Not sure / other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: CPU, RAM, OS, apkscope version (`apkscope -V`) and how you installed it.
+      placeholder: "i7-10850H, 32 GB, Windows 11; apkscope 0.10.0 (release binary)"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce the measurement
+      description: The exact commands, ideally the bench/ script invocation, so anyone can re-run it.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Profiler output (e.g. `perf`, Very Sleepy, Instruments), a note whether the APK is packed, links to related issues.
