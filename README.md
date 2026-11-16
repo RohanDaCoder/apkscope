@@ -288,6 +288,7 @@ apkscope dump      app.apk out/ --attach                    # packed app: save t
 apkscope il2cpp    game.xapk --uses "https://"              # Unity games: which C# method uses a string
 apkscope frida     app.apk com.example.Api login            # ready-to-run hook (args, return, throws)
 apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
+apkscope map       app.apk import mapping.txt                # ProGuard/R8 names, or .jobf/.mapping; export back
 apkscope export    app.apk out/                             # Gradle project for Android Studio
 apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
 
