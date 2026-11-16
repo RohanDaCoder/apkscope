@@ -88,7 +88,7 @@ os=$(uname -s)
 case "$os" in
   Linux)  os=linux ;;
   Darwin) os=macos ;;
-  *) die "unsupported OS '$os' (this installer covers Linux and macOS; on Windows use scripts/install.ps1 or grab apkscope_windows_x86_64.exe from the Releases page)" ;;
+  *) die "unsupported OS '$os' (this installer covers Linux and macOS; on Windows use scripts/install.ps1 or grab apkscope_windows_x86_64.exe / apkscope_windows_aarch64.exe from the Releases page)" ;;
 esac
 
 arch=$(uname -m)

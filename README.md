@@ -236,9 +236,9 @@ irm https://raw.githubusercontent.com/suffixing/apkscope/main/scripts/install.ps
 
 Or grab a binary straight from [Releases](https://github.com/suffixing/apkscope/releases):
 
-- `apkscope_windows_x86_64.exe` / `apkscope_linux_x86_64` / `apkscope_linux_aarch64` — one
-  binary with the viewer, the CLI and the MCP server. On Linux also packaged as
-  `apkscope_<version>_<arch>.deb` (Debian/Ubuntu) and `apkscope-<version>-<arch>.AppImage`
+- `apkscope_windows_x86_64.exe` / `apkscope_windows_aarch64.exe` / `apkscope_linux_x86_64` /
+  `apkscope_linux_aarch64` — one binary with the viewer, the CLI and the MCP server. On Linux also
+  packaged as `apkscope_<version>_<arch>.deb` (Debian/Ubuntu) and `apkscope-<version>-<arch>.AppImage`
   (any distro); those binaries are glibc builds from Ubuntu 24.04, so they need glibc 2.39+.
 - `apkscope_linux_musl_x86_64` / `apkscope_linux_musl_aarch64` — the fully static CLI + MCP
   server for servers, containers and musl distros (Alpine); runs on any glibc distro too.
@@ -450,6 +450,8 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
 - The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
+- `apkscope_windows_aarch64.exe` is built natively on a Windows 11 ARM runner; the x86_64 exe
+  is the one the CI tests run on. Windows on ARM runs either binary.
 - The static musl binary (`apkscope_linux_musl_*`) has no viewer, and cannot have one: a fully
   static binary cannot dlopen() the desktop's X11/Wayland/GL libraries. Use the glibc binary
   or the .deb/AppImage packages for the window.

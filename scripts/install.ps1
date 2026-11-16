@@ -23,11 +23,11 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo  = if ($env:APKSCOPE_REPO) { $env:APKSCOPE_REPO } else { 'suffixing/apkscope' }
 $Base  = if ($env:APKSCOPE_BASE_URL) { $env:APKSCOPE_BASE_URL } else { 'https://github.com' }
 $Dest  = Join-Path $env:LOCALAPPDATA 'Programs\apkscope'
-# The release asset is named for the platform (apkscope_windows_x86_64.exe)
-# so it is self-describing on the Releases page, but once installed it
-# should be callable as `apkscope` from any terminal — so we rename on
-# install to a clean binary name.
-$Asset         = 'apkscope_windows_x86_64.exe'
+# The release asset is named for the platform (apkscope_windows_x86_64.exe,
+# apkscope_windows_aarch64.exe) so it is self-describing on the Releases page,
+# but once installed it should be callable as `apkscope` from any terminal —
+# so we rename on install to a clean binary name. $Asset itself is picked
+# below, from the CPU the installer is running on.
 $InstalledName = 'apkscope.exe'
 
 # --- output helpers ---------------------------------------------------------------
@@ -65,7 +65,12 @@ function Die($msg) {
     throw 'apkscope install aborted'
 }
 
-# The Windows build is x64; Windows on ARM runs it under emulation.
+# Native binary per arch: x64 where it is tested, ARM64 native on Windows on ARM
+# (emulated x64 runs too, but a native binary skips Prism emulation entirely).
+$Proc = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+$Asset = if ($Proc -eq [System.Runtime.InteropServices.Architecture]::Arm64) { 'apkscope_windows_aarch64.exe' }
+         else { 'apkscope_windows_x86_64.exe' }
+
 # Channels: stable (default) or canary — the latest commit's build from the
 # persistent `canary` prerelease. The canary label reads the release's
 # apkscope-update.json manifest, the same single source of truth the CLI's
@@ -89,7 +94,7 @@ if ($Version -ne '') {
 Write-Host ''
 Write-Title 'apkscope installer'
 Write-Host ''
-Write-Info 'platform' 'windows x64'
+Write-Info 'platform' "windows $($Proc.ToString().ToLowerInvariant())"
 if ($null -eq $VersionLabel) {
     # canary: resolve the label from the manifest, and treat a missing manifest
     # as "being published right now" — fail closed, like the CLI
