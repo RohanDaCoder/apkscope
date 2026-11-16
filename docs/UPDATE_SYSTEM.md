@@ -148,13 +148,24 @@ The existing `.deb` and AppImage packages remain available for their existing in
 
 ## 5. Release metadata and integrity
 
-Every stable and canary Release contains:
+**Use the GitHub Releases API as the primary metadata source.** Public APKScope releases can be queried anonymously; the CLI must not embed a GitHub token or require users to sign in.
 
-- The platform executable assets.
-- `checksums.txt` in standard `sha256sum` format.
-- `apkscope-update.json`, a small publication manifest and readiness marker.
+The API already supplies the information the updater needs:
 
-Example manifest:
+- Release identity: `tag_name`, `draft`, `prerelease`.
+- Per-asset download URL: `assets[].browser_download_url`.
+- Per-asset size: `assets[].size`.
+- Per-asset SHA-256: `assets[].digest` (formatted as `sha256:<hex>`).
+
+Do not download `checksums.txt` just to obtain a digest when the API supplies a valid `assets[].digest`.
+
+### Minimal fallback manifest
+
+Ship one small `apkscope-update.json` asset with each stable and canary Release **only as a fallback**. It is not required on the normal API path.
+
+Use it only when the Releases API cannot be used (for example, network failure, API rate limiting, or a transient GitHub API error), or when a selected API asset has no usable `digest`. The fallback manifest supplies only the metadata that cannot be obtained from the API. It must not introduce a second update service or a second set of release assets.
+
+Example:
 
 ```json
 {
@@ -162,34 +173,47 @@ Example manifest:
   "channel": "canary",
   "version": "0.10.0",
   "commit": "0123456789abcdef0123456789abcdef01234567",
-  "assets": [
-    {
-      "platform": "linux-aarch64-gnu",
+  "assets": {
+    "linux-aarch64-gnu": {
       "name": "apkscope_linux_aarch64",
       "size": 12345678,
       "sha256": "lowercase-64-character-sha256"
     }
-  ]
+  }
 }
 ```
 
-The actual manifest lists every updater-supported executable.
+The actual manifest lists all supported updater platform IDs. Keep the schema deliberately small: channel, version, full commit SHA, and per-platform asset name/size/SHA-256. Do not duplicate release notes, authors, timestamps, arbitrary download URLs, or other GitHub release metadata.
 
-Validation requirements:
+Fallback manifest URLs are deterministic:
+
+```text
+Stable latest:
+https://github.com/RohanDaCoder/apkscope/releases/latest/download/apkscope-update.json
+
+Canary:
+https://github.com/RohanDaCoder/apkscope/releases/download/canary/apkscope-update.json
+
+Specific stable version:
+https://github.com/RohanDaCoder/apkscope/releases/download/v0.10.0/apkscope-update.json
+```
+
+The updater constructs the executable download URL from the trusted repository, release tag/channel and the known platform asset name. It must not follow arbitrary URLs supplied by the manifest.
+
+### Validation and fallback rules
 
 - Reject unknown `schema_version` values.
-- The manifest channel must match the requested channel.
-- The manifest version and commit must identify the Release's build.
-- The manifest must contain exactly one matching platform asset.
-- Asset names must match the expected platform mapping; do not trust arbitrary URLs or names from the manifest.
-- The selected asset must have a valid byte size and SHA-256 digest.
-- The manifest is generated from the final build outputs, not handwritten.
+- Validate the requested channel and release tag.
+- Validate the selected platform entry, exact expected asset filename, byte size and 64-character SHA-256.
+- When using API metadata, validate the `digest` prefix and hex value before use.
+- If API metadata is usable and contains a valid digest, use it directly.
+- If the API request fails transiently or the asset digest is absent/unsupported, try the fallback manifest.
+- If both API metadata and the fallback manifest are unavailable or invalid, stop with a useful error. Never install without a verified digest.
+- Do not use the fallback to mask a valid API response that identifies the wrong tag, channel, draft/prerelease state, or platform asset.
 
-The updater verifies both the manifest's size/digest and the downloaded bytes. A missing manifest, missing asset, missing checksum, malformed digest, size mismatch, or checksum mismatch is a hard error. It must never warn and continue with an unverified binary.
+Keep the existing `checksums.txt` for the shell/PowerShell installers and manual downloads. The CLI updater does not need to fetch it on the normal API path.
 
-`checksums.txt` is retained for the shell/PowerShell installers and manual downloads. The structured manifest is the updater's channel, commit and asset contract.
-
-A checksum downloaded from the same GitHub Release is useful for detecting corruption and inconsistent publication, but is not independent authenticity protection if the GitHub account or release credentials are compromised. Signing the manifest and verifying it with a public key embedded in APKScope is a possible later hardening step.
+A SHA-256 digest obtained from GitHub or a manifest hosted in the same GitHub Release detects corruption and inconsistent downloads; it is not independent authenticity protection if the GitHub account or release credentials are compromised. Signing releases is optional future hardening, not a requirement for the initial updater.
 
 ## 6. CI and publication lifecycle
 
@@ -201,7 +225,7 @@ Trigger on version tags matching `v*`.
 
 1. Run formatting, checks, lint and every required platform build.
 2. Collect all platform outputs.
-3. Generate `checksums.txt` and `apkscope-update.json` from those outputs.
+3. Generate `checksums.txt` and the small fallback `apkscope-update.json` from those exact outputs.
 4. Publish the versioned GitHub Release only after every required build succeeds.
 5. Do not force-move the stable tag or overwrite an already published stable release's binaries.
 
@@ -213,79 +237,82 @@ Trigger on pushes to `main`, **not** on pushes to the `canary` tag.
 
 1. Run the same validation and platform build jobs as stable.
 2. Collect all platform outputs.
-3. Generate checksums and the manifest from those exact outputs.
-4. Serialize the publication job with a concurrency group. Do not cancel a publication halfway through.
+3. Generate `checksums.txt` and the fallback manifest from those exact outputs.
+4. Serialize the publication job. Do not cancel a publication halfway through.
 5. Before publishing, confirm the build commit is still the current `main` HEAD. Skip stale runs.
 6. Reuse the existing GitHub Release tagged `canary`; create it on the first successful publication if it does not exist.
-7. Invalidate the existing `apkscope-update.json` readiness marker before replacing any canary binaries. This makes clients fail closed during asset replacement.
-8. Replace the executable assets and `checksums.txt` on the existing Release, retaining the exact filenames.
-9. Upload the new `apkscope-update.json` **last**, after every referenced asset and checksum has uploaded successfully.
-10. Move the remote lightweight Git tag `canary` to the exact commit recorded in the new manifest.
-11. Recheck that the build is not stale immediately before the final tag update.
-12. Keep the Release marked as a prerelease and do not mark it as GitHub's latest stable release.
+7. Replace the executable assets and `checksums.txt` on the existing Release, retaining the exact filenames.
+8. Upload/replace `apkscope-update.json` last, after all binaries and checksums have uploaded successfully.
+9. Move the remote lightweight Git tag `canary` to the exact commit used to build the binaries.
+10. Recheck that the build is not stale immediately before moving the tag.
+11. Keep the Release marked as a prerelease and do not mark it as GitHub's latest stable release.
 
-The workflow requires `contents: write` permission. The moving tag is updated as a Git ref; do not delete the release or recreate the tag for every build.
+The workflow requires `contents: write` permission. The moving tag is updated as a Git ref; do not delete the Release or recreate the tag for every build.
 
-### 6.3 Why the publication marker and order matter
+### 6.3 Canary publication consistency
 
-GitHub Release asset replacement is not an atomic multi-file transaction. Clients must not see a mixture of old and new assets as a valid release.
+GitHub Release asset replacement is not an atomic multi-file transaction. The updater must not assume that all fixed-name assets change simultaneously.
 
-The canary publication sequence therefore uses `apkscope-update.json` as a readiness marker:
+The API path must retrieve the current `canary` tag's commit SHA through the public Git references API. After downloading and verifying the selected asset, run the staged executable's version command **before replacing the installed executable**. Require its embedded channel to be `canary` and its full embedded commit SHA to match the current `canary` tag SHA. If they differ, the Release is being updated or is inconsistent; abort without replacing the current executable.
 
-- Remove/invalidate the old marker before touching any binary assets. While it is absent, the updater refuses the release.
-- Upload all new binaries and checksums.
-- Upload the new manifest last. At this point it identifies the new commit, but the old `canary` tag still points to the previous commit, so the updater still refuses the release.
-- Move the `canary` tag to the manifest's commit. Only after this final step do the manifest and tag agree, making the release installable.
+The fallback manifest carries the same full commit SHA and is checked against the canary tag when the Git references API is available. If the API is unavailable and the manifest fallback is used, the downloaded binary's embedded commit must still match the manifest commit.
 
-The updater must check the tag/manifest agreement on every canary update. It must not treat a missing or mismatched marker as a reason to fall back to another source.
-
-If the first canary Release does not exist yet, create the `canary` tag/Release as part of the first publication, but keep the readiness marker absent until all assets are uploaded and validated.
+This avoids adding a readiness-marker protocol or release-deletion step. The existing Release remains in place, assets retain stable names, and a client encountering mixed-generation assets rejects the downloaded binary before installation.
 
 ## 7. Update discovery and download algorithm
 
-The updater uses the GitHub Releases API for discovery and GitHub Release asset URLs for downloads.
+The updater uses the unauthenticated GitHub REST API first. No token, OAuth flow or user login is needed for public releases.
 
 ### Stable
 
 - Latest: `GET /repos/RohanDaCoder/apkscope/releases/latest`
 - Specific version: `GET /repos/RohanDaCoder/apkscope/releases/tags/v<version>`
 
-Require a non-draft release. For latest stable, reject prereleases. Validate that the manifest channel is `stable` and that the manifest version corresponds to the release tag.
+Require a non-draft release. For latest stable, require `prerelease == false`. Find the exact asset by the known platform filename and use its `browser_download_url`, `size` and `digest`.
 
 ### Canary
 
 - Release: `GET /repos/RohanDaCoder/apkscope/releases/tags/canary`
-- Tag ref: `GET /repos/RohanDaCoder/apkscope/git/ref/tags/canary`
+- Tag identity: `GET /repos/RohanDaCoder/apkscope/git/ref/tags/canary`
 
-Require a non-draft prerelease whose tag is exactly `canary`. Validate that:
+Require a non-draft prerelease whose tag is exactly `canary`. Resolve the lightweight tag to its full commit SHA. Find the exact platform asset and use its API-provided download URL, size and digest.
 
-- `apkscope-update.json` exists.
-- The manifest channel is `canary`.
-- The manifest commit is the full commit SHA referenced by the lightweight `canary` tag.
-- The manifest has the selected platform asset.
-- The Release has the selected asset and `checksums.txt`.
+### Fallback behavior
 
-If the manifest and tag disagree, or the marker/asset is missing, report that the canary release is being published or is inconsistent. Do not download/install anything.
+If the release API cannot be used because of a network error, rate limit, or transient server error, retrieve `apkscope-update.json` directly from the corresponding public Release download URL:
+
+- Stable latest: `/releases/latest/download/apkscope-update.json`
+- Canary: `/releases/download/canary/apkscope-update.json`
+- Specific stable version: `/releases/download/v<version>/apkscope-update.json`
+
+Use the manifest's version, commit and exact platform asset name/size/SHA-256. Construct the binary URL from the known repository, requested tag and known filename; do not trust arbitrary URLs from JSON.
+
+If the API succeeds but an asset's `digest` is absent or unusable, the manifest may be fetched to supply the missing digest and commit metadata. A valid API response that says a release is draft, the wrong channel, or the wrong tag is not an API outage and must not be bypassed using the fallback.
+
+If neither source can provide a valid digest, abort. There is no unverified-download mode.
 
 ### Common flow
 
 1. Resolve the requested channel (explicit option or embedded build channel).
-2. Fetch and validate Release metadata and the update manifest.
-3. Determine OS, architecture and Linux libc family.
-4. Select the exact supported platform entry.
-5. Compare local and remote identities:
+2. Query GitHub Releases API anonymously.
+3. Validate release state and locate the exact platform asset.
+4. Use API-provided `browser_download_url`, `size` and `digest`; use the fallback manifest only when the API/asset metadata is unavailable as described above.
+5. Determine OS, architecture and Linux libc family.
+6. Compare local and remote identities:
    - Stable: compare release/package versions.
    - Canary: compare full commit SHAs.
-6. For `--check`, report the result without downloading.
-7. Download the raw executable to a temporary file beside the installed executable.
-8. Enforce a reasonable download size limit and verify exact byte size and SHA-256 before installation.
-9. Validate the downloaded file as a plausible executable for the current platform.
-10. Install using the staged replacement procedure.
-11. Run the new binary's version command and verify that its channel, version and commit match the target.
+7. For `--check`, report the result without downloading or installing.
+8. Download the raw executable to a temporary file beside the installed executable.
+9. Enforce a reasonable download size limit and verify exact byte size and SHA-256.
+10. Validate the downloaded file as a plausible executable for the current platform.
+11. Execute the staged binary's version command and verify its channel, version and commit against the expected release identity.
+12. Install using the staged replacement procedure.
 
-Handle HTTP errors, GitHub rate limits, redirects, timeouts, interrupted downloads, missing assets and malformed JSON with useful errors. Every failure before the replacement step must leave the installed binary untouched.
+Handle HTTP errors, GitHub rate limits, redirects, timeouts, interrupted downloads, missing assets and malformed responses with useful errors. Every failure before replacement must leave the installed binary untouched.
 
-The updater uses the canonical repository `RohanDaCoder/apkscope`. It must not trust repository names or arbitrary download URLs supplied by release metadata. Fork/mirror overrides, if retained, must be explicit configuration and must preserve the same validation rules.
+A 404 means the requested public Release/tag is not currently published (for example, a fork with no releases yet); report that clearly. It does not mean authentication is required. Do not silently switch to another repository or channel.
+
+The updater uses the canonical repository `RohanDaCoder/apkscope`. Fork/mirror overrides, if retained, must be explicit configuration and must preserve the same validation rules.
 
 ## 8. Safe executable replacement
 
@@ -360,38 +387,40 @@ A blocking HTTP client is appropriate for the current synchronous command archit
 - [ ] Stable discovery selects the latest non-prerelease release and never selects canary.
 - [ ] Canary discovery resolves only the Release tagged `canary`.
 - [ ] Specific stable versions resolve by exact `vX.Y.Z` tag.
+- [ ] Public API requests work without authentication; no token is embedded in the binary.
 - [ ] Plain `upgrade` follows the installed binary's embedded channel.
 - [ ] `--stable` and `--canary` switch channels and are mutually exclusive.
-- [ ] Legacy binaries without channel metadata default to stable.
-- [ ] Canary comparison uses full commit SHA, even when package versions are identical.
+- [ ] Canary comparison uses the full commit SHA, even when package versions are identical.
+
+### Metadata and fallback
+
+- [ ] API-provided asset URL, size and SHA-256 digest are used when available.
+- [ ] `apkscope-update.json` is used only when API discovery fails transiently or API asset digest/commit metadata is unavailable.
+- [ ] The fallback manifest contains only schema version, channel, version, full commit SHA and platform asset name/size/SHA-256.
+- [ ] Missing/invalid metadata from both sources aborts safely; no unverified download path exists.
+- [ ] The updater does not fetch `checksums.txt` just to obtain a digest when the API provides one.
 
 ### Publishing
 
 - [ ] Canary publication reuses the existing Release; it does not delete/recreate it.
 - [ ] Canary assets retain the exact same filenames between builds.
-- [ ] The readiness marker is invalidated before asset replacement and uploaded last.
-- [ ] The `canary` tag points to the exact commit recorded in the manifest.
-- [ ] Missing/mismatched marker/tag causes the updater to refuse the release.
-- [ ] A failed platform build cannot publish or move the canary tag.
-- [ ] A stale build cannot move the canary tag backwards.
+- [ ] The fallback manifest is uploaded after the binary assets and checksums.
+- [ ] The `canary` tag points to the exact commit used to build the published binaries.
+- [ ] A canary binary whose embedded commit does not match the tag/manifest is rejected before installation.
+- [ ] A failed platform build or stale run cannot publish/move the canary tag.
 - [ ] Canary remains a prerelease and never becomes latest stable.
 - [ ] Stable tags are never force-moved and stable assets are never overwritten.
 
-### Platform and integrity
+### Platform, integrity and installation
 
 - [ ] Every supported target maps to its exact asset filename.
 - [ ] Linux glibc and musl select different assets.
-- [ ] Missing asset/manifest/digest, invalid JSON, size mismatch and checksum mismatch all abort safely.
-- [ ] Unsupported targets produce a useful error.
-
-### Installation
-
+- [ ] Missing asset/digest, invalid JSON, size mismatch and checksum mismatch all abort safely.
 - [ ] A failed download or verification leaves the current executable unchanged.
 - [ ] Unix replacement preserves executable permissions.
 - [ ] Windows replacement waits for the running process to exit.
-- [ ] A failed post-install check rolls back to the previous executable.
+- [ ] Failed post-install verification rolls back to the previous executable.
 - [ ] Package-manager-owned installations are refused with useful guidance.
-- [ ] Stable-to-canary and canary-to-stable switches report the correct channel and commit.
 
 ## 12. Explicit non-goals
 
@@ -408,19 +437,20 @@ The initial implementation does not include:
 
 ## 13. Migration notes for the current feature-branch draft
 
-This document is the target design. Existing code on `feat/update-command` is an earlier draft and should not be treated as the specification.
+This document is the target design. Existing code on `feat/update-command` is an earlier draft and should be reconciled with it before merging.
 
-The draft currently differs in several material ways:
+Material differences to address:
 
-- It exposes `apkscope update`; the target command is `apkscope upgrade`.
-- It identifies canaries using a generated `<next-version>-canary.<sha6>` version and `version.txt`; the target identity is the embedded channel plus full Git commit SHA, with a structured release manifest.
-- Its canary workflow deletes and recreates the tag and Release; the target preserves the Release, overwrites assets, then moves the existing `canary` tag.
-- Its canary workflow uses `cancel-in-progress: true`; publication must instead be serialized without cancelling a partially completed publish.
-- It treats a missing checksum as a warning; the target requires successful verification and fails closed.
-- Its replacement path does not perform the full staged backup, post-install verification and rollback contract described above.
+- The draft exposes `apkscope update`; the target command is `apkscope upgrade`.
+- The draft identifies canaries using a generated `<next-version>-canary.<sha6>` version and `version.txt`; the target uses the embedded channel plus full Git commit SHA.
+- The draft deletes and recreates the canary tag and Release; the target preserves the Release, overwrites its assets, and moves the existing tag.
+- The draft uses `cancel-in-progress: true`; publication must be serialized without cancelling a partially completed publish.
+- The draft treats missing checksums as a warning; the target requires a valid API digest or fallback-manifest digest and fails closed.
+- The draft does not perform the full staged backup, pre-install identity check, post-install verification and rollback contract.
+- The target uses GitHub Releases API metadata first and keeps `apkscope-update.json` only as a minimal fallback, not as the primary release metadata source.
 
 The implementation should be reconciled with this document before merging.
 
 ---
 
-**Summary:** CI builds APKScope; GitHub Releases distribute it. Stable releases are immutable and versioned. Canary uses one persistent prerelease and one moving `canary` tag. Every canary publication replaces the existing release assets under fixed filenames, invalidates and republishes a commit-bound readiness manifest, then moves the tag. The updater validates channel, commit, platform, size and SHA-256 before safely replacing the local executable.
+**Summary:** CI builds APKScope; GitHub Releases distribute it. Stable releases are immutable and versioned. Canary uses one persistent prerelease and one moving `canary` tag. The updater uses the unauthenticated GitHub Releases API as its primary metadata source, including each asset's download URL, size and SHA-256 digest. A small `apkscope-update.json` is shipped only as a fallback for API/rate-limit failures or missing digest metadata. The updater verifies platform, channel, commit, size and SHA-256 before safely replacing the local executable.
