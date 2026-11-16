@@ -17,6 +17,7 @@ mod opt;
 mod quick;
 mod re;
 mod session;
+mod update;
 
 // the editing core is its own crate, usable as a library
 use apkscope_core::dex::render;
@@ -76,7 +77,10 @@ Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, th
          apkscope verify <apk>
 Agents:  apkscope mcp                      MCP server over stdio (see README)
 Other:   apkscope disasm <apk> [Class]     apkscope gui [apk]
-Global options: --json  --limit N  --offset N  --threads N  -o/--out file  --no-deobf  --no-cache", env!("CARGO_PKG_VERSION"));
+         apkscope update [--stable | --canary]   replace this binary with the latest
+                                                 release (stable) or the latest commit's
+                                                 build (canary); default is stable
+Global options: --json  --limit N  --offset N  --threads N  -o/--out file  --no-deobf  --no-cache", update::current());
     ExitCode::from(2)
 }
 
@@ -1227,9 +1231,10 @@ fn main() -> ExitCode {
             .map(|lines| lines.iter().for_each(|l| println!("{l}")))
             .map_err(String::from),
         [cmd] if cmd == "--version" || cmd == "-V" => {
-            println!("apkscope {}", env!("CARGO_PKG_VERSION"));
+            println!("apkscope {}", update::current());
             Ok(())
         }
+        [cmd, ..] if cmd == "update" => update::update(rest),
         [] => {
             hide_console();
             gui::run(None, deobf)

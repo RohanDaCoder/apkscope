@@ -1,0 +1,124 @@
+name: canary
+
+# The canary channel for `apkscope update --canary`: on every push to main,
+# build the same matrix release.yml ships and republish it to the moving
+# `canary` prerelease — deleting and re-creating the tag, so the release (and
+# its assets' checksums) always match exactly one commit: the latest on main.
+#
+# The canary binaries identify as <next-minor>-canary.<sha6> (passed in
+# APKSCOPE_CANARY_VERSION, read by src/update.rs through option_env!), so
+# `apkscope --version` says which commit a user runs, the update's up-to-date
+# check works, and a canary always sorts above the stable it builds on.
+# version.txt carries that version as a plain asset for the updater's label.
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: canary
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, name: linux-x64 }
+          - { os: ubuntu-24.04-arm, name: linux-arm64 }
+          - { os: macos-latest, name: macos-arm64 }
+          - { os: windows-latest, name: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'ubuntu-24.04' && 'x86_64-unknown-linux-musl' || matrix.os == 'ubuntu-24.04-arm' && 'aarch64-unknown-linux-musl' || 'aarch64-apple-darwin,x86_64-apple-darwin' }}
+      # canary binaries run `apkscope update` against themselves too; the musl
+      # cross-builds need the linker, exactly like release.yml
+      - if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get install -y musl-tools
+      - name: Set the canary version from this commit
+        shell: bash
+        run: |
+          sha="${GITHUB_SHA::6}"
+          next=$(awk -F'"' '/^version = "/{split($2,v,"."); print v[1]"."v[2]+1".0"}' Cargo.toml | head -1)
+          echo "CANARY=$next-canary.$sha" >> "$GITHUB_ENV"
+          echo "canary version: $next-canary.$sha"
+      - name: Build (Linux glibc + musl)
+        if: startsWith(matrix.os, 'ubuntu')
+        env:
+          APKSCOPE_CANARY_VERSION: ${{ env.CANARY }}
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: |
+          cargo build --release
+          cargo build --release --no-default-features --target ${{ matrix.os == 'ubuntu-24.04' && 'x86_64' || 'aarch64' }}-unknown-linux-musl
+          mkdir -p dist
+          cp target/release/apkscope dist/apkscope_linux_${{ matrix.os == 'ubuntu-24.04' && 'x86_64' || 'aarch64' }}
+          cp target/${{ matrix.os == 'ubuntu-24.04' && 'x86_64' || 'aarch64' }}-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_${{ matrix.os == 'ubuntu-24.04' && 'x86_64' || 'aarch64' }}
+      - name: Build (macOS, both arches)
+        if: matrix.os == 'macos-latest'
+        env:
+          APKSCOPE_CANARY_VERSION: ${{ env.CANARY }}
+        run: |
+          cargo build --release --no-default-features --target aarch64-apple-darwin
+          cargo build --release --no-default-features --target x86_64-apple-darwin
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/apkscope dist/apkscope_macos_aarch64
+          cp target/x86_64-apple-darwin/release/apkscope dist/apkscope_macos_x86_64
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        env:
+          APKSCOPE_CANARY_VERSION: ${{ env.CANARY }}
+        run: |
+          cargo build --release
+          mkdir dist
+          cp target/Release/apkscope.exe dist/apkscope_windows_x86_64.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: canary-${{ matrix.name }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and version.txt
+        run: |
+          cd dist
+          sha256sum apkscope* > checksums.txt
+          sha="${GITHUB_SHA::6}"
+          next=$(curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/Cargo.toml" | awk -F'"' '/^version = "/{split($2,v,"."); print v[1]"."v[2]+1".0"}' | head -1)
+          echo "$next-canary.$sha" > version.txt
+          cat version.txt checksums.txt
+      # delete + re-create: the moving tag always points at the commit whose
+      # artifacts the release carries
+      - uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          tag_name: canary
+          delete_release: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: softprops/action-gh-release@v3.0.4
+        with:
+          tag_name: canary
+          name: canary
+          prerelease: true
+          files: |
+            dist/apkscope*
+            dist/checksums.txt
+            dist/version.txt
+          fail_on_unmatched_files: true

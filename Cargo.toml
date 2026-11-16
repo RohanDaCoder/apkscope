@@ -20,6 +20,9 @@ miniz_oxide = "0.8"
 regex = "1"
 rfd = { version = "0.15", optional = true }
 serde_json = "1"
+# already in the tree through apkscope-core (APK signing); `update` reuses it
+# to verify release checksums, so this adds no new external code
+sha2 = "0.10"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [features]

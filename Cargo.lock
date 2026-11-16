@@ -185,6 +185,7 @@ dependencies = [
  "regex",
  "rfd",
  "serde_json",
+ "sha2",
  "zip",
 ]
 
