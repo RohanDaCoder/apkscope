@@ -193,13 +193,7 @@ pub fn upgrade(mut args: Vec<String>) -> Result<(), String> {
     println!();
 
     let exe = exe()?;
-    let url = format!(
-        "{}/{}/releases/download/{}/{}",
-        base_url(),
-        repo(),
-        tag,
-        asset.name
-    );
+    let url = download_url(&tag, &asset.name);
     let new = install::perform(&exe, &url, &manifest, asset, channel)?;
     println!();
     println!("  upgraded to {label}");
@@ -257,6 +251,27 @@ pub fn current_label(me: &Identity) -> String {
             format!("{}-canary-{}", me.version, &c[..6])
         }
         _ => me.version.to_string(),
+    }
+}
+
+/// The public download URL of one file of a release, through the ordinary
+/// GitHub HTTPS redirect — the sole place these addresses are spelled, for
+/// the manifest and the asset alike.
+///
+/// The two tag spellings are genuinely different addresses, not synonyms:
+///
+/// - `latest` is not a tag but a redirect GitHub resolves to the newest
+///   stable release, and it lives at `releases/latest/download/...`.
+///   `releases/download/latest/...` is a 404.
+/// - every real tag (`canary`, `v0.10.0`) downloads at
+///   `releases/download/<tag>/...`; `releases/tag/<tag>/download/...` is the
+///   release's *page*, an HTML document, not the asset.
+pub fn download_url(tag: &str, name: &str) -> String {
+    let base = format!("{}/{}/releases", base_url(), repo());
+    if tag == "latest" {
+        format!("{base}/latest/download/{name}")
+    } else {
+        format!("{base}/download/{tag}/{name}")
     }
 }
 
