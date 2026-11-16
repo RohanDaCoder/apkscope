@@ -199,11 +199,11 @@ pub struct State {
 }
 
 /// What apkscope opens, for file dialogs and the start screen.
-pub const INPUTS: [&str; 5] = ["apk", "jar", "apks", "xapk", "dex"];
+pub const INPUTS: [&str; 6] = ["apk", "jar", "apks", "xapk", "apkm", "dex"];
 
 /// Turn any supported input into an APK path: a `.jar` of DEX files (Android's framework JARs)
-/// reads as one, split bundles (`.apks`, `.xapk`) give their `base.apk`, a bare `.dex` is
-/// wrapped in a minimal APK. Both land in the cache folder.
+/// reads as one, split bundles (`.apks`, `.xapk`, `.apkm`) give their `base.apk`, a bare `.dex`
+/// is wrapped in a minimal APK. Both land in the cache folder.
 pub fn prepare(path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
     let ext = std::path::Path::new(path)
@@ -216,7 +216,9 @@ pub fn prepare(path: &str) -> Result<String, String> {
     let dir = cache::root().join("inputs");
     match ext.as_str() {
         "apk" | "jar" => Ok(path.to_string()),
-        "apks" | "xapk" => {
+        "apks" | "xapk" | "apkm" => {
+            // all three are plain ZIPs of split APKs; `.apkm` was encrypted before 2021,
+            // but APKMirror now serves it as a regular ZIP, same as `.apks`/`.xapk`.
             let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("{path}: {e}"))?;
             let names: Vec<String> = zip
@@ -1599,6 +1601,48 @@ mod tests {
             Some("p.q")
         );
         assert_eq!(attr("<x>", "package"), None);
+    }
+
+    /// `.apkm` is a plain ZIP of split APKs, like `.apks`/`.xapk`; `prepare` must pick
+    /// `base.apk` even when a resource split is larger, and ignore non-APK entries
+    /// like `info.json`.
+    #[test]
+    fn apkm_extract_picks_base_apk() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("apkscope-apkm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let apkm = dir.join("sample.apkm");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&apkm).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            // base.apk: a minimal APK-ish blob; smaller than the xxhdpi split on purpose
+            z.start_file("base.apk", opts).unwrap();
+            z.write_all(b"PK\x03\x04base code").unwrap();
+            z.start_file("split_config.xxhdpi.apk", opts).unwrap();
+            z.write_all(b"PK\x03\x04resourcesresourcesresources")
+                .unwrap();
+            z.start_file("split_config.arm64_v8a.apk", opts).unwrap();
+            z.write_all(b"PK\x03\x04native").unwrap();
+            z.start_file("info.json", opts).unwrap();
+            z.write_all(b"{}").unwrap();
+            z.finish().unwrap();
+        }
+        let out = prepare(apkm.to_str().unwrap()).unwrap();
+        let picked = std::path::Path::new(&out)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            picked.ends_with("base.apk"),
+            "expected base.apk, got {picked}"
+        );
+        assert_eq!(
+            std::fs::read(&out).unwrap(),
+            b"PK\x03\x04base code",
+            "extracted the base split, not a larger resource split"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
