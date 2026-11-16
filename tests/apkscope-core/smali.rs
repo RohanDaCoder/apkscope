@@ -208,7 +208,7 @@ fn assembles_hand_written_smali() {
 .end method
 "#;
     let c = text::parse(src).unwrap();
-    let d = write::write(&[c], *b"035").unwrap();
+    let d = write::write(&[c.clone()], *b"035").unwrap();
     let x = Dex::parse(&d).unwrap();
     assert_eq!(x.class_descriptor(0).unwrap(), "Lcom/example/Hello;");
     let back = read::read(&d).unwrap();

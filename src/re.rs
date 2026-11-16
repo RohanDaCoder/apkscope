@@ -426,22 +426,18 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         .collect();
     roots.dedup();
     let mut seen = HashSet::new();
-    // drawing state threaded through the recursion
-    struct Ctx<'a> {
-        dexes: &'a [Dex<'a>],
-        seen: &'a mut HashSet<String>,
-        out: &'a mut Vec<Line>,
-    }
     fn walk(
-        c: &mut Ctx,
+        dexes: &[Dex],
         m: &str,
         parent: Option<&str>,
         prefix: &str,
         last: bool,
         d: usize,
         max: usize,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<Line>,
     ) {
-        let (cl, sig, _) = pretty(m);
+        let (c, sig, _) = pretty(m);
         let branch = if parent.is_none() {
             ""
         } else if last {
@@ -461,18 +457,17 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
                 method: Some(m.to_string()),
             },
         });
-        let code = find_code(c.dexes, m);
+        let code = find_code(dexes, m);
         let tag = if code.is_none() {
             "   [lib]"
-        } else if c.seen.contains(m) {
+        } else if seen.contains(m) {
             "   ↺"
         } else {
             ""
         };
-        c.out
-            .push((format!("{prefix}{branch}{cl}.{sig}{tag}"), link));
+        out.push((format!("{prefix}{branch}{c}.{sig}{tag}"), link));
         let Some((dx, _, insns)) = code else { return };
-        if !c.seen.insert(m.to_string()) || d >= max {
+        if !seen.insert(m.to_string()) || d >= max {
             return;
         }
         let mut kids = Vec::new();
@@ -490,17 +485,22 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         };
         let n = kids.len();
         for (k, kid) in kids.iter().enumerate() {
-            walk(c, kid, Some(m), &child_prefix, k + 1 == n, d + 1, max);
+            walk(
+                dexes,
+                kid,
+                Some(m),
+                &child_prefix,
+                k + 1 == n,
+                d + 1,
+                max,
+                seen,
+                out,
+            );
         }
     }
-    let mut ctx = Ctx {
-        dexes,
-        seen: &mut seen,
-        out: &mut out,
-    };
     for r in &roots {
-        ctx.out.push((String::new(), None));
-        walk(&mut ctx, r, None, "", true, 0, depth);
+        out.push((String::new(), None));
+        walk(dexes, r, None, "", true, 0, depth, &mut seen, &mut out);
     }
     out
 }

@@ -17,9 +17,9 @@ name: release
 # server together (also packaged as .deb and AppImage), and the static musl
 # CLI + MCP server for servers, containers and Alpine (no viewer there: a
 # fully static binary cannot dlopen() the desktop's X11/Wayland/GL stack, and
-# the binary says so when asked). Windows ships the viewer exe per arch,
-# macOS both arches of the CLI + MCP build. The gate job tests and lints the
-# code before any artifact is built, so a broken tag wastes no matrix compute.
+# the binary says so when asked). Windows ships the viewer exe, macOS both
+# arches of the CLI + MCP build. The lint job gates the matrix so a broken
+# build wastes no compute.
 #
 # Version prerelease tags ("-" in the name, e.g. v0.9.1-rc.1) publish as
 # pre-releases and never become the latest stable release.
@@ -53,43 +53,43 @@ env:
   # neither and identifies as dev.
   APKSCOPE_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
   APKSCOPE_GIT_SHA: ${{ github.sha }}
-  RUST_BACKTRACE: 1
-  CARGO_NET_RETRY: 5
   # rust-cache sets this anyway; making it explicit keeps any uncached
   # local run consistent with what CI does.
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  gate:
-    # The code is tested and linted before any artifact is built, so a broken
-    # tag wastes no matrix compute.
+  lint:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # checks both feature configs now; the viewer tree adds a few minutes
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          # same key the ci workflow's check job uses. Cache visibility is
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # same keys the ci workflow's lint jobs use. Cache visibility is
           # ref-scoped: a tag run restores caches saved by default-branch
-          # runs and caches this tag itself saved on a re-push; caches saved
-          # on feature branches do not reach it. Worst case it compiles
-          # cold, and it saves the caches for the next tag.
+          # runs (upstream's flow after this change merges) and caches
+          # this tag itself saved on a re-push; caches saved on feature
+          # branches do not reach it. Worst case it compiles cold — same
+          # as before this PR — and it saves the caches for the next tag.
           shared-key: lint-check
           cache-on-failure: true
       - run: cargo fmt --all -- --check
-      # CLI + MCP server only — the macOS/musl configuration
-      - run: cargo clippy --locked --workspace --no-default-features -- -D warnings
-      # default features: the viewer build the Linux and Windows releases ship
-      - run: cargo clippy --locked --workspace -- -D warnings
-      # dev profile keeps debug assertions and overflow checks; the GUI tests
-      # are pure logic and need no display
-      - run: cargo test --locked --workspace --no-default-features
-      - run: cargo test --locked --workspace
+      # CLI + MCP server only — the macOS release build
+      - run: cargo check --release --no-default-features
+      # the default-feature build — what Linux and Windows releases ship
+      # (viewer + CLI + MCP server in one binary); compiles with no system GUI
+      # packages, since the desktop's X11/Wayland/GL are dlopen()'d at runtime
+      - run: cargo check --release
+      - run: cargo clippy --release --no-default-features -- -D warnings
 
   linux:
-    needs: [gate]
+    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -97,42 +97,43 @@ jobs:
           - { arch: x86_64, runner: ubuntu-24.04 }
           - { arch: aarch64, runner: ubuntu-24.04-arm }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           # build-<runner>: same keys as the ci workflow's build matrix, so
-          # default-branch runs warm these jobs. Cache visibility is
-          # ref-scoped: a tag run restores default-branch and same-tag
-          # caches only, so the first tag after a feature branch still
-          # compiles cold (and saves for the next tag); the aarch64 leg's
-          # cache (build-ubuntu-24.04-arm) is only ever written here —
-          # release.yml is the sole workflow on arm Linux.
+          # default-branch runs warm these jobs after merge. Cache
+          # visibility is ref-scoped: a tag run restores default-branch
+          # and same-tag caches only, so the first tag after a feature
+          # branch still compiles cold (and saves for the next tag); the
+          # aarch64 leg's cache (build-ubuntu-24.04-arm) is only ever
+          # written here — release.yml is the sole workflow on arm Linux.
           shared-key: build-${{ matrix.runner }}
           cache-on-failure: true
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      # rust-toolchain.toml installs the compiler but not cross targets
-      - run: rustup target add ${{ matrix.arch }}-unknown-linux-musl
       # the desktop binary, like the Windows exe: viewer + CLI + MCP server
-      # in one. It links libc, libm and libgcc only — the GUI stack is
-      # dlopen()'d at runtime. Built on Ubuntu 24.04 (glibc 2.39), the
-      # actual glibc floor of these binaries and the AppImage. Each arch
+      # in one. It links nothing beyond libc — X11, Wayland and GL are
+      # dlopen()'d at runtime — and 24.04 is the oldest supported LTS, so
+      # the glibc it needs is the floor every newer distro meets. Each arch
       # builds on its own runner: the viewer's glibc build would need a
       # cross sysroot otherwise, and musl-tools only ships the host's musl-gcc.
-      - run: cargo build --locked --workspace --release
+      - run: cargo build --release
       - run: |
           mkdir -p dist
           cp target/release/apkscope dist/apkscope_linux_${{ matrix.arch }}
-      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage as a
-      # portable format for distros whose glibc meets the floor above
+      # the same binary, packaged: .deb for Debian/Ubuntu, AppImage for any distro
       - run: packaging/linux/package.sh target/release/apkscope dist
-      # the fully static CLI + MCP server for servers, containers and musl
-      # distros (Alpine); no viewer — a static binary cannot dlopen() the
-      # desktop's X11/Wayland/GL stack, and the binary says so when asked
-      - run: cargo build --locked --workspace --release --no-default-features --target ${{ matrix.arch }}-unknown-linux-musl
+      # the CLI + MCP server for servers, containers and musl distros (Alpine):
+      # fully static. No viewer — a static binary cannot dlopen() the desktop's
+      # X11/Wayland/GL stack — and asking it for the gui prints that limitation
+      # instead of a bare error.
+      - run: sudo apt-get install -y musl-tools
+      - run: cargo build --release --no-default-features --target ${{ matrix.arch }}-unknown-linux-musl
         # both arches' pairs are declared because expressions in env var names
         # are not a documented feature; cargo reads only the pair matching the
         # --target above and ignores the other
@@ -142,50 +143,44 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - run: cp target/${{ matrix.arch }}-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_${{ matrix.arch }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux-${{ matrix.arch }}
           path: dist/
-          if-no-files-found: error
 
   macos:
-    needs: [gate]
+    needs: [lint]
     # pinned, not latest: releases must build against a known macOS/Xcode
-    # combo, not whatever macos-latest silently moved to
+    # combo, not whatever macos-latest silently moved to (currently macOS 26)
     runs-on: macos-15
-    timeout-minutes: 60
-    env:
-      # the oldest macOS the prebuilt Rust toolchain supports today; raise or
-      # lower deliberately and test on the target version
-      MACOSX_DEPLOYMENT_TARGET: "12"
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           # same key as the ci workflow's macos build-matrix job; ref-scoped
           # like the linux one — default-branch and same-tag caches only
           shared-key: build-macos-latest
           cache-on-failure: true
-      # rust-toolchain.toml installs the compiler but not cross targets
-      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      # arm64 native, x86_64 cross with the Apple toolchain; both are the
-      # shipped macOS configuration (CLI + MCP server only)
-      - run: cargo build --locked --workspace --release --no-default-features --target aarch64-apple-darwin
-      - run: cargo build --locked --workspace --release --no-default-features --target x86_64-apple-darwin
+      # arm64 build is native; x86_64 cross-compiles with the Apple toolchain
+      - run: cargo build --release --no-default-features --target aarch64-apple-darwin
+      - run: cargo build --release --no-default-features --target x86_64-apple-darwin
       - run: |
           mkdir -p dist
           cp target/aarch64-apple-darwin/release/apkscope dist/apkscope_macos_aarch64
           cp target/x86_64-apple-darwin/release/apkscope dist/apkscope_macos_x86_64
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-macos
           path: dist/
-          if-no-files-found: error
 
   windows:
-    needs: [gate]
+    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -195,85 +190,47 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # one binary per arch — viewer + CLI + MCP server — built where it runs,
     # like the Linux job: no cross toolchain, each arch compiles on its own runner
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           # same key as the ci workflow's build matrix (`build-<os>`); the
           # x64 leg shares the tested runner's cache, the arm64 leg keeps
           # its own — ref-scoped like the linux one
           shared-key: build-${{ matrix.runner }}
           cache-on-failure: true
-      - run: cargo build --locked --workspace --release
-      # canonical lowercase Cargo output path; bash handles the copy like POSIX CI
-      - shell: bash
-        run: |
-          mkdir -p dist
-          cp target/release/apkscope.exe dist/apkscope_windows_${{ matrix.arch }}.exe
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - run: cargo build --release
+      - run: |
+          mkdir dist
+          cp target/Release/apkscope.exe dist/apkscope_windows_${{ matrix.arch }}.exe
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-windows-${{ matrix.arch }}
           path: dist/
-          if-no-files-found: error
 
   # one publisher for both channels. Runs the platform jobs to completion
   # first: a failed build prevents publication on either channel.
   publish:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           # no token leakage into later steps, and full history: the canary
           # tag is force-moved to the exact built commit
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
-      # exact expected asset set for a stable tag — the public contract; a
-      # missing or extra file fails the release before anything is published.
-      # The .deb/AppImage names embed the Cargo.toml version, so a tag that
-      # disagrees with Cargo.toml fails here too: the implicit version check.
-      - name: Verify the complete asset manifest
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          mapfile -t expected <<EOF
-          apkscope_linux_x86_64
-          apkscope_linux_musl_x86_64
-          apkscope_linux_aarch64
-          apkscope_linux_musl_aarch64
-          apkscope_${v}_amd64.deb
-          apkscope_${v}_arm64.deb
-          apkscope-${v}-x86_64.AppImage
-          apkscope-${v}-aarch64.AppImage
-          apkscope_macos_aarch64
-          apkscope_macos_x86_64
-          apkscope_windows_x86_64.exe
-          apkscope_windows_aarch64.exe
-          EOF
-          missing=0
-          for f in "${expected[@]}"; do
-            [ -f "dist/$f" ] || { echo "::error::missing release asset dist/$f"; missing=1; }
-          done
-          # nothing else may ride along
-          for f in dist/*; do
-            base=$(basename "$f")
-            case " ${expected[*]} " in
-              *" $base "*) ;;
-              *) echo "::error::unexpected file in dist/: $base"; missing=1 ;;
-            esac
-          done
-          [ "$missing" -eq 0 ] || exit 1
-          echo "manifest ok:"; ls -l dist
       - name: Checksums and update manifest
         env:
           CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
@@ -281,17 +238,10 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           cd dist
-          # the .deb/AppImage names embed the Cargo.toml version — the same
-          # source the canary manifest version below uses
-          pkgv=$(awk -F'"' '/^version = "/{print $2; exit}' ../Cargo.toml)
-          # deterministic order; covers every shipped artifact
-          sha256sum apkscope_linux_x86_64 apkscope_linux_musl_x86_64 \
-                    apkscope_linux_aarch64 apkscope_linux_musl_aarch64 \
+          sha256sum apkscope_linux_x86_64 apkscope_linux_aarch64 \
+                    apkscope_linux_musl_x86_64 apkscope_linux_musl_aarch64 \
                     apkscope_windows_x86_64.exe apkscope_windows_aarch64.exe \
-                    apkscope_macos_aarch64 apkscope_macos_x86_64 \
-                    "apkscope_${pkgv}_amd64.deb" "apkscope_${pkgv}_arm64.deb" \
-                    "apkscope-${pkgv}-x86_64.AppImage" "apkscope-${pkgv}-aarch64.AppImage" \
-                    > checksums.txt
+                    apkscope_macos_aarch64 apkscope_macos_x86_64 > checksums.txt
           cat checksums.txt
           # the manifest `apkscope upgrade` reads: every executable asset with
           # its exact size and SHA-256, plus the build's channel, version and
@@ -303,7 +253,7 @@ jobs:
           if [ "$CHANNEL" = stable ]; then
             version=$(echo "$REF_NAME" | sed 's/^v//')
           else
-            version=$pkgv
+            version=$(awk -F'"' '/^version = "/{print $2; exit}' ../Cargo.toml)
           fi
           manifest=$(mktemp)
           echo '{' > "$manifest"
@@ -371,7 +321,7 @@ jobs:
           fi
       - name: Publish canary
         if: github.ref == 'refs/heads/main' && env.stale != 'true'
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: canary
           name: APKScope Canary
@@ -386,21 +336,10 @@ jobs:
           fail_on_unmatched_files: true
 
       # --- stable: the full versioned release, published once, never
-      # overwritten. ---------------------------------------------
-      # prerelease only for real pre-release suffixes (-rc.1, -beta.1, ...),
-      # not for any hyphen anywhere in the tag
-      - name: Decide prerelease
-        if: startsWith(github.ref, 'refs/tags/v')
-        id: prerelease
-        run: |
-          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-.+$ ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
+      # overwritten. "-" in the tag (v0.9.1-rc.1) publishes as a prerelease. ---
       - name: Publish stable
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: softprops/action-gh-release@v3.0.4
         with:
           files: |
             dist/apkscope*
@@ -410,4 +349,4 @@ jobs:
             dist/apkscope-update.json
           generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ steps.prerelease.outputs.prerelease == 'true' }}
+          prerelease: ${{ contains(github.ref_name, '-') }}

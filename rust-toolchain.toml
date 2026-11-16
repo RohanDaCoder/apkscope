@@ -1,9 +1,0 @@
-# The Rust toolchain for CI, releases and local development.
-# Pinned so CI and release builds cannot silently drift onto a new compiler
-# (and a new warning level) between a green PR and the tag that ships it.
-# Bump deliberately: run the full CI matrix locally before raising this.
-
-[toolchain]
-channel = "1.100.0"
-profile = "minimal"
-components = ["rustfmt", "clippy"]

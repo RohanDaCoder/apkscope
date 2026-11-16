@@ -303,10 +303,10 @@ impl LiveUi {
                     .show(ui, |ui| {
                         for k in keys {
                             ui.horizontal(|ui| {
-                                if ui.small_button("✖").on_hover_text("Unhook").clicked()
-                                    && let Some(l) = &mut self.live
-                                {
-                                    let _ = l.unhook(&k);
+                                if ui.small_button("✖").on_hover_text("Unhook").clicked() {
+                                    if let Some(l) = &mut self.live {
+                                        let _ = l.unhook(&k);
+                                    }
                                 }
                                 let prefix = k.replace('#', ".");
                                 let calls: u64 = self
@@ -345,10 +345,10 @@ impl LiveUi {
                         } else {
                             self.script_name.trim().to_string()
                         };
-                        if let Some(l) = &mut self.live
-                            && let Err(e) = l.hook(&name, &self.script, true)
-                        {
-                            self.err = Some(e);
+                        if let Some(l) = &mut self.live {
+                            if let Err(e) = l.hook(&name, &self.script, true) {
+                                self.err = Some(e);
+                            }
                         }
                     }
                 });

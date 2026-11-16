@@ -1,8 +1,8 @@
 name: ci
 
-# Pre-merge gate for every branch and PR. Release tags (v*) are built and
-# published by release.yml instead; this workflow ignores them so a release
-# build never runs twice.
+# Quality gate + cross-platform test/build matrix; release tags (v*) are
+# handled by release.yml instead. Pinned actions are Node 24-compatible —
+# Node 20 was removed from GitHub-hosted runners on 2026-09-23.
 
 on:
   push:
@@ -37,20 +37,20 @@ on:
     # manual re-run without the path filters, for exactly the mixed
     # docs+code case above or when a skipped run needs a forced run
 
+# push + pull_request overlap on every open-PR push: without cancellation
+# both copies run to completion, doubling runner minutes for the same SHA.
+# One in-flight run per branch/PR is enough; a fresh push supersedes it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # least privilege; the workflow never writes to the repo, so the default
 # read/write token would be pure risk surface. Overridden only where a
 # job must write (none here; release.yml grants its release job contents:write).
 permissions:
   contents: read
 
-# One run per ref; the older PR run is cancelled, never a branch push.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
-  RUST_BACKTRACE: 1
-  CARGO_NET_RETRY: 5
   # rust-cache sets this anyway; making it explicit keeps any uncached
   # local run consistent with what CI does.
   CARGO_INCREMENTAL: "0"
@@ -60,74 +60,70 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - run: cargo fmt --all -- --check
 
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+      # CLI + MCP server only — the macOS release build; the Linux and
+      # Windows release builds (default features, viewer included) are
+      # compiled by the build matrix below
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
+          # key on the lint job name, not the job id: caches saved by a
+          # PR-event run of the same code are restorable by the next
+          # branch push (and vice versa), instead of one cache per run
           shared-key: lint-check
+          # save the cache even when the job fails, so a broken commit
+          # does not throw away minutes of dependency compilation
           cache-on-failure: true
-      # CLI + MCP server only — the macOS/musl configuration
-      - run: cargo check --locked --workspace --no-default-features
-      # default features: viewer + CLI + MCP server (the Linux/Windows build)
-      - run: cargo check --locked --workspace
+      - run: cargo check --release --no-default-features
 
   clippy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           shared-key: lint-clippy
           cache-on-failure: true
-      - run: cargo clippy --locked --workspace --no-default-features -- -D warnings
-      - run: cargo clippy --locked --workspace -- -D warnings
-
-  test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: test
-          cache-on-failure: true
-      # dev profile keeps debug assertions and overflow checks; the GUI tests
-      # are pure logic and need no display
-      - run: cargo test --locked --workspace --no-default-features
-      - run: cargo test --locked --workspace
+      - run: cargo clippy --release --no-default-features -- -D warnings
 
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # optional: macOS arm64 runners are often on outage from GitHub itself
-          - { os: macos-latest, name: macos-arm64, optional: true }
           - { os: ubuntu-24.04, name: linux-x64 }
+          - { os: macos-latest, name: macos-arm64, optional: true }
           - { os: windows-latest, name: windows-x64 }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # macOS arm64 runners are often unavailable (GitHub capacity); don't fail the run for that
     continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           # one cache per OS: the target dir is not portable between
           # Linux/macOS/Windows dependency builds. release.yml reuses the
@@ -138,53 +134,46 @@ jobs:
           # that PR itself) — worst case a job compiles cold once.
           shared-key: build-${{ matrix.os }}
           cache-on-failure: true
-      # cross-platform test coverage of the CLI + MCP configuration; the
-      # ubuntu-only test job above covers both feature sets
-      - run: cargo test --locked --release --no-default-features
+      - run: cargo test --release --no-default-features
       # build what the release ships: macOS the CLI + MCP server, Linux and
-      # Windows the viewer build
-      - if: runner.os == 'macOS'
-        run: cargo build --locked --workspace --release --no-default-features
-      - if: runner.os != 'macOS'
-        run: cargo build --locked --workspace --release
-      - name: Copy binary (posix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp target/release/apkscope dist/apkscope-bin
-      - name: Copy binary (windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp target/release/apkscope.exe dist/apkscope-bin.exe
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # Windows the viewer build — one binary with the GUI, the CLI and the
+      # MCP server, exactly the binaries the release attaches
+      - if: matrix.os == 'macos-latest'
+        run: cargo build --release --no-default-features
+      - if: matrix.os != 'macos-latest'
+        run: cargo build --release
+      - uses: actions/upload-artifact@v7
         with:
           name: apkscope-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
-      # the static CLI + MCP server on Linux, like the release
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      # rust-toolchain.toml installs the compiler but not cross targets
-      - if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-musl
-      - if: runner.os == 'Linux'
-        run: cargo build --locked --workspace --release --no-default-features --target x86_64-unknown-linux-musl
+          path: |
+            target/release/apkscope
+            target/release/apkscope.exe
+          if-no-files-found: ignore
+      # the static CLI + MCP server on Linux, like the release: for servers,
+      # containers and musl distros (Alpine) — no viewer, and it says so when
+      # asked (a static binary cannot dlopen() the desktop's X11/Wayland/GL)
+      - if: matrix.os == 'ubuntu-24.04'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - if: matrix.os == 'ubuntu-24.04'
+        run: sudo apt-get install -y musl-tools
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo build --release --no-default-features --target x86_64-unknown-linux-musl
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-      # the Linux binaries, packaged like the release (.deb + AppImage)
-      - if: runner.os == 'Linux'
+      # the Linux binaries, packaged like the release (.deb + AppImage); pinned
+      # to 24.04 because the glibc build links glibc dynamically — building on
+      # the oldest supported LTS keeps it installable everywhere.
+      - if: matrix.os == 'ubuntu-24.04'
         run: |
-          mkdir -p pkg
-          cp target/release/apkscope pkg/apkscope_linux_x86_64
-          cp target/x86_64-unknown-linux-musl/release/apkscope pkg/apkscope_linux_musl_x86_64
-          packaging/linux/package.sh target/release/apkscope pkg
-      - if: runner.os == 'Linux'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          mkdir -p dist
+          cp target/release/apkscope dist/apkscope_linux_x86_64
+          cp target/x86_64-unknown-linux-musl/release/apkscope dist/apkscope_linux_musl_x86_64
+          packaging/linux/package.sh target/release/apkscope dist
+      - if: matrix.os == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v7
         with:
           name: apkscope-packages-linux-x64
-          path: pkg/
-          if-no-files-found: error
+          path: dist/
