@@ -83,6 +83,26 @@ fn version_tags_are_spelled_with_a_v() {
 }
 
 #[test]
+fn download_urls_follow_the_documented_address_forms() {
+    // stable's `latest` is a redirect, not a tag: its files live under
+    // releases/latest/download, and releases/download/latest is a 404
+    assert_eq!(
+        download_url("latest", "apkscope-update.json"),
+        "https://github.com/suffixing/apkscope/releases/latest/download/apkscope-update.json"
+    );
+    // a real tag — the moving canary — downloads at releases/download/<tag>
+    assert_eq!(
+        download_url("canary", "apkscope_linux_x86_64"),
+        "https://github.com/suffixing/apkscope/releases/download/canary/apkscope_linux_x86_64"
+    );
+    // a versioned stable release, as --version resolves to
+    assert_eq!(
+        download_url("v0.10.0", "apkscope-update.json"),
+        "https://github.com/suffixing/apkscope/releases/download/v0.10.0/apkscope-update.json"
+    );
+}
+
+#[test]
 fn homepath_folds_the_home_prefix() {
     // not under $HOME -> unchanged
     let p = std::path::Path::new("/opt/apkscope/bin/apkscope");

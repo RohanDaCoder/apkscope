@@ -49,16 +49,7 @@ pub fn fetch(
     tag: &str,
     expect_version: Option<String>,
 ) -> Result<Manifest, String> {
-    let url = format!(
-        "{}/{}/releases/{}/download/apkscope-update.json",
-        super::base_url(),
-        super::repo(),
-        if tag == "latest" {
-            "latest".into()
-        } else {
-            format!("tag/{tag}")
-        }
-    );
+    let url = super::download_url(tag, "apkscope-update.json");
     let text = super::download::text(&url).map_err(|e| {
         format!(
             "cannot download the update manifest ({e}); no {} release published yet? check {}/{}/releases",
