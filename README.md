@@ -448,8 +448,8 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
   little quicker on most ~50 ms listings. In agent sessions apkscope is faster.
 - Huge apps take about 1 GB in the viewer; the first full-code search takes a minute, then it's cached.
 - The viewer is tested on Windows and Linux (Ubuntu, including WSLg).
-- `apkscope_windows_aarch64.exe` is cross-compiled from the x64 runner; the x86_64 exe is the
-  one the CI tests run on. Windows on ARM runs either binary.
+- `apkscope_windows_aarch64.exe` is built natively on a Windows 11 ARM runner; the x86_64 exe
+  is the one the CI tests run on. Windows on ARM runs either binary.
 - The static musl binary (`apkscope_linux_musl_*`) has no viewer, and cannot have one: a fully
   static binary cannot dlopen() the desktop's X11/Wayland/GL libraries. Use the glibc binary
   or the .deb/AppImage packages for the window.
