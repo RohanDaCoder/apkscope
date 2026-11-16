@@ -11,6 +11,7 @@
 # Environment overrides (for forks, mirrors, custom locations):
 #   APKSCOPE_REPO=suffixing/apkscope        # GitHub owner/name to download from
 #   APKSCOPE_BASE_URL=https://github.com    # mirror / GitHub Enterprise host
+#   APKSCOPE_CHANNEL=canary               # the latest commit's build instead of the newest release
 #   APKSCOPE_INSTALL_DIR=/usr/local/bin     # where to put the binary
 set -eu
 
@@ -18,9 +19,19 @@ REPO="${APKSCOPE_REPO:-suffixing/apkscope}"
 BASE="${APKSCOPE_BASE_URL:-https://github.com}"
 DEST="${APKSCOPE_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${1:-}"
+CHANNEL=stable
+case "${APKSCOPE_CHANNEL:-}" in
+  canary) CHANNEL=canary ;;
+  stable|"") CHANNEL=stable ;;
+  *) die "APKSCOPE_CHANNEL must be 'stable' or 'canary'" ;;
+esac
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  echo
+  echo "channels:"
+  echo "  APKSCOPE_CHANNEL=stable (default)  the newest GitHub Release"
+  echo "  APKSCOPE_CHANNEL=canary            the latest commit's build (moving 'canary' prerelease)"
   exit 1
 }
 
@@ -109,9 +120,16 @@ if [ "$is_musl" -eq 1 ]; then
 fi
 
 # --- resolve the download URL ---------------------------------------------------
+# channels: stable (the newest GitHub Release, default) or canary (the latest
+# commit's build, from the moving `canary` prerelease that CI republishes on
+# every push to main — same binaries, versioned <next>-canary.<sha6>)
 if [ -n "$VERSION" ]; then
   case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac   # accept 0.9.1 or v0.9.1
   base_url="$BASE/$REPO/releases/download/$VERSION"
+elif [ "$CHANNEL" = canary ]; then
+  VERSION=$(fetch_text "$BASE/$REPO/releases/download/canary/version.txt")
+  [ -n "$VERSION" ] || die "could not read the canary version; check $BASE/$REPO/releases"
+  base_url="$BASE/$REPO/releases/download/canary"
 else
   base_url="$BASE/$REPO/releases/latest/download"
 fi
@@ -119,8 +137,10 @@ fi
 # --- downloader -------------------------------------------------------------------
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL "$1" -o "$2"; }
+  fetch_text() { curl -fsSL "$1"; }
 elif command -v wget >/dev/null 2>&1; then
   fetch() { wget -q "$1" -O "$2"; }
+  fetch_text() { wget -q -O - "$1"; }
 else
   die "need curl or wget to download"
 fi
@@ -128,9 +148,16 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# the label the user sees: "stable (v0.10.0)" / "canary (1a2b3c)", like `apkscope update`
+if [ "$CHANNEL" = canary ]; then
+  label="canary ($(printf '%s' "$VERSION" | sed -n 's/.*-canary\.\(......\).*/\1/p'))"
+else
+  label="stable (${VERSION:-latest})"
+fi
+
 printf '\n%s  apkscope installer%s\n\n' "$bold" "$reset"
 field "platform"    "$os $arch"
-field "version"     "${VERSION:-latest}"
+field "version"     "$label"
 field "destination" "$(homepath "$DEST")"
 printf '\n'
 

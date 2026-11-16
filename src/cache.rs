@@ -43,7 +43,7 @@ pub fn dir_for(apk: &str, deobf: bool, tag: u64) -> PathBuf {
     root().join(format!(
         "{safe}-{size:x}-{mtime:x}-{}-{}{}",
         if deobf { "d" } else { "n" },
-        env!("CARGO_PKG_VERSION"),
+        crate::update::current(),
         if tag == 0 {
             String::new()
         } else {
