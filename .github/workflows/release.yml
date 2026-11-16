@@ -82,7 +82,9 @@ jobs:
 
   macos:
     needs: [lint]
-    runs-on: macos-latest
+    # pinned, not latest: releases must build against a known macOS/Xcode
+    # combo, not whatever macos-latest silently moved to (currently macOS 26)
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
