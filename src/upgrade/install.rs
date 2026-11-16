@@ -118,25 +118,13 @@ fn beside(exe: &Path, suffix: &str) -> PathBuf {
 /// running exe cannot be replaced or deleted, but it can be renamed aside; the
 /// leftover is cleaned up by a later run (this process is still running, so
 /// deleting it here would fail anyway).
+/// Move the staged file onto `exe` — a rename, atomic and allowed while the
+/// target runs. The running exe itself was already moved onto `backup` by the
+/// caller; on Windows a running exe can be renamed but not replaced or
+/// deleted, which is exactly why the backup move comes first (and why the
+/// backup's removal may be deferred to a later run — see `cleanup`).
 fn install_staged(staged: &Path, exe: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let old = beside(exe, ".apkscope-upgrade-previous");
-        let _ = std::fs::remove_file(&old);
-        std::fs::rename(exe, &old)
-            .map_err(|e| format!("cannot move the current binary aside: {e}"))?;
-        if let Err(e) = std::fs::rename(staged, exe) {
-            let _ = std::fs::rename(&old, exe); // keep the working binary working
-            return Err(e.to_string());
-        }
-        // `backup` (from perform) also still holds the pre-upgrade binary; the
-        // two copies are fine — cleanup removes what it can
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(staged, exe).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    std::fs::rename(staged, exe).map_err(|e| e.to_string())
 }
 
 /// The downloaded file gets the downloader's default permissions; make it run.
