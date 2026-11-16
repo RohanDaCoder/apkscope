@@ -20,15 +20,12 @@ out=$2
 root=$(cd "$(dirname "$0")/../.." && pwd)
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml")
 
-# TARGETARCH overrides uname -m when the binary was cross-compiled for
-# another arch than the machine packaging it (release.yml does this for
-# aarch64 from an x86_64 runner)
-case "${TARGETARCH:-$(uname -m)}" in
-    x86_64|amd64)  arch_app=x86_64 ;;
-    aarch64|arm64) arch_app=aarch64 ;;
-    *) echo "error: unsupported architecture ${TARGETARCH:-$(uname -m)}" >&2; exit 1 ;;
+case "$(uname -m)" in
+    x86_64)  arch_app=x86_64 ;;
+    aarch64) arch_app=aarch64 ;;
+    *) echo "error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
-arch_deb=$(case "$arch_app" in x86_64) echo amd64 ;; aarch64) echo arm64 ;; esac)
+arch_deb=$(dpkg --print-architecture 2>/dev/null || case "$arch_app" in x86_64) echo amd64 ;; aarch64) echo arm64 ;; esac)
 
 [ -x "$bin" ] || { echo "error: binary not found or not executable: $bin" >&2; exit 1; }
 mkdir -p "$out"
