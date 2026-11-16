@@ -1508,10 +1508,6 @@ pub fn overview(st: &State) -> String {
     o
 }
 
-#[cfg(test)]
-#[path = "../tests/apkscope/session.rs"]
-mod tests;
-
 /// Smali of class `c` and its nested classes, outer first.
 pub fn smali(dx: &Dex, c: usize) -> String {
     let mut out = String::new();
@@ -1549,3 +1545,7 @@ pub fn smali(dx: &Dex, c: usize) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "../tests/apkscope/session.rs"]
+mod tests;
