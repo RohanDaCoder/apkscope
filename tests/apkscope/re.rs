@@ -48,6 +48,63 @@ fn mappings_round_trip() {
 }
 
 #[test]
+fn mapping_format_from_file() {
+    use MappingFormat as M;
+    assert!(matches!(M::from_file("out.jobf"), M::Jobf));
+    assert!(matches!(M::from_file("out.mapping"), M::Enigma));
+    assert!(matches!(M::from_file("mapping.txt"), M::ProGuard));
+    // the old default (no/other extension) stays Enigma
+    assert!(matches!(M::from_file("out"), M::Enigma));
+    assert!(matches!(M::from_file("out.pro"), M::Enigma));
+}
+
+#[test]
+fn split_proto_javas_the_signature() {
+    assert_eq!(
+        split_proto("(ILjava/lang/String;)V"),
+        ("int,java.lang.String".to_string(), "V".to_string())
+    );
+    assert_eq!(split_proto("()V"), (String::new(), "V".to_string()));
+    assert_eq!(
+        split_proto("(La/b/C;[B)I"),
+        ("a.b.C,[B".to_string(), "I".to_string())
+    );
+}
+
+#[test]
+fn proguard_export_writes_the_headers() {
+    // no dex needed for the class-header side; members only come from
+    // dex lookups, so a notes-only export exercises headers + comments
+    let mut n = Notes::default();
+    n.classes
+        .insert("La/b/C;".to_string(), "La/b/Login;".to_string());
+    let o = export_mapping(&[], &n, MappingFormat::ProGuard);
+    assert_eq!(o, "a.b.Login -> a.b.C:\n");
+}
+
+#[test]
+fn proguard_import_detects_the_arrow_format() {
+    // a mapping.txt routed through import_mapping, not proguard::parse,
+    // proves the detection: `->` and no ` = ` like a .jobf line
+    let mut n = Notes::default();
+    let proguard = concat!(
+        "# R8\n",
+        "com.example.app.MainActivity -> a.b:\n",
+        "    int status -> a\n",
+        "    void onCreate(android.os.Bundle) -> a\n",
+    );
+    assert_eq!(import_mapping(proguard, &mut n), 3);
+    assert_eq!(n.classes["La/b;"], "Lcom/example/app/MainActivity;");
+    assert_eq!(n.members["La/b;->a"], "status");
+    assert_eq!(n.members["La/b;->a()"], "onCreate");
+    // and a .jobf line still routes to the jobf branch: ` = `, no `->`
+    let mut j = Notes::default();
+    let jobf = "c a.b.C = Login\n";
+    assert_eq!(import_mapping(jobf, &mut j), 1);
+    assert_eq!(j.classes["La/b/C;"], "La/b/Login;");
+}
+
+#[test]
 fn evaluates_xor_decryptor() {
     // static String d(String s): char[] c = s.toCharArray(); for (i..) c[i] ^= 1; return new String(c);
     // run directly on the VM with a hand-built method body
