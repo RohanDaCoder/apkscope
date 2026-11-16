@@ -43,22 +43,16 @@ on:
 permissions:
   contents: read
 
-env:
-  # rust-cache sets this anyway; making it explicit keeps any uncached
-  # local run consistent with what CI does.
-  CARGO_INCREMENTAL: "0"
-
 # One run per ref; the older PR run is cancelled, never a branch push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
-
 env:
   RUST_BACKTRACE: 1
   CARGO_NET_RETRY: 5
+  # rust-cache sets this anyway; making it explicit keeps any uncached
+  # local run consistent with what CI does.
   CARGO_INCREMENTAL: "0"
 
 jobs:
