@@ -253,3 +253,48 @@ fn hsize_reads_like_the_installers() {
     assert_eq!(hsize(2048), "2 KB");
     assert_eq!(hsize(17_489_384), "16.7 MB");
 }
+
+/// The closing message's `now` label comes from the binary that was just
+/// installed, not from this (the old, still-running) process's identity.
+#[test]
+fn installed_label_reports_the_new_binarys_identity() {
+    let dir = tmpdir("label");
+    // a canary fixture: the label must carry the -canary-<commit> suffix
+    let new = fixture_binary(&dir, "0.10.1", "canary", &"c".repeat(40));
+    let m = manifest_for(&new, Channel::Canary, "0.10.1", &"c".repeat(40));
+    assert_eq!(
+        installed_label(&new, &m),
+        format!("0.10.1-canary-{}", "c".repeat(6))
+    );
+    // a stable fixture: the bare version
+    let new = fixture_binary(&dir, "0.10.1", "stable", &"d".repeat(40));
+    let m = manifest_for(&new, Channel::Stable, "0.10.1", &"d".repeat(40));
+    assert_eq!(installed_label(&new, &m), "0.10.1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// If the just-installed binary cannot be asked (here: a text file posing as
+/// one), the label falls back to the manifest — the upgrade has already
+/// succeeded and must not report failure over a label.
+#[test]
+fn installed_label_falls_back_to_the_manifest() {
+    let dir = tmpdir("label-fallback");
+    let posed = dir.join("apkscope");
+    std::fs::write(&posed, "not a binary").unwrap();
+    let m = Manifest {
+        channel: Channel::Canary,
+        version: "0.10.1".into(),
+        commit: "e".repeat(40).into(),
+        asset: Asset {
+            platform: "test".into(),
+            name: "apkscope_test".into(),
+            size: 1,
+            sha256: "0".repeat(64),
+        },
+    };
+    assert_eq!(
+        installed_label(&posed, &m),
+        format!("0.10.1-canary-{}", "e".repeat(6))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
