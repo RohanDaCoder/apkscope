@@ -5,8 +5,8 @@
 # installs it to a bin directory on your PATH.
 #
 # Usage:
-#   ./scripts/install.sh          # latest version
-#   ./scripts/install.sh 0.9.1    # specific version
+#   ./scripts/install.sh          # latest stable version
+#   ./scripts/install.sh 0.9.1    # specific stable version
 #
 # Environment overrides (for forks, mirrors, custom locations):
 #   APKSCOPE_REPO=suffixing/apkscope        # GitHub owner/name to download from
@@ -31,7 +31,7 @@ usage() {
   echo
   echo "channels:"
   echo "  APKSCOPE_CHANNEL=stable (default)  the newest GitHub Release"
-  echo "  APKSCOPE_CHANNEL=canary            the latest commit's build (moving 'canary' prerelease)"
+  echo "  APKSCOPE_CHANNEL=canary            the latest commit's build (persistent 'canary' prerelease)"
   exit 1
 }
 
@@ -121,20 +121,21 @@ fi
 
 # --- resolve the download URL ---------------------------------------------------
 # channels: stable (the newest GitHub Release, default) or canary (the latest
-# commit's build, from the moving `canary` prerelease that CI republishes on
-# every push to main — same binaries, versioned <next>-canary.<sha6>)
+# commit's build, from the persistent `canary` prerelease that CI republishes
+# on every push to main). The canary release's apkscope-update.json — the same
+# manifest `apkscope upgrade` reads — names its version and commit.
 if [ -n "$VERSION" ]; then
   case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac   # accept 0.9.1 or v0.9.1
   base_url="$BASE/$REPO/releases/download/$VERSION"
 elif [ "$CHANNEL" = canary ]; then
-  VERSION=$(fetch_text "$BASE/$REPO/releases/download/canary/version.txt")
-  [ -n "$VERSION" ] || die "could not read the canary version; check $BASE/$REPO/releases"
   base_url="$BASE/$REPO/releases/download/canary"
 else
   base_url="$BASE/$REPO/releases/latest/download"
 fi
 
 # --- downloader -------------------------------------------------------------------
+# defined before anything below calls it (the channel label resolves at
+# download time, so fetch_text must already exist when canary runs)
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL "$1" -o "$2"; }
   fetch_text() { curl -fsSL "$1"; }
@@ -148,11 +149,20 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# the label the user sees: "stable (v0.10.0)" / "canary (1a2b3c)", like `apkscope update`
+# the label the user sees: "stable (v0.10.0)" / "canary (1a2b3c)", like
+# `apkscope upgrade`. The canary label reads the release manifest, the same
+# single source of truth the CLI uses.
 if [ "$CHANNEL" = canary ]; then
-  label="canary ($(printf '%s' "$VERSION" | sed -n 's/.*-canary\.\(......\).*/\1/p'))"
+  manifest=$(fetch_text "$base_url/apkscope-update.json") \
+    || die "could not read the canary release manifest; check $BASE/$REPO/releases"
+  canary_version=$(printf '%s' "$manifest" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)
+  canary_commit=$(printf '%s' "$manifest" | sed -n 's/.*"commit": *"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$canary_commit" ] || die "the canary release is being published right now (no manifest yet); try again in a moment"
+  label="canary ($(printf '%.6s' "$canary_commit"))"
+elif [ -n "$VERSION" ]; then
+  label="stable ($VERSION)"
 else
-  label="stable (${VERSION:-latest})"
+  label="stable (latest)"
 fi
 
 printf '\n%s  apkscope installer%s\n\n' "$bold" "$reset"

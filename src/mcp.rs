@@ -615,7 +615,7 @@ pub fn serve() -> Result<(), String> {
             "initialize" => Ok(json!({
                 "protocolVersion": params["protocolVersion"].as_str().unwrap_or(PROTOCOL),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "apkscope", "version": crate::update::current()},
+                "serverInfo": {"name": "apkscope", "version": crate::upgrade::identity().version},
                 "instructions": "apkscope analyzes Android APKs. Start with apk_info, then find_refs / list_classes / search to locate code, then decompile only the classes (or one method) you need. Calls on the same APK get faster after the first ones: a warm session loads in the background (pass cache: false to opt out)."
             })),
             "ping" => Ok(json!({})),

@@ -1,32 +1,58 @@
 name: release
 
-# Builds every platform when a version tag (v*) is pushed and attaches the
-# binaries to a GitHub Release. "-" in the tag name (e.g. v0.9.1-rc.1)
-# publishes as a pre-release. Linux ships two binaries per arch: the glibc
-# build with the viewer, the CLI and the MCP server together (also packaged
-# as .deb and AppImage), and the static musl CLI + MCP server for servers,
-# containers and Alpine — no viewer there, a fully static binary cannot
-# dlopen() the desktop's X11/Wayland/GL stack, and the binary says so when
-# asked. Windows ships the viewer exe per arch, macOS the CLI + MCP build. The
-# lint job gates the matrix so a broken tag wastes no compute.
+# One pipeline, two publishers:
+#
+# - a push of a version tag (v*) publishes the full, immutable stable release;
+# - a push to main publishes canary: the same binaries, on the one persistent
+#   `canary` tag and its (reused, never recreated) prerelease.
+#
+# Both channels publish `apkscope-update.json`, the manifest `apkscope upgrade`
+# discovers updates through — the canary publisher removes the old manifest
+# before replacing binaries and uploads the new one last, so a client either
+# sees the previous complete build or the new complete build, never a mix.
+#
+# The build matrix is shared by both channels: every platform the stable
+# release ships is built for canary too, no reduced copy. Linux ships two
+# binaries per arch — the glibc build with the viewer, the CLI and the MCP
+# server together (also packaged as .deb and AppImage), and the static musl
+# CLI + MCP server for servers, containers and Alpine (no viewer there: a
+# fully static binary cannot dlopen() the desktop's X11/Wayland/GL stack, and
+# the binary says so when asked). Windows ships the viewer exe per arch, macOS
+# both arches of the CLI + MCP build. The lint job gates the matrix so a broken
+# build wastes no compute.
+#
+# Version prerelease tags ("-" in the name, e.g. v0.9.1-rc.1) publish as
+# pre-releases and never become the latest stable release.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
-  # no workflow_dispatch on purpose: a manual run on a branch ref would make
-  # the release job publish a GitHub Release from a non-tag ref. Validate
-  # release changes on a fork with a throwaway v* tag instead.
+  # no workflow_dispatch on purpose: a manual run on a non-main branch would
+  # build the whole matrix and publish nothing (the canary steps run on main
+  # pushes only, the stable steps on tags). Validate release changes on a
+  # fork with a throwaway v* tag or a push to the fork's main.
 
-# one in-flight release per tag: a re-pushed tag (moved to a new commit)
-# supersedes the run that is still building the old commit
+# canary publishes must not be cancelled halfway through: a cancelled run could
+# leave the persistent release without a manifest, and every client would fail
+# closed until the next push. New runs queue behind the current publish; the
+# stale check in the publish job makes a queued, now-outdated run skip. (This
+# replaces the cancel-in-progress behaviour #23 set for tag-only releases.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
-# least privilege everywhere; only the release job needs contents:write
-# to create the GitHub Release and attach the binaries.
+env:
+  # build identity embedded into every binary (`apkscope --version --json`):
+  # the channel this build will be published on, and the exact commit. A pull
+  # request never runs this workflow (ci.yml covers those); a local build gets
+  # neither and identifies as dev.
+  APKSCOPE_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
+  APKSCOPE_GIT_SHA: ${{ github.sha }}
+
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   lint:
@@ -149,30 +175,141 @@ jobs:
           name: dist-windows-${{ matrix.arch }}
           path: dist/
 
-  release:
+  # one publisher for both channels. Runs the platform jobs to completion
+  # first: a failed build prevents publication on either channel.
+  publish:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
+      # credentials stay persisted on purpose, unlike the build jobs above:
+      # this job force-pushes the `canary` tag with plain git, which needs the
+      # checkout's token (the job already runs with contents: write)
       - uses: actions/checkout@v5
         with:
-          persist-credentials: false
+          # full history: the canary tag is force-moved to the exact built commit
+          fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums
+      - name: Checksums and update manifest
+        env:
+          CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
+          COMMIT: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           cd dist
-          sha256sum apkscope* > checksums.txt
+          sha256sum apkscope_linux_x86_64 apkscope_linux_aarch64 \
+                    apkscope_linux_musl_x86_64 apkscope_linux_musl_aarch64 \
+                    apkscope_windows_x86_64.exe apkscope_windows_aarch64.exe \
+                    apkscope_macos_aarch64 \
+                    apkscope_macos_x86_64 > checksums.txt
           cat checksums.txt
-      - uses: softprops/action-gh-release@v3.0.4
+          # the manifest `apkscope upgrade` reads: every executable asset with
+          # its exact size and SHA-256, plus the build's channel, version and
+          # full commit. jq builds it from the actual files in this directory,
+          # so it can never describe a stale or missing asset.
+          # version: the tag (v0.10.0 -> 0.10.0) for stable, the Cargo package
+          # version for canary — a canary never invents a SemVer suffix; its
+          # identity is the commit.
+          if [ "$CHANNEL" = stable ]; then
+            version=$(echo "$REF_NAME" | sed 's/^v//')
+          else
+            version=$(awk -F'"' '/^version = "/{print $2; exit}' ../Cargo.toml)
+          fi
+          manifest=$(mktemp)
+          echo '{' > "$manifest"
+          echo '  "schema_version": 1,' >> "$manifest"
+          echo "  \"channel\": \"$CHANNEL\"," >> "$manifest"
+          echo "  \"version\": \"$version\"," >> "$manifest"
+          echo "  \"commit\": \"$COMMIT\"," >> "$manifest"
+          echo '  "assets": {' >> "$manifest"
+          first=1
+          for entry in \
+            'linux-x86_64-gnu apkscope_linux_x86_64' \
+            'linux-aarch64-gnu apkscope_linux_aarch64' \
+            'linux-x86_64-musl apkscope_linux_musl_x86_64' \
+            'linux-aarch64-musl apkscope_linux_musl_aarch64' \
+            'windows-x86_64 apkscope_windows_x86_64.exe' \
+            'windows-aarch64 apkscope_windows_aarch64.exe' \
+            'macos-aarch64 apkscope_macos_aarch64' \
+            'macos-x86_64 apkscope_macos_x86_64'
+          do
+            set -- $entry
+            platform=$1; file=$2
+            size=$(stat -c%s "$file")
+            sha=$(awk -v f="$file" '$2 == f {print $1}' checksums.txt)
+            [ $first = 1 ] || echo ',' >> "$manifest"
+            first=0
+            printf '    "%s": {"name": "%s", "size": %s, "sha256": "%s"}' \
+              "$platform" "$file" "$size" "$sha" >> "$manifest"
+          done
+          echo '' >> "$manifest"
+          echo '  }' >> "$manifest"
+          echo '}' >> "$manifest"
+          jq . "$manifest" > apkscope-update.json
+          rm "$manifest"
+          cat apkscope-update.json
+
+      # --- canary: reuse the persistent release, overwrite its assets,
+      # manifest first-removed / last-uploaded. ------------------------------
+      - name: Move the canary tag to this commit
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git tag --force canary "$GITHUB_SHA"
+          git push --force origin refs/tags/canary
+      - name: Take the old manifest offline (clients fail closed meanwhile)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a release (or its manifest asset) may not exist yet on the very
+          # first canary publish; both are fine to skip
+          gh release delete-asset canary apkscope-update.json --repo "$GITHUB_REPOSITORY" --yes || true
+      - name: Skip stale builds (a newer main commit already published)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # re-check immediately before publishing: this workflow's commit must
+          # still be main's HEAD, or an older run (queued behind a publish)
+          # would overwrite a newer canary
+          head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "main has moved to $head; skipping this stale canary build" >&2
+            echo "stale=true" >> "$GITHUB_ENV"
+          fi
+      - name: Publish canary
+        if: github.ref == 'refs/heads/main' && env.stale != 'true'
+        uses: softprops/action-gh-release@v3.0.4
         with:
+          tag_name: canary
+          name: APKScope Canary
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          preserve_order: true
           files: |
             dist/apkscope*
             dist/checksums.txt
+            dist/apkscope-update.json
+          fail_on_unmatched_files: true
+
+      # --- stable: the full versioned release, published once, never
+      # overwritten. "-" in the tag (v0.9.1-rc.1) publishes as a prerelease. ---
+      - name: Publish stable
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3.0.4
+        with:
+          files: |
+            dist/apkscope*
+            dist/*.deb
+            dist/*.AppImage
+            dist/checksums.txt
+            dist/apkscope-update.json
           generate_release_notes: true
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}

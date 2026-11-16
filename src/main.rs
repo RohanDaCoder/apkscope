@@ -17,7 +17,7 @@ mod opt;
 mod quick;
 mod re;
 mod session;
-mod update;
+mod upgrade;
 
 // the editing core is its own crate, usable as a library
 use apkscope_core::dex::render;
@@ -77,10 +77,11 @@ Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, th
          apkscope verify <apk>
 Agents:  apkscope mcp                      MCP server over stdio (see README)
 Other:   apkscope disasm <apk> [Class]     apkscope gui [apk]
-         apkscope update [--stable | --canary]   replace this binary with the latest
-                                                 release (stable) or the latest commit's
-                                                 build (canary); default is stable
-Global options: --json  --limit N  --offset N  --threads N  -o/--out file  --no-deobf  --no-cache", update::current());
+         apkscope upgrade [--stable | --canary] [--check] [--version X.Y.Z]
+                                                 replace this binary with the latest release
+                                                 (stable, default) or the latest commit's
+                                                 build (canary); --check only looks
+Global options: --json  --limit N  --offset N  --threads N  -o/--out file  --no-deobf  --no-cache", upgrade::identity().version);
     ExitCode::from(2)
 }
 
@@ -1231,10 +1232,38 @@ fn main() -> ExitCode {
             .map(|lines| lines.iter().for_each(|l| println!("{l}")))
             .map_err(String::from),
         [cmd] if cmd == "--version" || cmd == "-V" => {
-            println!("apkscope {}", update::current());
+            // bare version, like every other CLI tool; the channel and commit
+            // live in --revision, and in --version --json (the --json is a
+            // global flag, stripped before dispatch, so it is read here from
+            // the parsed options — exactly what the upgrade flow parses to
+            // verify a staged binary's identity)
+            let me = upgrade::identity();
+            if out_opts().json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "version": me.version,
+                        "channel": me.channel.map(|c| c.name()).unwrap_or("dev"),
+                        "commit": me.commit,
+                    })
+                );
+            } else {
+                println!("apkscope {}", me.version);
+            }
             Ok(())
         }
-        [cmd, ..] if cmd == "update" => update::update(rest),
+        [cmd] if cmd == "--revision" => {
+            // version with the build's revision: 0.10.0-canary-4c3eeb
+            let me = upgrade::identity();
+            match (me.channel, me.commit) {
+                (Some(c), sha) if !sha.is_empty() && sha.len() >= 6 => {
+                    println!("apkscope {}-{}-{}", me.version, c.name(), &sha[..6])
+                }
+                _ => println!("apkscope {}-dev", me.version),
+            }
+            Ok(())
+        }
+        [cmd, ..] if cmd == "upgrade" => upgrade::upgrade(rest),
         [] => {
             hide_console();
             gui::run(None, deobf)

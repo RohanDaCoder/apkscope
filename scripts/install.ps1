@@ -4,12 +4,13 @@
 # installs it to %LOCALAPPDATA%\Programs\apkscope (added to your user PATH).
 #
 # Usage:
-#   ./scripts/install.ps1                 # latest version
-#   ./scripts/install.ps1 -Version 0.9.1  # specific version
+#   ./scripts/install.ps1                 # latest stable version
+#   ./scripts/install.ps1 -Version 0.9.1  # specific stable version
 #
 # Environment overrides (for forks / mirrors):
 #   $env:APKSCOPE_REPO = 'suffixing/apkscope'
 #   $env:APKSCOPE_BASE_URL = 'https://github.com'
+#   $env:APKSCOPE_CHANNEL = 'canary'      # the latest commit's build instead of the newest release
 param(
     [string]$Version = ""
 )
@@ -69,10 +70,21 @@ function Die($msg) {
 $Proc = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
 $Asset = if ($Proc -eq [System.Runtime.InteropServices.Architecture]::Arm64) { 'apkscope_windows_aarch64.exe' }
          else { 'apkscope_windows_x86_64.exe' }
+# Channels: stable (default) or canary — the latest commit's build from the
+# persistent `canary` prerelease. The canary label reads the release's
+# apkscope-update.json manifest, the same single source of truth the CLI's
+# `apkscope upgrade` uses.
+$Channel = if ($env:APKSCOPE_CHANNEL -eq 'canary') { 'canary' } else { 'stable' }
+if ($Version -ne '' -and $Channel -eq 'canary') {
+    Die 'APKSCOPE_CHANNEL=canary installs the latest commit build; drop -Version (it selects a stable release)'
+}
 if ($Version -ne '') {
     if ($Version -notlike 'v*') { $Version = "v$Version" }
     $BaseUrl = "$Base/$Repo/releases/download/$Version"
     $VersionLabel = $Version
+} elseif ($Channel -eq 'canary') {
+    $BaseUrl = "$Base/$Repo/releases/download/canary"
+    $VersionLabel = $null   # resolved from the manifest below
 } else {
     $BaseUrl = "$Base/$Repo/releases/latest/download"
     $VersionLabel = 'latest'
@@ -82,6 +94,17 @@ Write-Host ''
 Write-Title 'apkscope installer'
 Write-Host ''
 Write-Info 'platform' "windows $($Proc.ToString().ToLowerInvariant())"
+if ($null -eq $VersionLabel) {
+    # canary: resolve the label from the manifest, and treat a missing manifest
+    # as "being published right now" — fail closed, like the CLI
+    try {
+        $manifestText = Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/apkscope-update.json" | Select-Object -ExpandProperty Content
+        $manifest = $manifestText | ConvertFrom-Json
+        $VersionLabel = "canary ($($manifest.commit.Substring(0,6)))"
+    } catch {
+        Die "Could not read the canary release manifest (it may be mid-publication). Check $Base/$Repo/releases."
+    }
+}
 Write-Info 'version' $VersionLabel
 Write-Info 'destination' $Dest
 Write-Host ''
