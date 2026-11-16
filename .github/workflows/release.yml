@@ -29,13 +29,22 @@ on:
       - main
     tags:
       - "v*"
+  # no workflow_dispatch on purpose: a manual run on a branch ref would make
+  # the release job publish a GitHub Release from a non-tag ref. Validate
+  # release changes on a fork with a throwaway v* tag instead.
 
 # canary publishes must not be cancelled halfway through: a cancelled run could
 # leave the persistent release without a manifest, and every client would fail
-# closed until the next push. New runs queue behind the current publish.
+# closed until the next push. New runs queue behind the current publish
+# (superseded tag re-pushes included — they publish after, never mid-run).
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+# least privilege everywhere; only the publish job needs contents:write
+# to create the GitHub Release and attach the binaries.
+permissions:
+  contents: read
 
 env:
   # build identity embedded into every binary (`apkscope --version --json`):
@@ -44,9 +53,9 @@ env:
   # neither and identifies as dev.
   APKSCOPE_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
   APKSCOPE_GIT_SHA: ${{ github.sha }}
-
-permissions:
-  contents: write
+  # rust-cache sets this anyway; making it explicit keeps any uncached
+  # local run consistent with what CI does.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   lint:
@@ -55,9 +64,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # same keys the ci workflow's lint jobs use. Cache visibility is
+          # ref-scoped: a tag run restores caches saved by default-branch
+          # runs (upstream's flow after this change merges) and caches
+          # this tag itself saved on a re-push; caches saved on feature
+          # branches do not reach it. Worst case it compiles cold — same
+          # as before this PR — and it saves the caches for the next tag.
+          shared-key: lint-check
+          cache-on-failure: true
       - run: cargo fmt --all -- --check
       # CLI + MCP server only — the macOS release build
       - run: cargo check --release --no-default-features
@@ -79,9 +100,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.arch }}-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # build-<runner>: same keys as the ci workflow's build matrix, so
+          # default-branch runs warm these jobs after merge. Cache
+          # visibility is ref-scoped: a tag run restores default-branch
+          # and same-tag caches only, so the first tag after a feature
+          # branch still compiles cold (and saves for the next tag); the
+          # aarch64 leg's cache (build-ubuntu-24.04-arm) is only ever
+          # written here — release.yml is the sole workflow on arm Linux.
+          shared-key: build-${{ matrix.runner }}
+          cache-on-failure: true
       # the desktop binary, like the Windows exe: viewer + CLI + MCP server
       # in one. It links nothing beyond libc — X11, Wayland and GL are
       # dlopen()'d at runtime — and 24.04 is the oldest supported LTS, so
@@ -122,9 +156,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # same key as the ci workflow's macos build-matrix job; ref-scoped
+          # like the linux one — default-branch and same-tag caches only
+          shared-key: build-macos-latest
+          cache-on-failure: true
       # arm64 build is native; x86_64 cross-compiles with the Apple toolchain
       - run: cargo build --release --no-default-features --target aarch64-apple-darwin
       - run: cargo build --release --no-default-features --target x86_64-apple-darwin
@@ -151,7 +193,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # same key as the ci workflow's build matrix (`build-<os>`); the
+          # x64 leg shares the tested runner's cache, the arm64 leg keeps
+          # its own — ref-scoped like the linux one
+          shared-key: build-${{ matrix.runner }}
+          cache-on-failure: true
       - run: cargo build --release
       - run: |
           mkdir dist
@@ -167,10 +218,14 @@ jobs:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
-          # full history: the canary tag is force-moved to the exact built commit
+          # no token leakage into later steps, and full history: the canary
+          # tag is force-moved to the exact built commit
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:

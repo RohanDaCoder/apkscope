@@ -10,7 +10,50 @@ on:
       - "**"
     tags-ignore:
       - "v*"
+    # docs-only pushes do not touch any Rust code, and no CI job compiles
+    # markdown: skipping the 3-OS matrix for them saves the full run.
+    paths-ignore:
+      - "docs/**"
+      - "bench/**"
+      - "*.md"
+      - "assets/logo.py"
+      - ".gitignore"
+      - "LICENSE"
+      - "NOTICE"
   pull_request:
+    # same scope on PRs: the filter applies to the changed files of the
+    # PR, so docs-only PRs skip the build matrix as well. Careful: paths
+    # filters on pull_request use the PR's diff, so any code change in a
+    # mixed docs+code PR still runs the full matrix.
+    paths-ignore:
+      - "docs/**"
+      - "bench/**"
+      - "*.md"
+      - "assets/logo.py"
+      - ".gitignore"
+      - "LICENSE"
+      - "NOTICE"
+  workflow_dispatch:
+    # manual re-run without the path filters, for exactly the mixed
+    # docs+code case above or when a skipped run needs a forced run
+
+# push + pull_request overlap on every open-PR push: without cancellation
+# both copies run to completion, doubling runner minutes for the same SHA.
+# One in-flight run per branch/PR is enough; a fresh push supersedes it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# least privilege; the workflow never writes to the repo, so the default
+# read/write token would be pure risk surface. Overridden only where a
+# job must write (none here; release.yml grants its release job contents:write).
+permissions:
+  contents: read
+
+env:
+  # rust-cache sets this anyway; making it explicit keeps any uncached
+  # local run consistent with what CI does.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   fmt:
@@ -18,6 +61,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -28,10 +73,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       # CLI + MCP server only — the macOS release build; the Linux and
       # Windows release builds (default features, viewer included) are
       # compiled by the build matrix below
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # key on the lint job name, not the job id: caches saved by a
+          # PR-event run of the same code are restorable by the next
+          # branch push (and vice versa), instead of one cache per run
+          shared-key: lint-check
+          # save the cache even when the job fails, so a broken commit
+          # does not throw away minutes of dependency compilation
+          cache-on-failure: true
       - run: cargo check --release --no-default-features
 
   clippy:
@@ -39,9 +95,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          shared-key: lint-clippy
+          cache-on-failure: true
       - run: cargo clippy --release --no-default-features -- -D warnings
 
   build:
@@ -58,7 +120,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # one cache per OS: the target dir is not portable between
+          # Linux/macOS/Windows dependency builds. release.yml reuses the
+          # same shared-keys per platform. Cache visibility is ref-scoped:
+          # caches saved here on the default branch reach later tag runs;
+          # caches saved on a feature branch stay on that branch (and
+          # PR-event runs save under the merge ref, restorable only by
+          # that PR itself) — worst case a job compiles cold once.
+          shared-key: build-${{ matrix.os }}
+          cache-on-failure: true
       - run: cargo test --release --no-default-features
       # build what the release ships: macOS the CLI + MCP server, Linux and
       # Windows the viewer build — one binary with the GUI, the CLI and the
