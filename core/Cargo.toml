@@ -1,6 +1,6 @@
 [package]
 name = "apkscope-core"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2024"
 description = "The editing core of apkscope as a library: DEX and Smali round trip, resources, APK rebuild and signing"
 license = "Apache-2.0"
