@@ -310,7 +310,7 @@ the configuration aapt2 would give it for the app's `minSdkVersion`. Images aren
 new `.9.png` must already be compiled, as one taken from another APK is. Renaming resources isn't
 supported yet.
 
-`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.jar` (Android framework JARs), `.apks`, `.xapk`, `.dex`.
+`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.jar` (Android framework JARs), `.apks`, `.xapk`, `.apkm`, `.dex`.
 `apkscope --help` lists everything.
 
 <details>
