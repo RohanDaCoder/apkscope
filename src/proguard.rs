@@ -14,7 +14,9 @@ pub struct ProGuard {
     /// `Lc/d/E;` (obfuscated, as in the APK) -> `a.b.C` (original, dotted)
     pub classes: HashMap<String, String>,
     /// (`Lc/d/E;`, obfuscated member) -> original name, in file order;
-    /// methods carry their signature in the key, overloads stay distinct
+    /// a method's key ends in `()` so it never collides with a same-named
+    /// field, but the signature itself is dropped — overloads sharing an
+    /// obfuscated name map to one name
     pub members: Vec<((String, String), String)>,
 }
 
@@ -58,8 +60,9 @@ pub fn parse(text: &str) -> ProGuard {
         let mut parts = from.split_whitespace();
         let Some(_ty) = parts.next() else { continue };
         let Some(name) = parts.next() else { continue };
-        // method: the original name ends at '('; the parenthesized signature
-        // (if any) belongs to the key so overloads map apart
+        // method: the original name ends at '('; the signature is dropped and
+        // the key only marks methodness with `()`, so overloads sharing an
+        // obfuscated name collapse to one entry
         let (name, sig) = match name.split_once('(') {
             Some((n, rest)) => (n, Some(format!("({}", rest.trim_start_matches(')').trim()))),
             None => (name, None),
