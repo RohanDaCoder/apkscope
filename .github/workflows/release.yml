@@ -13,6 +13,20 @@ on:
   push:
     tags:
       - "v*"
+  # no workflow_dispatch on purpose: a manual run on a branch ref would make
+  # the release job publish a GitHub Release from a non-tag ref. Validate
+  # release changes on a fork with a throwaway v* tag instead.
+
+# one in-flight release per tag: a re-pushed tag (moved to a new commit)
+# supersedes the run that is still building the old commit
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# least privilege everywhere; only the release job needs contents:write
+# to create the GitHub Release and attach the binaries.
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -21,6 +35,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -45,6 +61,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.arch }}-unknown-linux-musl
@@ -88,6 +106,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -117,6 +137,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release
       - run: |
@@ -135,6 +157,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v7
         with:
           path: dist
