@@ -166,6 +166,7 @@ IDs are the keys of the manifest's `assets` map:
 | `linux-x86_64-musl` | `apkscope_linux_musl_x86_64` | CLI + MCP; no viewer |
 | `linux-aarch64-musl` | `apkscope_linux_musl_aarch64` | CLI + MCP; no viewer |
 | `windows-x86_64` | `apkscope_windows_x86_64.exe` | Viewer + CLI + MCP |
+| `windows-aarch64` | `apkscope_windows_aarch64.exe` | Viewer + CLI + MCP |
 | `macos-aarch64` | `apkscope_macos_aarch64` | CLI + MCP |
 | `macos-x86_64` | `apkscope_macos_x86_64` | CLI + MCP |
 
@@ -235,9 +236,10 @@ Pull requests run neither.
 ### 6.1 Stable publication (version tag)
 
 1. `lint` gates the matrix (fmt, both feature configs' check, clippy).
-2. Every platform builds (linux-x86_64, linux-aarch64, macos, windows) and
-   uploads its `dist/` as a workflow artifact — GitHub Actions artifacts move
-   outputs between jobs; they are never a download source for users.
+2. Every platform builds (linux x86_64 + aarch64, macos, windows x86_64 +
+   aarch64) and uploads its `dist/` as a workflow artifact — GitHub Actions
+   artifacts move outputs between jobs; they are never a download source for
+   users.
 3. The `publish` job downloads all artifacts, generates `checksums.txt` and
    `apkscope-update.json` from the exact files in the room, and publishes the
    versioned Release with all executables, packages, checksums and manifest.
@@ -249,9 +251,10 @@ Pull requests run neither.
 
 The same lint + matrix + collect pipeline runs, then:
 
-1. **Stale check, immediately before publishing:** the run's commit must still
+1. **Stale check, before anything destructive:** the run's commit must still
    be `main`'s HEAD; otherwise the run skips. An older run queued behind a
-   publish can never overwrite a newer canary.
+   publish can neither overwrite a newer canary nor move the tag backwards
+   nor take the live manifest offline.
 2. **Take the old manifest offline:** `gh release delete-asset canary
    apkscope-update.json` (a no-op on the first publish). While the manifest is
    absent, clients fail closed — `upgrade --canary` reports that the canary

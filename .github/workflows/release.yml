@@ -51,8 +51,12 @@ env:
   APKSCOPE_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'canary' }}
   APKSCOPE_GIT_SHA: ${{ github.sha }}
 
+# least privilege: every job — including the build matrix, which runs cargo
+# build scripts and third-party actions — gets a read-only token. Only the
+# publish job overrides to contents: write; it is the one that force-moves
+# the persistent `canary` tag and updates the GitHub Releases.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   lint:
@@ -181,6 +185,10 @@ jobs:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # the only job that writes: it force-moves the persistent `canary` tag
+    # and updates the GitHub Releases on both channels
+    permissions:
+      contents: write
     steps:
       # credentials stay persisted on purpose, unlike the build jobs above:
       # this job force-pushes the `canary` tag with plain git, which needs the
@@ -254,21 +262,10 @@ jobs:
 
       # --- canary: reuse the persistent release, overwrite its assets,
       # manifest first-removed / last-uploaded. ------------------------------
-      - name: Move the canary tag to this commit
-        if: github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "release-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git tag --force canary "$GITHUB_SHA"
-          git push --force origin refs/tags/canary
-      - name: Take the old manifest offline (clients fail closed meanwhile)
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # a release (or its manifest asset) may not exist yet on the very
-          # first canary publish; both are fine to skip
-          gh release delete-asset canary apkscope-update.json --repo "$GITHUB_REPOSITORY" --yes || true
+      # Staleness is decided first, before anything destructive: a queued
+      # older run must neither move the `canary` tag backwards nor delete
+      # the live manifest, or canary would regress or go manifest-less
+      # until the next push.
       - name: Skip stale builds (a newer main commit already published)
         if: github.ref == 'refs/heads/main'
         env:
@@ -282,6 +279,21 @@ jobs:
             echo "main has moved to $head; skipping this stale canary build" >&2
             echo "stale=true" >> "$GITHUB_ENV"
           fi
+      - name: Take the old manifest offline (clients fail closed meanwhile)
+        if: github.ref == 'refs/heads/main' && env.stale != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a release (or its manifest asset) may not exist yet on the very
+          # first canary publish; both are fine to skip
+          gh release delete-asset canary apkscope-update.json --repo "$GITHUB_REPOSITORY" --yes || true
+      - name: Move the canary tag to this commit
+        if: github.ref == 'refs/heads/main' && env.stale != 'true'
+        run: |
+          git config user.name "release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git tag --force canary "$GITHUB_SHA"
+          git push --force origin refs/tags/canary
       - name: Publish canary
         if: github.ref == 'refs/heads/main' && env.stale != 'true'
         uses: softprops/action-gh-release@v3.0.4

@@ -10,7 +10,11 @@
 pub fn current() -> &'static str {
     let arch = std::env::consts::ARCH;
     if cfg!(target_os = "windows") {
-        "windows-x86_64"
+        if arch == "aarch64" {
+            "windows-aarch64"
+        } else {
+            "windows-x86_64"
+        }
     } else if cfg!(target_os = "macos") {
         if arch == "aarch64" {
             "macos-aarch64"
@@ -40,6 +44,7 @@ pub fn asset_name(platform: &str) -> Option<&'static str> {
         "linux-x86_64-musl" => "apkscope_linux_musl_x86_64",
         "linux-aarch64-musl" => "apkscope_linux_musl_aarch64",
         "windows-x86_64" => "apkscope_windows_x86_64.exe",
+        "windows-aarch64" => "apkscope_windows_aarch64.exe",
         "macos-aarch64" => "apkscope_macos_aarch64",
         "macos-x86_64" => "apkscope_macos_x86_64",
         _ => return None,
@@ -48,12 +53,13 @@ pub fn asset_name(platform: &str) -> Option<&'static str> {
 
 /// The full list, in manifest order.
 #[cfg(test)]
-pub const ALL: [&str; 7] = [
+pub const ALL: [&str; 8] = [
     "linux-x86_64-gnu",
     "linux-aarch64-gnu",
     "linux-x86_64-musl",
     "linux-aarch64-musl",
     "windows-x86_64",
+    "windows-aarch64",
     "macos-aarch64",
     "macos-x86_64",
 ];
