@@ -307,10 +307,11 @@ queued, now-outdated run skip.
     channel and commit.
 
 If the installation appears to be owned by a package manager (dpkg/rpm
-database entry on Linux, a Homebrew prefix on macOS), the upgrade refuses and
-points at the package manager. This detection is best-effort and documented
-as such: a standalone binary copied into `/usr/local/bin` by hand upgrades
-normally; an apt-owned one does not.
+database entry on Linux, a Homebrew Cellar path on macOS — the exe
+canonicalizes into `.../Cellar/...`, not merely a brew bin dir), the upgrade
+refuses and points at the package manager. This detection is best-effort and
+documented as such: a standalone binary copied into `/usr/local/bin` by hand
+upgrades normally; an apt-owned one does not.
 
 ## 8. What the updater never does
 

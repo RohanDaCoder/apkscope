@@ -133,7 +133,10 @@ fn label(version: &str, channel: Option<&str>, commit: &str) -> String {
 /// Remove the backup and any staging leftovers; failures are only noted — by
 /// this point the upgrade has succeeded and the files are just clutter.
 fn cleanup(backup: &Path, staged: &Path) {
-    if std::fs::remove_file(backup).is_err() {
+    if std::fs::remove_file(backup).is_err() && !cfg!(target_os = "windows") {
+        // not on Windows: there the replaced exe is still running (renamed
+        // aside, it keeps running), so removal fails every upgrade — the next
+        // run overwrites the leftover, no note needed
         println!(
             "  note: the previous binary stays at {} (it could not be removed; delete it manually)",
             homepath(backup)
@@ -225,16 +228,20 @@ fn refuse_if_package_managed(exe: &Path) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        // Homebrew: /opt/homebrew/bin (Apple Silicon) or /usr/local/bin
-        if let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
-            for prefix in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt"] {
-                if dir.starts_with(prefix) {
-                    return Err(format!(
-                        "{} looks like a Homebrew install ({}); upgrade it with `brew upgrade apkscope` instead",
-                        homepath(exe),
-                        dir
-                    ));
-                }
+        // Homebrew: a real brew install is a symlink from a bin dir
+        // (/opt/homebrew/bin on Apple Silicon, /usr/local/bin on Intel) into
+        // the Cellar, so canonicalizing the exe resolves through it. The bin
+        // dir alone says nothing — /usr/local/bin is a normal manual install
+        // dir on Intel Macs (the installer documents it), and there is no
+        // apkscope formula — so only a resolved path inside a Cellar/ is
+        // refused.
+        if let Ok(real) = std::fs::canonicalize(exe) {
+            if real.to_string_lossy().contains("/Cellar/") {
+                return Err(format!(
+                    "{} is a Homebrew install ({}); upgrade it with `brew upgrade apkscope` instead",
+                    homepath(exe),
+                    real.display()
+                ));
             }
         }
     }

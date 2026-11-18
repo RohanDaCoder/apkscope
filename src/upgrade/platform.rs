@@ -77,8 +77,8 @@ pub fn plausible_executable(path: &std::path::Path) -> Result<(), String> {
         // MZ, the DOS header every PE file starts with
         magic[..2] == *b"MZ"
     } else if cfg!(target_os = "macos") {
-        // Mach-O 64: feedfacefeed (little-endian) or cefaedfacf (big-endian)
-        magic == [0xcf, 0xfa, 0xed, 0xfe] || magic == [0xce, 0xfa, 0xed, 0xfc]
+        // Mach-O 64: feedfacf (little-endian) or cffaedfe (big-endian)
+        magic == [0xcf, 0xfa, 0xed, 0xfe] || magic == [0xce, 0xfa, 0xed, 0xfe]
     } else {
         // ELF
         magic == [0x7f, b'E', b'L', b'F']
