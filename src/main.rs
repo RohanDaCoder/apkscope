@@ -14,6 +14,7 @@ mod java;
 mod live;
 mod mcp;
 mod opt;
+mod proguard;
 mod quick;
 mod re;
 mod session;
@@ -67,7 +68,7 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope decrypt   <apk>                       run string decryptors on their constant arguments
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
   apkscope comment   <apk> <Class|member> <text>
-  apkscope map <apk> export <out.jobf|out.mapping>  |  map <apk> import <file>   JADX / Enigma names
+  apkscope map <apk> export <out.jobf|out.mapping|out.txt>  |  map <apk> import <file>   JADX / Enigma / ProGuard names
 Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
          apkscope res <apk> <out-dir>      the manifest and res/ as editable files (edit, then build --res)
          apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
@@ -1185,7 +1186,7 @@ fn main() -> ExitCode {
                     let st = load(apk, false)?;
                     std::fs::write(
                         file,
-                        re::export_mapping(&st.dexes, &n, !file.ends_with(".jobf")),
+                        re::export_mapping(&st.dexes, &n, re::MappingFormat::from_file(file)),
                     )
                     .map_err(|e| e.to_string())?;
                     eprintln!("wrote {file}");
