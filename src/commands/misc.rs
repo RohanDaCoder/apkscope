@@ -123,14 +123,13 @@ pub fn gui_cmd(a: &GuiArgs, deobf: bool) -> Result<(), String> {
 /// A lone argument that is not a known subcommand: a file associated with apkscope
 /// (double-click) opens the viewer; anything else is an unrecognized command.
 pub fn external(args: &[String], deobf: bool) -> ExitCode {
-    if let [path] = args {
-        if session::INPUTS
+    if let [path] = args
+        && session::INPUTS
             .iter()
             .any(|e| path.to_lowercase().ends_with(&format!(".{e}")))
-        {
-            cli::hide_console();
-            return super::finish(crate::gui::run(Some(path), deobf));
-        }
+    {
+        cli::hide_console();
+        return super::finish(crate::gui::run(Some(path), deobf));
     }
     cli::usage()
 }
@@ -140,12 +139,12 @@ pub fn no_command(_deobf: bool) -> ExitCode {
     #[cfg(feature = "gui")]
     {
         cli::hide_console();
-        return super::finish(crate::gui::run(None, _deobf));
+        super::finish(crate::gui::run(None, _deobf))
     }
     #[cfg(not(feature = "gui"))]
     {
         crate::gui::no_viewer_note();
         eprintln!();
-        return cli::usage();
+        cli::usage()
     }
 }

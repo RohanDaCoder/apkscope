@@ -200,7 +200,7 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope comment   <apk> <Class|member> <text>
   apkscope map <apk> export <out.jobf|out.mapping|out.txt>  |  map <apk> import <file>   JADX / Enigma / ProGuard names
 Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
-         apkscope res <apk> <out-dir>      the manifest and res/ of an APK as editable files (edit, then build --res)
+         apkscope res <apk> <out-dir>      the manifest and res/ as editable files (edit, then build --res)
          apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
                   [--res dir] [--string name[@config]=value]... [--smali edited.smali]...
                   [--key k.pk8 --cert c.crt | --no-sign]   a .jar is never signed

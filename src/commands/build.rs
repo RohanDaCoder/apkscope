@@ -6,32 +6,6 @@ use crate::cli::BuildArgs;
 use crate::export;
 use crate::session;
 
-/// Every file under `dir`, by its path from there with `/` between names.
-fn read_tree(dir: &std::path::Path) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-    let mut files = std::collections::BTreeMap::new();
-    let mut todo = vec![dir.to_path_buf()];
-    while let Some(d) = todo.pop() {
-        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
-            let path = e.map_err(|e| e.to_string())?.path();
-            if path.is_dir() {
-                todo.push(path);
-                continue;
-            }
-            let rel = path.strip_prefix(dir).map_err(|e| e.to_string())?;
-            let name = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            files.insert(
-                name,
-                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
-            );
-        }
-    }
-    Ok(files)
-}
-
 /// `--no-sign` leaves the APK unsigned; a JAR never is signed, Android does not verify one.
 pub fn build(a: &BuildArgs) -> Result<(), String> {
     let input = a.input.as_str();
@@ -89,7 +63,7 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     }
     if let Some(dir) = &res_dir {
         // everything `apkscope res` wrote: a values file that is gone has no values
-        let files = read_tree(std::path::Path::new(dir))?;
+        let files = crate::read_tree(std::path::Path::new(dir))?;
         let mut apk = export::open(&src)?;
         let changed = resources::edits(&mut apk, &files, true)?;
         eprintln!("{} resource file(s) changed", changed.len());

@@ -27,6 +27,10 @@ use std::process::ExitCode;
 // java, quick, re, session, mcp all depend on these being at the root).
 use apkscope_core::dex::render;
 use apkscope_core::{bytecode, res, sign};
+// `gui.rs` and the gui-gated half of `session.rs` (both compiled only in the
+// viewer build) reach these through the crate root, as in the pre-clap layout.
+#[cfg(feature = "gui")]
+use apkscope_core::{apksign, arsc, axml, rebuild, smali};
 use clap::Parser;
 use cli::{flag, load, num, opt};
 use commands::{refs_query, refs_text, search_args, search_on};
@@ -58,6 +62,33 @@ mod gui {
         no_viewer_note();
         Err("the viewer is not available in this build".into())
     }
+}
+
+/// Every file under `dir`, by its path from there with `/` between names.
+/// Shared by `apkscope build` and the viewer's resource-rebuild flow.
+fn read_tree(dir: &std::path::Path) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let path = e.map_err(|e| e.to_string())?.path();
+            if path.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            let rel = path.strip_prefix(dir).map_err(|e| e.to_string())?;
+            let name = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            files.insert(
+                name,
+                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+            );
+        }
+    }
+    Ok(files)
 }
 
 fn main() -> ExitCode {
