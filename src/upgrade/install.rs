@@ -189,6 +189,11 @@ fn make_executable(_p: &Path) -> Result<(), String> {
 /// binary) and the manager would never see the update. The mechanisms are
 /// best-effort and documented as such in docs/UPDATE_SYSTEM.md.
 fn refuse_if_package_managed(exe: &Path) -> Result<(), String> {
+    // Windows has no package-manager detection below, so `exe` would be an
+    // unused parameter there (`-D warnings` errors on it; CI lints on Linux
+    // only, so it slipped through).
+    #[cfg(windows)]
+    let _ = exe;
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         // dpkg: the file is recorded in /var/lib/dpkg/info/<pkg>.list
