@@ -430,3 +430,133 @@ fn search_api_reconstructs_retrofit_sheet() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `search secrets` / `scan` on a fixture app assembled from hand-written smali: the widened
+/// compound names must catch first-party keys the plain word list missed (`HMAC_KEY`,
+/// `PARTNER_CODE`, ...), stay silent on benign constants, and the entropy tier must pick up
+/// a key-shaped constant under a neutral name — without repeating anything the patterns
+/// already reported. This pins the false-positive rate next to the new hits, and the tier's
+/// non-token shapes: URL regexes, alphabets and constants outside the 24–200 length cap
+/// (the false-positive classes a large real app produces).
+#[test]
+fn secrets_fixture_first_party_keys() {
+    use std::io::Write as _;
+    let buildconfig = r#"
+.class public Lcom/example/app/BuildConfig;
+.super Ljava/lang/Object;
+
+.field public static final API_KEY:Ljava/lang/String; = "qbznP4Xj9kLm2Rst8Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr7Stu9Vwx2Yz4Ab6Cd8"
+.field public static final HMAC_KEY:Ljava/lang/String; = "hmac-9f8e7d6c5b4a3210fedcba"
+.field public static final PARTNER_CODE:Ljava/lang/String; = "partner-0042-example-777"
+.field public static final APP_NAME:Ljava/lang/String; = "Demo App"
+.field public static final BASE_URL:Ljava/lang/String; = "https://api.example.com"
+.field public static final OBSCURE_BLOB:Ljava/lang/String; = "Xk7Pq2Rst9Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr"
+.field public static final LINKIFY_RE:Ljava/lang/String; = "[a-zA-Z0-9._%]+([a-zA-Z]{2,})+"
+.field public static final RANDOM_CHARS:Ljava/lang/String; = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+.field public static final LONG_BLOB:Ljava/lang/String; = "Qk7Pq2Rst9Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr7Stu9Vwx2Yz4Ab6Cd8Qk7Pq2Rst9Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr7Stu9Vwx2Yz4Ab6Cd8Qk7Pq2Rst9Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr7Stu9Vwx2Yz4Ab6Cd8Qk7Pq2Rst9Vwx3Yz5Abc8Def1Ghi4Jkl6Mno0Pqr7Stu9Vwx2Yz4Ab6Cd8"
+.field public static final SHORT_BLOB:Ljava/lang/String; = "Zq7Pv2Rst9WwxK3Yz5AbcDe"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    // a Retrofit-style interface: @GET + @Query, the annotation the api-scope work reads
+    let api = r#"
+.class public interface abstract Lcom/example/app/Api;
+.super Ljava/lang/Object;
+
+.method public abstract books(Ljava/lang/String;)Lretrofit2/Call;
+    .annotation runtime Lretrofit2/http/GET;
+        value = "v1/books"
+    .end annotation
+    .param p1
+        .annotation runtime Lretrofit2/http/Query;
+            value = "key"
+        .end annotation
+    .end param
+.end method
+"#;
+    // a caller reading the key, so the declaring-class indexing path is exercised too
+    let repo = r#"
+.class public Lcom/example/app/Repo;
+.super Ljava/lang/Object;
+
+.method public static fetch(Lcom/example/app/Api;Ljava/lang/String;)V
+    .locals 1
+    sget-object v0, Lcom/example/app/BuildConfig;->API_KEY:Ljava/lang/String;
+    invoke-interface {p0, v0}, Lcom/example/app/Api;->books(Ljava/lang/String;)Lretrofit2/Call;
+    return-void
+.end method
+"#;
+    let classes = [buildconfig, api, repo]
+        .iter()
+        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
+        .collect::<Vec<_>>();
+    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    // a minimal APK: one DEX, no manifest, no resources
+    let dir = std::env::temp_dir().join(format!("apkscope-secrets-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let apk = dir.join("fixture.apk");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&apk).unwrap());
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("classes.dex", stored).unwrap();
+        z.write_all(&dex).unwrap();
+        z.finish().unwrap();
+    }
+    let st = load(apk.to_str().unwrap(), false).unwrap();
+    st.build_index();
+    let m = Matcher::new("", Scope::Secrets, false, false).unwrap();
+    let hits = search(&st, &m, &Progress::default());
+    let text = || {
+        hits.iter()
+            .map(|h| h.2.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        text().contains("API_KEY")
+            && text().contains("HMAC_KEY")
+            && text().contains("PARTNER_CODE"),
+        "the compound names must catch first-party keys:\n{}",
+        text()
+    );
+    assert!(
+        !text().contains("Demo App") && !text().contains("https://api.example.com"),
+        "benign constants must stay silent:\n{}",
+        text()
+    );
+    // the entropy tier: the neutral-named blob shows up; nothing the patterns already
+    // reported, nothing benign
+    let ent = entropy_secrets(&st);
+    let etext = ent
+        .iter()
+        .map(|c| format!("{}#{}", c.class, c.field))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(etext.contains("OBSCURE_BLOB"), "entropy tier:\n{etext}");
+    assert!(
+        !etext.contains("API_KEY") && !etext.contains("HMAC_KEY"),
+        "pattern hits are not repeated in the tier:\n{etext}"
+    );
+    assert!(
+        !etext.contains("APP_NAME") && !etext.contains("BASE_URL"),
+        "benign constants stay out of the tier:\n{etext}"
+    );
+    // the review filters: URL regexes, alphabets (long sequential runs) and constants
+    // outside the 24–200 cap stay out of the tier even though their entropy is high
+    assert!(
+        !etext.contains("LINKIFY_RE")
+            && !etext.contains("RANDOM_CHARS")
+            && !etext.contains("LONG_BLOB")
+            && !etext.contains("SHORT_BLOB"),
+        "regex, alphabet and off-cap constants stay out of the tier:\n{etext}"
+    );
+    // scan reports the same keys in its secrets section
+    let scan = crate::re::scan(&st);
+    assert!(scan.contains("HMAC_KEY"), "scan secrets section:\n{scan}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

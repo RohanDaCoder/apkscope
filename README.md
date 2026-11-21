@@ -273,6 +273,7 @@ Any MCP client works: `{ "mcpServers": { "apkscope": { "command": "/path/to/apks
 apkscope scan      app.apk                                  # flags, exported components, weak crypto, TLS, keys, URLs
 apkscope info      app.apk                                  # permissions, components, deep links, signature
 apkscope search    app.apk urls                             # every endpoint (app code only; --all includes libraries)
+apkscope search    app.apk secrets                           # keys & tokens; plus a labelled entropy tier of app constants
 apkscope search    app.apk api                              # the app's HTTP API: Retrofit endpoints, params, curl lines
 apkscope diff      old.apk new.apk --strings                # what changed in this update
 

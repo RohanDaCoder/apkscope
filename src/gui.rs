@@ -1603,7 +1603,7 @@ impl App {
                         d.job = None;
                     }
                 }
-                Msg::Hits(id, h, hidden) if id == self.search_id => {
+                Msg::Hits(id, mut h, hidden) if id == self.search_id => {
                     self.prog = None;
                     if hidden > 0 {
                         self.hits_title.push_str(&format!(
@@ -1614,6 +1614,30 @@ impl App {
                     if self.scope == Scope::Urls {
                         self.hits_title
                             .push_str(&format!(" — {} hosts", session::host_count(&h)));
+                    }
+                    // the labelled entropy tier of `secrets`: rows under their class, each
+                    // row named so it cannot be mistaken for a pattern hit
+                    if self.scope == Scope::Secrets
+                        && let Some(st) = self.st
+                    {
+                        let extra: Vec<Hit> = session::entropy_secrets(st)
+                            .into_iter()
+                            .map(|c| {
+                                (
+                                    c.class,
+                                    0,
+                                    format!(
+                                        "possible secret (entropy): {} = \"{}\"",
+                                        c.field, c.value
+                                    ),
+                                )
+                            })
+                            .collect();
+                        if !extra.is_empty() {
+                            self.hits_title
+                                .push_str(&format!(" (+{} entropy)", extra.len()));
+                        }
+                        h.extend(extra);
                     }
                     self.hits = h;
                     // stable: lines stay in order within a class
