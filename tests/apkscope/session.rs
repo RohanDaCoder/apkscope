@@ -130,3 +130,80 @@ fn apkm_extract_picks_base_apk() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `search urls` defaults to app code only, ranks first-party hits first, and reports what
+/// the filter hid; `--all` (Matcher without `app_only`) brings library code back. The host
+/// summary groups by source. This fixture has no manifest, so its app class is `Other`
+/// origin and its host order falls back to the count.
+#[test]
+fn search_urls_first_party_default() {
+    use std::io::Write as _;
+    // the library class sorts before the app class, so plain alphabetical order would put
+    // it first — only the app-first ranking can produce the expected order
+    let app = r#"
+.class public Lcom/example/app/Main;
+.super Ljava/lang/Object;
+
+.field public static final API:Ljava/lang/String; = "https://api.example.com/v1/a"
+.field public static final WEB:Ljava/lang/String; = "https://api.example.com/v1/b"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let lib = r#"
+.class public Landroid/ads/Loader;
+.super Ljava/lang/Object;
+
+.field public static final TRACK:Ljava/lang/String; = "https://ads.gstatic.net/x"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let classes = [app, lib]
+        .iter()
+        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
+        .collect::<Vec<_>>();
+    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dir = std::env::temp_dir().join(format!("apkscope-urls-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let apk = dir.join("fixture.apk");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&apk).unwrap());
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("classes.dex", stored).unwrap();
+        z.write_all(&dex).unwrap();
+        z.finish().unwrap();
+    }
+    let st = load(apk.to_str().unwrap(), false).unwrap();
+    st.build_index();
+    // the new default: app code only, and the skipped library candidate is counted
+    let mut m = Matcher::new("", Scope::Urls, false, false).unwrap();
+    m.app_only = true;
+    let (hits, hidden) = search_stats(&st, &m, &Progress::default());
+    assert_eq!(hidden, 1, "the library class is a skipped candidate");
+    assert!(hits.iter().all(|h| h.0.contains("Main")), "{hits:?}");
+    assert_eq!(host_count(&hits), 1);
+    // --all: both classes, app code first even though the library name sorts first
+    let m = Matcher::new("", Scope::Urls, false, false).unwrap();
+    let (all, hidden) = search_stats(&st, &m, &Progress::default());
+    assert_eq!(hidden, 0);
+    assert_eq!(all.len(), 3);
+    assert!(
+        all[0].0.contains("Main") && all.iter().any(|h| h.0.contains("ads")),
+        "app-first ranking:\n{all:?}"
+    );
+    assert_eq!(host_count(&all), 2);
+    // the host summary: per-host counts by source, busiest first here (nothing is App)
+    let sum = search_summary(&st, Scope::Urls, &all);
+    assert!(sum[0].contains("hosts (2)"), "{sum:?}");
+    assert!(sum[1].contains("api.example.com"), "{sum:?}");
+    assert!(sum[2].contains("ads.gstatic.net"), "{sum:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -426,3 +426,20 @@ fn extra_positional_rejected() {
     rejected(&["classes", "x.apk", "extra"]);
     rejected(&["manifest", "x.apk", "extra"]);
 }
+
+#[test]
+fn search_all_flag_parses() {
+    // urls / http / secrets default to app code only; --all opts back out
+    parses_as(&["search", "x.apk", "urls", "--all"], |c| {
+        let Cmd::Search(a) = c else {
+            panic!("expected search")
+        };
+        assert!(a.all && !a.app_only);
+    });
+    parses_as(&["search", "x.apk", "secrets", "--app-only"], |c| {
+        let Cmd::Search(a) = c else {
+            panic!("expected search")
+        };
+        assert!(a.app_only && !a.all);
+    });
+}

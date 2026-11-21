@@ -916,7 +916,7 @@ enum Msg {
     Loaded(Result<State, String>),
     Text(Open, View, String),
     Report(Open, Vec<Line>),
-    Hits(u64, Vec<Hit>),
+    Hits(u64, Vec<Hit>, usize),
     /// (query, matching strings)
     Strings(String, Vec<(String, usize)>),
     Saved(Result<String, String>),
@@ -1523,7 +1523,8 @@ impl App {
         self.prog = Some(prog.clone());
         let (tx, id) = (self.tx.clone(), self.search_id);
         spawn(&self.tx, "search", move || {
-            let _ = tx.send(Msg::Hits(id, session::search(st, &m, &prog)));
+            let (hits, hidden) = session::search_stats(st, &m, &prog);
+            let _ = tx.send(Msg::Hits(id, hits, hidden));
         });
     }
 
@@ -1602,8 +1603,18 @@ impl App {
                         d.job = None;
                     }
                 }
-                Msg::Hits(id, h) if id == self.search_id => {
+                Msg::Hits(id, h, hidden) if id == self.search_id => {
                     self.prog = None;
+                    if hidden > 0 {
+                        self.hits_title.push_str(&format!(
+                            " ({hidden} library class{} hidden)",
+                            if hidden == 1 { "" } else { "es" }
+                        ));
+                    }
+                    if self.scope == Scope::Urls {
+                        self.hits_title
+                            .push_str(&format!(" — {} hosts", session::host_count(&h)));
+                    }
                     self.hits = h;
                     // stable: lines stay in order within a class
                     self.hits.sort_by(|a, b| a.0.cmp(&b.0));
@@ -3318,7 +3329,12 @@ impl eframe::App for App {
                     if up || down {
                         let k = Scope::ALL.iter().position(|&s| s == self.scope).unwrap_or(0);
                         let n = Scope::ALL.len();
-                        self.scope = Scope::ALL[if down { (k + 1) % n } else { (k + n - 1) % n }];
+                        let next = Scope::ALL[if down { (k + 1) % n } else { (k + n - 1) % n }];
+                        // entering an API scope: app-only is the default there now
+                        if next.query_optional() && !self.scope.query_optional() {
+                            self.app_only = true;
+                        }
+                        self.scope = next;
                     }
                 }
                 let (case, re) = (self.case, self.use_regex);

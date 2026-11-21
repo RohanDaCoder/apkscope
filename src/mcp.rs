@@ -69,6 +69,7 @@ fn tools() -> Value {
             "query": {"type": "string", "description": "Optional for urls / http / secrets"},
             "regex": {"type": "boolean"}, "case_sensitive": {"type": "boolean"},
             "app_only": {"type": "boolean", "description": "Skip known SDKs and libraries"},
+            "all": {"type": "boolean", "description": "Include library/SDK code in urls / http / secrets, which default to app code only"},
             "context": {"type": "integer", "description": "Lines of code around each hit"},
             "whole_method": {"type": "boolean", "description": "Return the whole enclosing method of each hit"},
             "format": {"type": "string", "enum": ["txt", "json", "csv"]},
@@ -408,6 +409,7 @@ fn call(
                 ("regex", "--regex"),
                 ("case_sensitive", "--case"),
                 ("app_only", "--app-only"),
+                ("all", "--all"),
                 ("whole_method", "--method"),
             ] {
                 if b(a, k) {

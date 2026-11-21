@@ -3,6 +3,7 @@
 //! `SearchOpts` / `search_args` / `search_on` are shared with the MCP server, which
 //! parses its own tool-call argument vectors the same way the CLI used to.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 
 use crate::cli::{self, InfoArgs, ResourceArgs, SearchArgs};
@@ -15,6 +16,8 @@ pub struct SearchOpts {
     pub case: bool,
     pub method: bool,
     pub app_only: bool,
+    /// include library code even in the scopes that default to app-only
+    pub all: bool,
     pub ctx: usize,
     pub fmt: session::Format,
     pub out: Option<String>,
@@ -27,6 +30,7 @@ pub fn search_args(args: &[String]) -> Result<SearchOpts, String> {
         case: false,
         method: false,
         app_only: false,
+        all: false,
         ctx: 0,
         fmt: session::Format::Text,
         out: None,
@@ -38,6 +42,7 @@ pub fn search_args(args: &[String]) -> Result<SearchOpts, String> {
             "--case" => s.case = true,
             "--method" => s.method = true,
             "--app-only" => s.app_only = true,
+            "--all" => s.all = true,
             "--context" => {
                 s.ctx = it
                     .next()
@@ -64,7 +69,7 @@ pub fn search_on(
     st: &session::State,
     a: &SearchOpts,
     words: &[String],
-) -> Result<(String, usize, &'static str), String> {
+) -> Result<(String, usize, String), String> {
     let [scope, rest @ ..] = words else {
         return Err("search needs a scope".into());
     };
@@ -72,16 +77,28 @@ pub fn search_on(
         format!("unknown scope {scope}: code string usages class res urls http secrets")
     })?;
     let mut m = session::Matcher::new(&rest.join(" "), scope, a.regex, a.case)?;
-    m.app_only = a.app_only;
+    // the API scopes default to app code only; --all opts back out, --app-only still works
+    m.app_only = a.app_only || (scope.query_optional() && !a.all);
     if scope.decompiles() && st.index.get().is_none() {
         st.build_index();
     }
-    let hits = session::search(st, &m, &session::Progress::default());
-    Ok((
-        session::export(&hits, a.ctx, a.method, a.fmt, |x| st.target_text(x)),
-        hits.len(),
-        scope.note(),
-    ))
+    let (hits, hidden) = session::search_stats(st, &m, &session::Progress::default());
+    let mut text = session::export(&hits, a.ctx, a.method, a.fmt, |x| st.target_text(x));
+    if a.fmt == session::Format::Text {
+        let head = session::search_summary(st, scope, &hits);
+        if !head.is_empty() {
+            text = head.join("\n") + "\n\n" + &text;
+        }
+    }
+    let mut note = scope.note().to_string();
+    if hidden > 0 {
+        let _ = write!(
+            note,
+            "\napp-only: skipped {hidden} library class{} (--all to include them)",
+            if hidden == 1 { "" } else { "es" }
+        );
+    }
+    Ok((text, hits.len(), note))
 }
 
 /// `apkscope search`: same engine as the viewer; results go to stdout or `--out`.
@@ -101,6 +118,7 @@ pub fn search(a: &SearchArgs, deobf: bool) -> Result<(), String> {
         case: a.case,
         method: a.method,
         app_only: a.app_only,
+        all: a.all,
         ctx: a.context,
         fmt,
         out: a.out.clone(),

@@ -810,7 +810,6 @@ impl Scope {
     }
 
     /// API scopes list everything they find; the query only narrows them
-    #[cfg(feature = "gui")]
     pub fn query_optional(self) -> bool {
         matches!(self, Scope::Urls | Scope::Http | Scope::Secrets)
     }
@@ -837,13 +836,13 @@ impl Scope {
                 "Searches decoded XML resources and the manifest, plus resource file names."
             }
             Scope::Urls => {
-                "Heuristic: finds URL-like string literals. Endpoints built at runtime, encrypted, downloaded from a config, or kept in native libraries won't be found, and some hits are documentation or ad URLs."
+                "Heuristic: finds URL-like string literals. Endpoints built at runtime, encrypted, downloaded from a config, or kept in native libraries won't be found, and some hits are documentation or ad URLs. App code only by default; --all includes library code."
             }
             Scope::Http => {
-                "Heuristic: finds common networking APIs (Retrofit, OkHttp, HttpURLConnection). Apps using other libraries, their own wrappers, native code or obfuscated networking may not show up, and library code shows up too."
+                "Heuristic: finds common networking APIs (Retrofit, OkHttp, HttpURLConnection). Apps using other libraries, their own wrappers, native code or obfuscated networking may not show up, and library code shows up too. App code only by default; --all includes library code."
             }
             Scope::Secrets => {
-                "Heuristic: finds well-known key formats and key-like names. A hit is not proof of a leaked secret (many keys are meant to be public), and keys that are encrypted, split or fetched at runtime won't be found."
+                "Heuristic: finds well-known key formats and key-like names. A hit is not proof of a leaked secret (many keys are meant to be public), and keys that are encrypted, split or fetched at runtime won't be found. App code only by default; --all includes library code."
             }
         }
     }
@@ -1056,18 +1055,30 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
 }
 
 pub fn search(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
+    search_stats(st, m, prog).0
+}
+
+/// `search` plus what the app-only filter hid: for `class`, the hidden name matches
+/// themselves; for the decompiling scopes, the library classes the index said could match
+/// but that were never decompiled. Callers print it so nothing disappears silently now
+/// that the API scopes default to app-only.
+pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usize) {
     let mut hits = Vec::new();
+    let mut hidden = 0usize;
     if m.scope == Scope::Class {
-        let keep = |k: usize| !m.app_only || st.origin[k] != Origin::Library;
-        hits.extend(
-            st.classes
-                .iter()
-                .enumerate()
-                .filter(|(k, c)| keep(*k) && m.line(&c.0))
-                .take(LIMIT)
-                .map(|(_, c)| (c.0.clone(), 0, String::new())),
-        );
-        return hits;
+        for (k, c) in st.classes.iter().enumerate() {
+            if !m.line(&c.0) {
+                continue;
+            }
+            if m.app_only && st.origin[k] == Origin::Library {
+                hidden += 1;
+                continue;
+            }
+            if hits.len() < LIMIT {
+                hits.push((c.0.clone(), 0, String::new()));
+            }
+        }
+        return (hits, hidden);
     }
     if matches!(
         m.scope,
@@ -1125,12 +1136,127 @@ pub fn search(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
     if m.scope.decompiles() {
         let mut list = candidates(st, m).unwrap_or_else(|| (0..st.classes.len()).collect());
         if m.app_only {
+            let before = list.len();
             list.retain(|&k| st.origin[k] != Origin::Library);
+            hidden += before - list.len();
         }
         hits.extend(scan(st, m, &list, prog));
     }
+    // first-party first for the API scopes: app code, then resources / native / other code,
+    // then known libraries. Stable, so the (target, line) order holds within each rank.
+    if matches!(m.scope, Scope::Urls | Scope::Http | Scope::Secrets) {
+        hits.sort_by_key(|h| target_rank(st, &h.0));
+    }
     hits.truncate(LIMIT);
-    hits
+    (hits, hidden)
+}
+
+/// 0 app code, 1 other code or a resource / native target, 2 known library: the order the
+/// API scopes rank their hits by.
+fn target_rank(st: &State, t: &str) -> u8 {
+    st.find(t).map_or(1, |k| match st.origin[k] {
+        Origin::App => 0,
+        Origin::Other => 1,
+        Origin::Library => 2,
+    })
+}
+
+/// The source label and rank of a hit's target: code by origin, or "resources" / "native".
+fn hit_kind(st: &State, t: &str) -> (&'static str, u8) {
+    if let Some(k) = st.find(t) {
+        match st.origin[k] {
+            Origin::App => ("app code", 0),
+            Origin::Other => ("other code", 1),
+            Origin::Library => ("library code", 2),
+        }
+    } else if t.starts_with("lib/") {
+        ("native", 1)
+    } else {
+        ("resources", 1)
+    }
+}
+
+/// Distinct URL hosts among these hits.
+#[cfg(any(test, feature = "gui"))]
+pub fn host_count(hits: &[Hit]) -> usize {
+    let re = regex::Regex::new(r#"(?:https?|wss?)://([^/\s"'<>\\]+)"#).unwrap();
+    let mut set = std::collections::BTreeSet::new();
+    for (_, _, t) in hits {
+        if let Some(c) = re.captures(t) {
+            set.insert(c[1].to_string());
+        }
+    }
+    set.len()
+}
+
+/// One host's row of the `urls` summary.
+#[derive(Default)]
+struct HostRow {
+    hits: usize,
+    by_source: BTreeMap<&'static str, usize>,
+    /// referenced from app-owned code
+    app: bool,
+}
+
+/// One-line summaries for the API scopes, shown above the results in text output: `urls`
+/// gets a host table (per-host counts by source, app-referenced hosts first), `http` and
+/// `secrets` a source count. CSV/JSON stay machine-shaped.
+pub fn search_summary(st: &State, scope: Scope, hits: &[Hit]) -> Vec<String> {
+    let mut out = Vec::new();
+    if hits.is_empty() {
+        return out;
+    }
+    if scope == Scope::Urls {
+        let mut hosts: BTreeMap<String, HostRow> = BTreeMap::new();
+        let mut bare = 0usize;
+        let re = regex::Regex::new(r#"(?:https?|wss?)://([^/\s"'<>\\]+)"#).unwrap();
+        for (t, _, text) in hits {
+            let (kind, rank) = hit_kind(st, t);
+            let Some(c) = re.captures(text) else {
+                bare += 1;
+                continue;
+            };
+            let e = hosts.entry(c[1].to_string()).or_default();
+            e.hits += 1;
+            *e.by_source.entry(kind).or_insert(0) += 1;
+            e.app |= rank == 0;
+        }
+        let mut list: Vec<(String, HostRow)> = hosts.into_iter().collect();
+        list.sort_by(|a, b| {
+            b.1.app
+                .cmp(&a.1.app)
+                .then_with(|| b.1.hits.cmp(&a.1.hits))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        out.push(format!(
+            "// hosts ({}), app-referenced first{}",
+            list.len(),
+            if bare > 0 {
+                format!(
+                    ", {bare} hit{} without a host",
+                    if bare == 1 { "" } else { "s" }
+                )
+            } else {
+                String::new()
+            }
+        ));
+        for (h, row) in &list {
+            let parts: Vec<String> = row
+                .by_source
+                .iter()
+                .map(|(k, c)| format!("{k} {c}"))
+                .collect();
+            out.push(format!("  {h}    {}    {}", row.hits, parts.join(", ")));
+        }
+    } else if matches!(scope, Scope::Http | Scope::Secrets) {
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for (t, _, _) in hits {
+            *counts.entry(hit_kind(st, t).0).or_insert(0) += 1;
+        }
+        let parts: Vec<String> = counts.iter().map(|(k, c)| format!("{k} {c}")).collect();
+        out.push(format!("// hits by source: {}", parts.join(", ")));
+    }
+    out
 }
 
 /// Read `list` (class ids) on all cores and keep matching lines. A scan over every class with

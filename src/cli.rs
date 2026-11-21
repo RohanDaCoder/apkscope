@@ -177,7 +177,7 @@ Fast, stateless queries (parallel, no index, no cache) - built for scripts and A
   apkscope diff     <old.apk> <new.apk> [--strings]   added / removed classes, methods, permissions
 Indexed + cached (first run builds it, later runs reuse the disk cache):
   apkscope decompile <apk>                 every class, to stdout
-  apkscope search <apk> <scope> [query] [--regex] [--case] [--app-only] [--context N] [--method]
+  apkscope search <apk> <scope> [query] [--regex] [--case] [--app-only] [--all] [--context N] [--method]
                   [--format txt|csv|json]   scopes: code string usages class res urls http secrets
   apkscope info <apk>                      package, SDKs, permissions, exported components
   apkscope resource <apk> <res/path.xml>
@@ -657,6 +657,9 @@ pub struct SearchArgs {
     pub case: bool,
     #[arg(long = "app-only")]
     pub app_only: bool,
+    /// include library code in urls / http / secrets, which default to app code only
+    #[arg(long)]
+    pub all: bool,
     #[arg(long = "context", value_name = "N", default_value_t = 0)]
     pub context: usize,
     #[arg(long = "method")]
