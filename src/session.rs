@@ -1912,7 +1912,11 @@ fn sequential_run(v: &str) -> bool {
     let mut prev = 0u32;
     for (i, c) in v.chars().map(|c| c as u32).enumerate() {
         if i > 0 {
-            run = if c == prev + 1 || c + 1 == prev { run + 1 } else { 1 };
+            run = if c == prev + 1 || c + 1 == prev {
+                run + 1
+            } else {
+                1
+            };
             if run >= 5 {
                 return true;
             }
