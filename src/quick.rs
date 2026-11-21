@@ -512,10 +512,13 @@ pub fn flutter(
     let list_libs = |out: &mut Vec<String>| {
         out.push(String::new());
         out.push("native libraries:".into());
-        out.extend(
-            libs.iter()
-                .map(|(n, s)| format!("  {n}  ({} KB)", s / 1024)),
-        );
+        out.extend(libs.iter().map(|(n, s)| {
+            format!(
+                "  {n}  ({} KB){}",
+                s / 1024,
+                session::native_lib_meaning(n).map_or_else(String::new, |m| format!("  — {m}"))
+            )
+        }));
     };
     let Some(app) = app else {
         list_libs(&mut out);

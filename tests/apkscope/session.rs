@@ -207,3 +207,87 @@ fn search_urls_first_party_default() {
     assert!(sum[2].contains("ads.gstatic.net"), "{sum:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `info` shows the native-library meanings and the dex-measured code share, and `scan`
+/// marks URL hits that carry a key-like parameter — the secrets/URL cross-reference.
+#[test]
+fn info_native_libs_sdk_share_and_scan_crossref() {
+    use std::io::Write as _;
+    // the dictionary: one line per known library, nothing for unknowns
+    assert_eq!(
+        native_lib_meaning("lib/arm64-v8a/libpdfium.so"),
+        Some("in-app PDF rendering")
+    );
+    assert_eq!(native_lib_meaning("libflutter.so"), Some("Flutter engine"));
+    assert_eq!(
+        native_lib_meaning("lib/x86_64/libjiagu.so"),
+        Some("packer: 360 Jiagu")
+    );
+    assert_eq!(native_lib_meaning("lib/arm64-v8a/libfoo.so"), None);
+
+    let app = r#"
+.class public Lcom/example/app/Net;
+.super Ljava/lang/Object;
+
+.field public static final CALL:Ljava/lang/String; = "https://api.example.com/v1/x?key=abc1234567890"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
+.method public static call()V
+    .locals 0
+    return-void
+.end method
+"#;
+    let lib = r#"
+.class public Landroidx/core/Widget;
+.super Ljava/lang/Object;
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let classes = [app, lib]
+        .iter()
+        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
+        .collect::<Vec<_>>();
+    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dir = std::env::temp_dir().join(format!("apkscope-info-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let apk = dir.join("fixture.apk");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&apk).unwrap());
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("classes.dex", stored).unwrap();
+        z.write_all(&dex).unwrap();
+        z.finish().unwrap();
+    }
+    let st = load(apk.to_str().unwrap(), false).unwrap();
+    st.build_index();
+    // code share, counted from the DEX: the app class declares 2 methods, the library 1
+    let share = sdk_share(&st);
+    assert!(share.contains(&("androidx".to_string(), 1, 1)), "{share:?}");
+    assert!(
+        share
+            .iter()
+            .any(|(g, c, m)| g == "other code" && *c == 1 && *m == 2),
+        "{share:?}"
+    );
+    // the overview carries both new sections
+    let text = overview(&st);
+    assert!(text.contains("code by origin"), "{text}");
+    assert!(text.contains("androidx"), "{text}");
+    // scan marks the URL that carries a key-like parameter
+    let scan = crate::re::scan(&st);
+    assert!(
+        scan.contains("1 carrying a key-like parameter") && scan.contains("<= key-like"),
+        "{scan}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

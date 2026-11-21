@@ -172,6 +172,31 @@ pub fn origin(name: &str, package: &str) -> Origin {
     }
 }
 
+/// One-line meanings of well-known native libraries, shared by `info` and `flutter`. Small
+/// and factual on purpose: one line per library, nothing for unknowns.
+pub fn native_lib_meaning(path: &str) -> Option<&'static str> {
+    let name = path.rsplit('/').next()?.to_ascii_lowercase();
+    Some(match name.as_str() {
+        "libpdfium.so" | "libmupdf.so" | "libmupdf_java.so" => "in-app PDF rendering",
+        "libapp.so" => "Flutter Dart AOT snapshot",
+        "libflutter.so" => "Flutter engine",
+        "libunity.so" => "Unity engine",
+        "libil2cpp.so" => "Unity IL2CPP (C# compiled to native code)",
+        "libhermes.so" => "React Native Hermes JS engine",
+        "libjsc.so" => "React Native JavaScriptCore engine",
+        "libc++_shared.so" => "NDK C++ runtime",
+        "libjiagu.so" => "packer: 360 Jiagu",
+        "libnesec.so" => "packer: NetEase",
+        "libsecshell.so" | "libsecexe.so" => "packer: Bangcle",
+        "libmobisec.so" => "packer: Tencent Legu",
+        "libtprt.so" => "Tencent X5 WebView",
+        _ if name.starts_with("libjiagu_") => "packer: 360 Jiagu",
+        _ if name.starts_with("libdexhelper") => "packer: SecNeo",
+        _ if name.starts_with("libshella") => "packer: SecNeo",
+        _ => return None,
+    })
+}
+
 pub struct State {
     pub path: String,
     /// the APK actually read (differs from `path` for bundles and .dex)
@@ -850,7 +875,7 @@ impl Scope {
 
 const URL_RE: &str = r#""((?:https?|wss?)://[^"\s]+|/(?:api|v\d+|rest|graphql|auth|oauth|user|users|login)\b[^"\s]*)""#;
 const HTTP_RE: &str = r"@(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP|Headers?|Query|QueryMap|Path|Body|Field|FieldMap|FormUrlEncoded|Multipart|Part|Url)\b|\bRequest\.Builder|\.url\(|\.newCall\(|HttpURLConnection|openConnection\(|\.addHeader\(|\.header\(|Retrofit\.Builder|\.baseUrl\(|setRequestMethod\(|HttpUrl\.(parse|get)\(|WebSocket";
-const SECRET_RE: &str = r#"AIza[0-9A-Za-z_\-]{35}|AKIA[0-9A-Z]{16}|(sk|pk|rk)_(live|test)_[0-9A-Za-z]{16,}|gh[pousr]_[0-9A-Za-z]{36}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[0-9A-Za-z_\-]{10,}\.[0-9A-Za-z_\-]{10,}|(?i)"(authorization|bearer ?|x-api-key|api[_-]?key|x-auth-token|client[_-]?secret|access[_-]?token)"|(?i)\b\w*(api_?key|secret|token|password|passwd|client_?id|private_?key)\w*\s*=\s*"[^"]{6,}"|(?i)name="[^"]*(api_?key|secret|token|client_?id|app_?id|private_?key)[^"]*">[^<\s]{6,}<"#;
+pub(crate) const SECRET_RE: &str = r#"AIza[0-9A-Za-z_\-]{35}|AKIA[0-9A-Z]{16}|(sk|pk|rk)_(live|test)_[0-9A-Za-z]{16,}|gh[pousr]_[0-9A-Za-z]{36}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[0-9A-Za-z_\-]{10,}\.[0-9A-Za-z_\-]{10,}|(?i)"(authorization|bearer ?|x-api-key|api[_-]?key|x-auth-token|client[_-]?secret|access[_-]?token)"|(?i)\b\w*(api_?key|secret|token|password|passwd|client_?id|private_?key)\w*\s*=\s*"[^"]{6,}"|(?i)name="[^"]*(api_?key|secret|token|client_?id|app_?id|private_?key)[^"]*">[^<\s]{6,}<"#;
 /// prefilter for HTTP: types and member names a matching line would mention
 const HTTP_TYPES_RE: &str = r"retrofit2/|okhttp3/(Request|HttpUrl|WebSocket|Call|OkHttpClient)|Https?URLConnection|WebSocket";
 const HTTP_MEMBERS: [&str; 7] = [
@@ -1457,6 +1482,32 @@ pub fn attr(s: &str, name: &str) -> Option<String> {
     Some(s[k..].split('"').next()?.to_string())
 }
 
+/// Classes and methods per code source, counted from the DEX: the app's own packages,
+/// unknown (often obfuscated) code, and each known SDK prefix. Top counts first — the
+/// "vendor noise vs mine" triage for big multi-dex apps.
+pub fn sdk_share(st: &State) -> Vec<(String, usize, usize)> {
+    let mut rows: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (k, (name, d, c)) in st.classes.iter().enumerate() {
+        let group = match st.origin[k] {
+            Origin::App => "app code".to_string(),
+            Origin::Other => "other code".to_string(),
+            Origin::Library => LIBRARIES
+                .iter()
+                .find(|p| name.starts_with(*p))
+                .map_or("libraries".to_string(), |p| {
+                    p.trim_end_matches('.').to_string()
+                }),
+        };
+        let e = rows.entry(group).or_default();
+        e.0 += 1;
+        e.1 += st.dexes[*d].class_data(*c).map_or(0, |x| x.methods.len());
+    }
+    let mut out: Vec<(String, usize, usize)> =
+        rows.into_iter().map(|(g, (c, m))| (g, c, m)).collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
 /// Security-relevant summary of the manifest and APK layout, as readable text.
 pub fn overview(st: &State) -> String {
     let m = st
@@ -1501,6 +1552,10 @@ pub fn overview(st: &State) -> String {
         st.methods,
         st.dexes.len()
     );
+    let _ = writeln!(o, "\n// code by origin (classes / methods), top first");
+    for (g, c, m) in sdk_share(st).into_iter().take(12) {
+        let _ = writeln!(o, "{g:<28}{c:>6} / {m}");
+    }
     if let Some((_, e)) = elems.iter().find(|x| x.0 == "application") {
         let _ = writeln!(o, "\n// application flags");
         for f in [
@@ -1621,9 +1676,12 @@ pub fn overview(st: &State) -> String {
         .iter()
         .filter(|e| e.starts_with("lib/") && e.ends_with(".so"))
         .collect();
-    let _ = writeln!(o, "\n// native libraries ({})", libs.len());
+    let _ = writeln!(o, "\n// native libraries ({}), with meanings", libs.len());
     for l in &libs {
-        let _ = writeln!(o, "{l}");
+        let _ = match native_lib_meaning(l) {
+            Some(m) => writeln!(o, "{l}    {m}"),
+            None => writeln!(o, "{l}"),
+        };
     }
     let assets = st
         .entries

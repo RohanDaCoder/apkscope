@@ -912,6 +912,13 @@ pub fn scan(st: &crate::session::State) -> String {
     if st.index.get().is_none() {
         st.build_index();
     }
+    // URLs that carry a key or token in their query string, or an embedded key literal: the
+    // cross-section worth a second look, marked where it appears
+    let keyish = regex::Regex::new(
+        r#"(?i)[?&](api_?key|key|token|secret|client_?id|app_?id|access_?token|sign)="#,
+    )
+    .ok();
+    let secret = regex::Regex::new(crate::session::SECRET_RE).ok();
     for (scope, title) in [
         (crate::session::Scope::Secrets, "keys & secrets"),
         (crate::session::Scope::Urls, "URLs"),
@@ -921,9 +928,29 @@ pub fn scan(st: &crate::session::State) -> String {
         };
         m.app_only = true;
         let hits = crate::session::search(st, &m, &Default::default());
-        let _ = writeln!(o, "\n// {title} in app code ({})", hits.len());
+        let marked = |t: &str| {
+            scope == crate::session::Scope::Urls
+                && (keyish.as_ref().is_some_and(|re| re.is_match(t))
+                    || secret.as_ref().is_some_and(|re| re.is_match(t)))
+        };
+        let keys = hits.iter().filter(|h| marked(&h.2)).count();
+        let _ = writeln!(
+            o,
+            "\n// {title} in app code ({}{})",
+            hits.len(),
+            if keys > 0 {
+                format!(", {keys} carrying a key-like parameter")
+            } else {
+                String::new()
+            }
+        );
         for (c, line, text) in hits.iter().take(200) {
-            let _ = writeln!(o, "{c}:{line}    {}", text.trim());
+            let _ = writeln!(
+                o,
+                "{c}:{line}    {}{}",
+                text.trim(),
+                if marked(text) { "    <= key-like" } else { "" }
+            );
         }
         if hits.len() > 200 {
             let _ = writeln!(
