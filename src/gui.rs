@@ -2003,7 +2003,7 @@ impl App {
             edit(ui, &mut self.strings_q, "Filter strings…", f32::INFINITY);
             // list everything at first, then refilter as the user types (stale replies are dropped)
             // the index adds usage counts: list again once it's ready
-            let key = format!("{} {}", self.strings_q, st.index.get().is_some());
+            let key = format!("{}\0{}", self.strings_q, st.index.get().is_some());
             if self.strings_for.as_deref() != Some(key.as_str()) {
                 self.strings_for = Some(key.clone());
                 let (tx, q) = (self.tx.clone(), self.strings_q.clone());
