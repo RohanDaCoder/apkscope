@@ -1499,13 +1499,32 @@ pub fn summarize(dets: &[Detection]) -> String {
     )
 }
 
+/// Evidence kinds in the order the report prints them: code first, then manifest,
+/// then packaging, then corroborating strings.
+const EVIDENCE_ORDER: &[&str] = &[
+    "dex_package",
+    "elf_symbol",
+    "native_lib",
+    "maven",
+    "banner",
+    "snapshot",
+    "manifest_meta",
+    "activity",
+    "service",
+    "permission",
+    "asset",
+    "url",
+];
+
 /// Human-readable text report: flat lines, blank-string section separators, the same
-/// shape `quick::flutter` and `re::scan` use.
+/// shape `quick::flutter` and `re::scan` use. Column widths assume `--list`'s layout:
+/// a header row lines the columns up for scanning, evidence is grouped by kind with
+/// repeated `elf_symbol` values collapsed into one counted line.
 pub fn text_report(an: &Analysis, strings: bool) -> Vec<String> {
     let detections = &an.detections;
     let mut out = Vec::new();
     out.push(format!(
-        "// Fingerprints of {} — {} known service{} matched",
+        "// Fingerprints of {} - {} known service{} matched",
         an.file,
         detections.len(),
         if detections.len() == 1 { "" } else { "s" }
@@ -1514,40 +1533,44 @@ pub fn text_report(an: &Analysis, strings: bool) -> Vec<String> {
     if detections.is_empty() {
         out.push("no known fingerprints matched".into());
         out.push(String::new());
-    }
-    for d in detections {
-        let ver = d
-            .version
-            .as_deref()
-            .map(|v| format!("  {v}"))
-            .unwrap_or_default();
+    } else {
         out.push(format!(
-            "  {:<28} {:<12} {:<10}{}{}",
-            d.id,
-            d.category.as_str(),
-            d.confidence.as_str(),
-            ver,
-            if d.origin == Origin::Exodus {
-                "  [exodus]"
-            } else {
-                ""
-            }
+            "  {:<26} {:<12} {:<10} {}",
+            "SDK", "CATEGORY", "CONFIDENCE", "VERSION"
         ));
-        for e in &d.evidence {
-            out.push(format!(
-                "      {:<13} {}{}",
-                e.kind,
-                e.value,
-                if e.count > 1 {
-                    format!(" (x{})", e.count)
-                } else {
-                    String::new()
-                }
-            ));
+        // group by category: the report reads as a stack of like-for-like entries
+        let mut by_cat: BTreeMap<&'static str, Vec<&Detection>> = BTreeMap::new();
+        for d in detections {
+            by_cat
+                .entry(d.category.as_str())
+                .or_default()
+                .push(d);
         }
-    }
-    if !detections.is_empty() {
-        out.push(String::new());
+        for (cat, list) in by_cat {
+            out.push(format!("  // {cat} ({}):", list.len()));
+            for d in list {
+                out.push(format!(
+                    "  {:<26} {:<12} {:<10} {}{}",
+                    d.id,
+                    d.category.as_str(),
+                    d.confidence.as_str(),
+                    d.version.as_deref().unwrap_or("-"),
+                    if d.origin == Origin::Exodus {
+                        "  [exodus]"
+                    } else {
+                        ""
+                    }
+                ));
+                out.extend(evidence_lines(d));
+            }
+            out.push(String::new());
+        }
+        // trailing spaces never survive `{:<10}` padding of a short last column
+        for line in &mut out {
+            while line.ends_with(' ') {
+                line.pop();
+            }
+        }
     }
     out.push(format!(
         "obfuscation: {} ({}% of classes look R8/ProGuard-renamed)",
@@ -1568,46 +1591,131 @@ pub fn text_report(an: &Analysis, strings: bool) -> Vec<String> {
     out
 }
 
+/// Evidence of one detection, printed in `EVIDENCE_ORDER` order (code first, then
+/// manifest, then packaging, then corroborating strings). `elf_symbol` lines are
+/// capped at 3 with a `(xN more, M unique)` tail — big media/camera SDKs export
+/// dozens of JNI entrypoints and one hit is as good as ten for identification.
+fn ordered_evidence(d: &Detection) -> Vec<Evidence> {
+    let mut merged: Vec<Evidence> = Vec::new();
+    for e in &d.evidence {
+        match merged
+            .iter_mut()
+            .find(|m| m.kind == e.kind && m.value == e.value)
+        {
+            Some(m) => m.count += e.count,
+            None => merged.push(e.clone()),
+        }
+    }
+    merged.sort_by(|a, b| {
+        let ka = EVIDENCE_ORDER
+            .iter()
+            .position(|k| *k == a.kind)
+            .unwrap_or(EVIDENCE_ORDER.len());
+        let kb = EVIDENCE_ORDER
+            .iter()
+            .position(|k| *k == b.kind)
+            .unwrap_or(EVIDENCE_ORDER.len());
+        ka.cmp(&kb).then_with(|| a.value.cmp(&b.value))
+    });
+    merged
+}
+
+/// Print evidence lines for one detection, `elf_symbol` capped at 3 lines.
+fn evidence_lines(d: &Detection) -> Vec<String> {
+    let ev = ordered_evidence(d);
+    let one = |e: &Evidence| {
+        format!(
+            "      {:<13} {}{}",
+            e.kind,
+            e.value,
+            if e.count > 1 {
+                format!(" (x{})", e.count)
+            } else {
+                String::new()
+            }
+        )
+    };
+    let syms = ev.iter().filter(|e| e.kind == "elf_symbol").count();
+    let extra = syms.saturating_sub(3);
+    let mut out = Vec::new();
+    let mut shown_syms = 0usize;
+    for e in &ev {
+        if e.kind == "elf_symbol" {
+            if shown_syms >= 3 {
+                continue;
+            }
+            out.push(one(e));
+            shown_syms += 1;
+            if shown_syms == 3 && extra > 0 {
+                out.push(format!("      {:<13} x{extra} more JNI symbols", "..."));
+            }
+        } else {
+            out.push(one(e));
+        }
+    }
+    out
+}
+
 /// JSON report, hand-built the way `session::export` does (no serde derives).
-pub fn json_report(detections: &[Detection]) -> String {
-    let mut out = String::from("[\n");
-    for (k, d) in detections.iter().enumerate() {
+/// One object: the whole-APK context plus every detection — `--json` feeds scripts,
+/// so the text report's grouping and caps do not apply here.
+pub fn json_report(an: &Analysis) -> String {
+    let mut out = String::from("{\n");
+    let _ = write!(
+        out,
+        "  \"file\": {},\n",
+        session::json_str(&an.file)
+    );
+    let _ = write!(out, "  \"count\": {},\n", an.detections.len());
+    let _ = write!(
+        out,
+        "  \"obfuscation\": {},\n",
+        session::json_str(if an.obf_ratio > 0.5 {
+            "heavy"
+        } else if an.obf_ratio > 0.2 {
+            "moderate"
+        } else {
+            "light"
+        })
+    );
+    let _ = write!(
+        out,
+        "  \"obfuscated_class_ratio\": {:.2},\n",
+        an.obf_ratio
+    );
+    out.push_str("  \"sdks\": [");
+    for (k, d) in an.detections.iter().enumerate() {
         if k > 0 {
             out.push_str(",\n");
         }
-        out.push('{');
-        let _ = write!(out, "\"id\":{},", session::json_str(d.id));
-        let _ = write!(
-            out,
-            "\"category\":{},",
-            session::json_str(d.category.as_str())
-        );
-        let _ = write!(
-            out,
-            "\"confidence\":{},",
-            session::json_str(d.confidence.as_str())
-        );
-        let _ = write!(out, "\"origin\":{},", session::json_str(d.origin.as_str()));
+        out.push_str("    {");
+        let _ = write!(out, "\"id\": {},", session::json_str(d.id));
+        let _ = write!(out, "\"category\": {},", session::json_str(d.category.as_str()));
+        let _ = write!(out, "\"confidence\": {},", session::json_str(d.confidence.as_str()));
+        let _ = write!(out, "\"origin\": {},", session::json_str(d.origin.as_str()));
         if let Some(id) = d.exodus_id {
-            let _ = write!(out, "\"exodus_id\":{id},");
+            let _ = write!(out, "\"exodus_id\": {id},");
         }
         if let Some(v) = &d.version {
-            let _ = write!(out, "\"version\":{},", session::json_str(v));
+            let _ = write!(out, "\"version\": {},", session::json_str(v));
         }
-        out.push_str("\"evidence\":[");
+        out.push_str("\"evidence\": [");
         for (j, e) in d.evidence.iter().enumerate() {
             if j > 0 {
                 out.push(',');
             }
             out.push('{');
-            let _ = write!(out, "\"type\":{},", session::json_str(e.kind));
-            let _ = write!(out, "\"value\":{},", session::json_str(&e.value));
+            let _ = write!(out, "\"type\": {},", session::json_str(e.kind));
+            let _ = write!(out, "\"value\": {},", session::json_str(&e.value));
             let _ = write!(out, "\"count\":{}", e.count);
             out.push('}');
         }
         out.push_str("]}");
     }
-    out.push_str("\n]\n");
+    if !an.detections.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("  ]\n}\n");
     out
 }
 
@@ -1710,11 +1818,9 @@ pub fn diff_report(this: &str, other: &str, a: &[Detection], b: &[Detection]) ->
 
 // ─────────────────────────── CLI plumbing ───────────────────────────
 
-/// `apkscope fingerprint <apk>` — reads the global `--json` / `-o` flags.
-pub fn fingerprint(a: &crate::cli::FingerprintArgs, apk: &str) -> Result<(), String> {
-    if a.list {
-        return cli::emit_list(&list_catalog());
-    }
+/// `apkscope fingerprint <apk>` — reads the global `--json` / `-o` flags. `--list`
+/// needs no APK, so the entry point takes the whole arg struct and validates here.
+pub fn fingerprint(a: &crate::cli::FingerprintArgs) -> Result<(), String> {
     let catalog = match (a.exodus, a.all) {
         (true, _) => Catalog::Exodus,
         (false, true) => Catalog::Both,
@@ -1726,11 +1832,34 @@ pub fn fingerprint(a: &crate::cli::FingerprintArgs, apk: &str) -> Result<(), Str
     {
         return Err(format!("unknown category '{}' (see fingerprint --list)", c));
     }
+    if a.list {
+        return if cli::out_opts().json {
+            cli::emit(&json_catalog(catalog, category))
+        } else {
+            cli::emit_list(&list_catalog(catalog, category))
+        };
+    }
+    let Some(apk) = a.apk.as_deref() else {
+        return Err("fingerprint needs an APK (or --list to print the catalogs)".into());
+    };
     let st = cli::load(apk, false)?;
     if let Some(other) = &a.diff {
         let st2 = cli::load(other, false)?;
         let a1 = analyze(&st, a.strings, catalog, category);
         let a2 = analyze(&st2, a.strings, catalog, category);
+        if cli::out_opts().json {
+            let mut o = json_diff(&a1.file, &a2.file, &a1.detections, &a2.detections);
+            // splice the snapshots in before the closing brace: `o` ends with "]\n}\n"
+            let snap = format!(
+                ",\n  \"snapshot\": {{\"from\": {}, \"to\": {}}}",
+                session::json_str(&snapshot(&a1.detections)),
+                session::json_str(&snapshot(&a2.detections))
+            );
+            if let Some(pos) = o.trim_end().rfind('}') {
+                o.insert_str(pos, &snap);
+            }
+            return cli::emit(&o);
+        }
         let mut lines = diff_report(&a1.file, &a2.file, &a1.detections, &a2.detections);
         if a.snapshot {
             lines.push(String::new());
@@ -1740,58 +1869,59 @@ pub fn fingerprint(a: &crate::cli::FingerprintArgs, apk: &str) -> Result<(), Str
                 snapshot(&a2.detections)
             ));
         }
-        return if cli::out_opts().json {
-            cli::emit(&json_diff(&a1.detections, &a2.detections))
-        } else {
-            cli::emit_list(&lines)
-        };
+        return cli::emit_list(&lines);
     }
     let an = analyze(&st, a.strings, catalog, category);
+    if cli::out_opts().json {
+        // `--snapshot --json`: the full report plus the snapshot, nothing dropped
+        let mut o = json_report(&an);
+        if a.snapshot {
+            let splice = format!(
+                ",\n  \"snapshot\": {}",
+                session::json_str(&snapshot(&an.detections))
+            );
+            if let Some(pos) = o.trim_end().rfind('}') {
+                o.insert_str(pos, &splice);
+            }
+        }
+        return cli::emit(&o);
+    }
+    let mut lines = text_report(&an, a.strings);
     if a.snapshot {
-        let mut lines = text_report(&an, a.strings);
         lines.push(String::new());
         lines.push(format!("snapshot: {}", snapshot(&an.detections)));
-        return if cli::out_opts().json {
-            cli::emit(&format!(
-                "{{\"snapshot\":{}}}\n",
-                session::json_str(&snapshot(&an.detections))
-            ))
-        } else {
-            cli::emit_list(&lines)
-        };
     }
-    if cli::out_opts().json {
-        cli::emit(&json_report(&an.detections))
-    } else {
-        cli::emit_list(&text_report(&an, a.strings))
-    }
+    cli::emit_list(&lines)
 }
 
-fn json_diff(a: &[Detection], b: &[Detection]) -> String {
+fn json_diff(this: &str, other: &str, a: &[Detection], b: &[Detection]) -> String {
     let (added, removed, changed) = diff(a, b);
     let mut o = String::from("{\n");
+    let _ = write!(o, "  \"from\": {},\n", session::json_str(this));
+    let _ = write!(o, "  \"to\": {},\n", session::json_str(other));
     let one = |d: &Detection| {
-        format!(
-            "{{\"id\":{},\"category\":{},\"confidence\":{}}}",
+        let mut s = format!(
+            "{{\"id\": {},\"category\": {},\"confidence\": {}",
             session::json_str(d.id),
             session::json_str(d.category.as_str()),
             session::json_str(d.confidence.as_str())
-        )
+        );
+        if let Some(v) = &d.version {
+            s.push_str(&format!(",\"version\": {}", session::json_str(v)));
+        }
+        s.push('}');
+        s
     };
-    o += "  \"added\": [";
+    o.push_str("  \"added\": [");
     o += &added.iter().map(|d| one(d)).collect::<Vec<_>>().join(", ");
-    o += "],\n  \"removed\": [";
-    o += &removed
-        .iter()
-        .map(|d| one(d))
-        .collect::<Vec<_>>()
-        .join(", ");
-    o += "],\n  \"changed\": [";
+    o.push_str("],\n  \"removed\": [");
+    o += &removed.iter().map(|d| one(d)).collect::<Vec<_>>().join(", ");
+    o.push_str("],\n  \"changed\": [");
     o += &changed
         .iter()
         .map(|(old, new)| {
             format!(
-                "{{\"id\":{},\"from\":{},\"to\":{}}}",
+                "{{\"id\": {},\"from\": {},\"to\": {}}}",
                 session::json_str(new.id),
                 session::json_str(old.version.as_deref().unwrap_or("?")),
                 session::json_str(new.version.as_deref().unwrap_or("?"))
@@ -1799,50 +1929,145 @@ fn json_diff(a: &[Detection], b: &[Detection]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    o += "]\n}\n";
+    o.push_str("]\n}\n");
     o
 }
 
 /// `apkscope fingerprint --list` — print the catalogs, no APK needed.
-pub fn list_catalog() -> Vec<String> {
+/// Honors `--all` / `--exodus` (which catalogs to list) and `--category`.
+pub fn list_catalog(catalog: Catalog, category: Option<Category>) -> Vec<String> {
     let mut out = Vec::new();
     out.push(format!(
-        "apkscope fingerprint catalogs: {} curated + {} Exodus trackers (ODbL, https://exodus-privacy.eu.org)",
-        FINGERPRINTS.len(),
-        exodus::TRACKERS.len()
+        "curated: {} fingerprints (ODbL applies to the Exodus list below)",
+        FINGERPRINTS.len()
     ));
-    out.push(String::new());
-    let mut by_cat: BTreeMap<&'static str, Vec<&Fingerprint>> = BTreeMap::new();
-    for fp in FINGERPRINTS {
-        by_cat.entry(fp.category.as_str()).or_default().push(fp);
-    }
-    out.push("curated:".into());
-    for (cat, list) in by_cat {
-        out.push(format!("  {} ({}):", cat, list.len()));
-        for fp in list {
-            out.push(format!(
-                "    {:<28} dex={} libs={} meta={} maven={}",
-                fp.id,
-                fp.dex.len(),
-                fp.native_libs.len(),
-                fp.manifest_meta.len(),
-                fp.maven.len()
-            ));
+    let curated: Vec<&Fingerprint> = FINGERPRINTS
+        .iter()
+        .filter(|fp| category.is_none_or(|c| fp.category == c))
+        .collect();
+    list_rows(&curated, &mut out);
+    if matches!(catalog, Catalog::Exodus | Catalog::Both) {
+        let trackers: Vec<&exodus::ExodusTracker> = exodus::TRACKERS
+            .iter()
+            .filter(|t| category.is_none_or(|c| t.cat == c))
+            .collect();
+        out.push(String::new());
+        out.push(format!(
+            "exodus: {} trackers (c) Exodus Privacy contributors, ODbL 1.0, https://exodus-privacy.eu.org",
+            trackers.len()
+        ));
+        list_rows_exodus(&trackers, &mut out);
+    } else {
+        out.push(String::new());
+        out.push(format!(
+            "exodus: {} trackers -- pass --all or --exodus to include (ODbL 1.0, https://exodus-privacy.eu.org)",
+            exodus::TRACKERS.len()
+        ));
+        let mut ex_by_cat: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for t in exodus::TRACKERS {
+            if category.is_none_or(|c| t.cat == c) {
+                *ex_by_cat.entry(t.cat.as_str()).or_default() += 1;
+            }
+        }
+        for (cat, n) in ex_by_cat {
+            out.push(format!("  {cat}: {n}"));
         }
     }
-    out.push(String::new());
-    out.push(format!(
-        "exodus ({}): use --exodus / --all to include",
-        exodus::TRACKERS.len()
-    ));
-    let mut ex_by_cat: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for t in exodus::TRACKERS {
-        *ex_by_cat.entry(t.cat.as_str()).or_default() += 1;
-    }
-    for (cat, n) in ex_by_cat {
-        out.push(format!("  {}: {}", cat, n));
-    }
     out
+}
+
+/// Rows of the `--list` table: one per entry, grouped by category, one blank line
+/// between categories. Same layout for curated and Exodus entries so the columns line up.
+fn list_rows(entries: &[&Fingerprint], out: &mut Vec<String>) {
+    let mut by_cat: BTreeMap<&'static str, Vec<&Fingerprint>> = BTreeMap::new();
+    for fp in entries {
+        by_cat.entry(fp.category.as_str()).or_default().push(fp);
+    }
+    for (cat, list) in by_cat {
+        out.push(format!("  {cat} ({}):", list.len()));
+        for fp in list {
+            out.push(format!("    {}", fp.id));
+        }
+    }
+}
+
+fn list_rows_exodus(trackers: &[&exodus::ExodusTracker], out: &mut Vec<String>) {
+    let mut by_cat: BTreeMap<&'static str, Vec<&exodus::ExodusTracker>> = BTreeMap::new();
+    for t in trackers {
+        by_cat.entry(t.cat.as_str()).or_default().push(t);
+    }
+    for (cat, list) in by_cat {
+        out.push(format!("  {cat} ({}):", list.len()));
+        for t in list {
+            out.push(format!("    {}", t.name));
+        }
+    }
+}
+
+/// JSON catalog listing for `--list --json`: the same rows with their signal counts
+/// and Maven coordinates, grouped by origin. `emitted` limits long arrays.
+pub fn json_catalog(catalog: Catalog, category: Option<Category>) -> String {
+    let mut o = String::from("{\n");
+    let _ = write!(
+        o,
+        "  \"counts\": {{\"curated\": {}, \"exodus\": {}}},\n",
+        FINGERPRINTS
+            .iter()
+            .filter(|fp| category.is_none_or(|c| fp.category == c))
+            .count(),
+        exodus::TRACKERS
+            .iter()
+            .filter(|t| category.is_none_or(|c| t.cat == c))
+            .count()
+    );
+    let curated: Vec<&Fingerprint> = FINGERPRINTS
+        .iter()
+        .filter(|fp| category.is_none_or(|c| fp.category == c))
+        .collect();
+    let _ = write!(o, "  \"curated\": [");
+    for (k, fp) in curated.iter().enumerate() {
+        if k > 0 {
+            o.push(',');
+        }
+        o.push_str("\n    {");
+        let _ = write!(o, "\"id\": {}", session::json_str(fp.id));
+        let _ = write!(o, ",\"category\": {}", session::json_str(fp.category.as_str()));
+        let _ = write!(o, ",\"signals\":{{\"dex\":{},\"native_libs\":{},\"manifest\":{},\"assets\":{},\"urls\":{},\"maven\":{}}}",
+            fp.dex.len(), fp.native_libs.len(),
+            fp.manifest_meta.len() + fp.manifest_activities.len() + fp.manifest_services.len() + fp.permissions.len(),
+            fp.assets.len(), fp.urls.len(), fp.maven.len());
+        if !fp.maven.is_empty() {
+            let m = fp.maven.iter().map(|c| session::json_str(c)).collect::<Vec<_>>().join(", ");
+            let _ = write!(o, ",\"maven\":[{m}]");
+        }
+        o.push('}');
+    }
+    if !curated.is_empty() {
+        o.push_str("\n  ");
+    }
+    o.push_str("],\n");
+    if matches!(catalog, Catalog::Exodus | Catalog::Both) {
+        let trackers: Vec<&exodus::ExodusTracker> = exodus::TRACKERS
+            .iter()
+            .filter(|t| category.is_none_or(|c| t.cat == c))
+            .collect();
+        let _ = write!(o, "  \"exodus\": [");
+        for (k, t) in trackers.iter().enumerate() {
+            if k > 0 {
+                o.push(',');
+            }
+            o.push_str("\n    {");
+            let _ = write!(o, "\"id\": {},\"exodus_id\": {},\"category\": {}",
+                session::json_str(t.name), t.id, session::json_str(t.cat.as_str()));
+            o.push('}');
+        }
+        if !trackers.is_empty() {
+            o.push_str("\n  ");
+        }
+        o.push_str("],\n");
+    }
+    o.push_str("  \"exodus_license\": \"ODbL 1.0, (c) Exodus Privacy contributors, https://exodus-privacy.eu.org\"\n}\n");
+    o
 }
 
 #[cfg(test)]

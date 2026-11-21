@@ -222,8 +222,110 @@ fn gms_version_table_and_lookup() {
 
 #[test]
 fn list_catalog_mentions_both_catalogs() {
-    let lines = fingerprint::list_catalog();
+    let lines = fingerprint::list_catalog(fingerprint::Catalog::Curated, None);
     assert!(lines.iter().any(|l| l.contains("curated")));
     assert!(lines.iter().any(|l| l.contains("Exodus")));
     assert!(lines.iter().any(|l| l.contains("exodus-privacy.eu.org")));
+    // --all lists the Exodus names, not just the counts
+    let all = fingerprint::list_catalog(fingerprint::Catalog::Both, None);
+    assert!(
+        all.len() > lines.len(),
+        "--all should list more rows than the curated-only catalog"
+    );
+    // --category filters both halves
+    let ads = fingerprint::list_catalog(fingerprint::Catalog::Both, Some(Category::Ads));
+    assert!(ads.iter().any(|l| l.contains("ads (")));
+    assert!(!ads.iter().any(|l| l.contains("framework (")));
+}
+
+#[test]
+fn json_catalog_is_valid_object_shape() {
+    let j = fingerprint::json_catalog(fingerprint::Catalog::Curated, None);
+    assert!(
+        j.starts_with("{\n"),
+        "JSON catalog should be an object, got: {}",
+        &j[..30]
+    );
+    assert!(j.contains("\"counts\":"));
+    assert!(j.contains("\"curated\": ["));
+    assert!(j.contains("\"exodus_license\": \"ODbL 1.0"));
+    assert!(j.trim_end().ends_with('}'), "should close the object");
+    // every double quote balanced — cheap structural check without a JSON crate
+    assert_eq!(j.matches('"').count() % 2, 0, "unbalanced quotes in json_catalog");
+    let both = fingerprint::json_catalog(fingerprint::Catalog::Both, None);
+    assert!(both.contains("\"exodus\": ["));
+    assert!(both.contains("\"exodus_id\":"));
+}
+
+#[test]
+fn json_report_is_valid_object_shape() {
+    let d = |id: &'static str| crate::fingerprint::Detection {
+        id,
+        category: Category::Ads,
+        confidence: Confidence::Confirmed,
+        version: Some("1.0.0".into()),
+        evidence: vec![],
+        origin: fingerprint::Origin::Curated,
+        exodus_id: None,
+    };
+    let an = crate::fingerprint::Analysis {
+        detections: vec![d("x"), d("y")],
+        obf_ratio: 0.75,
+        file: "app.apk".into(),
+    };
+    let j = fingerprint::json_report(&an);
+    assert!(j.starts_with("{\n"), "report should be an object");
+    assert!(j.contains("\"file\": \"app.apk\""));
+    assert!(j.contains("\"count\": 2"));
+    assert!(j.contains("\"obfuscation\": \"heavy\""));
+    assert!(j.contains("\"sdks\": ["));
+    assert!(j.contains("\"version\": \"1.0.0\""));
+    assert_eq!(j.matches('"').count() % 2, 0, "unbalanced quotes in json_report");
+    assert!(j.trim_end().ends_with('}'));
+}
+
+#[test]
+fn elf_symbol_evidence_is_capped_in_text_report() {
+    let ev = |kind: &'static str, value: &str| crate::fingerprint::Evidence {
+        kind,
+        value: value.to_string(),
+        count: 1,
+    };
+    let d = crate::fingerprint::Detection {
+        id: "androidx",
+        category: Category::Framework,
+        confidence: Confidence::Confirmed,
+        version: None,
+        evidence: (0..10)
+            .map(|i| ev("elf_symbol", &format!("Java_androidx_camera_Core_native{i}")))
+            .chain([ev("dex_package", "Landroidx/")])
+            .collect(),
+        origin: fingerprint::Origin::Curated,
+        exodus_id: None,
+    };
+    let an = crate::fingerprint::Analysis {
+        detections: vec![d],
+        obf_ratio: 0.0,
+        file: "app.apk".into(),
+    };
+    let lines = fingerprint::text_report(&an, false);
+    let sym_lines = lines.iter().filter(|l| l.contains("elf_symbol")).count();
+    assert_eq!(sym_lines, 3, "elf_symbol evidence should cap at 3 lines");
+    assert!(
+        lines.iter().any(|l| l.contains("x7 more JNI symbols")),
+        "the capped tail should count the rest, got:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("SDK") && l.contains("CATEGORY")),
+        "report should have a header row"
+    );
+    assert!(
+        lines.iter().all(|l| l == l.trim_end()),
+        "no trailing whitespace"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains('\u{2014}')),
+        "report must stay ASCII for non-UTF8 consoles"
+    );
 }
