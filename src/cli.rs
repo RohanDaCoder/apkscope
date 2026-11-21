@@ -174,11 +174,11 @@ Fast, stateless queries (parallel, no index, no cache) - built for scripts and A
                           [--class C] [--fuzzy-class] [--regex] [--ignore-case] [--java]
   apkscope decompile <apk> <Class>... [--method name] [--smali] [--full]
   apkscope manifest <apk>
-  apkscope diff     <old.apk> <new.apk> [--strings]   added / removed classes, methods, permissions
+  apkscope diff     <old.apk> <new.apk> [--strings]   added / removed classes, methods, permissions; changed constants
 Indexed + cached (first run builds it, later runs reuse the disk cache):
   apkscope decompile <apk>                 every class, to stdout
   apkscope search <apk> <scope> [query] [--regex] [--case] [--app-only] [--all] [--context N] [--method]
-                  [--format txt|csv|json]   scopes: code string usages class res urls http secrets api
+                  [--format txt|csv|json]   scopes: code string usages class res urls http secrets api config
   apkscope info <apk>                      package, SDKs, permissions, exported components
   apkscope resource <apk> <res/path.xml>
   apkscope export <apk> <out-dir>          Gradle project
@@ -646,7 +646,7 @@ pub struct ResArgs {
 #[derive(Args)]
 pub struct SearchArgs {
     pub apk: String,
-    /// code string usages class res urls http secrets api
+    /// code string usages class res urls http secrets api config
     pub scope: String,
     /// query (words joined)
     #[arg(num_args = 0..)]

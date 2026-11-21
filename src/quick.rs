@@ -849,22 +849,32 @@ fn contains_ci(hay: &str, low: &str) -> bool {
     n.is_empty() || h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
-/// What changed from `old` to `new`: classes, methods of classes both define, permissions and
-/// (with `strings`) string-pool values. One line each, `+ ...` added or `- ...` removed, under
+/// One `## section: +N -M` header and its `+ ...` / `- ...` lines.
+fn push_section(
+    out: &mut Vec<String>,
+    title: &str,
+    (a, b): &(
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    ),
+) {
+    let (added, gone): (Vec<&String>, Vec<&String>) =
+        (b.difference(a).collect(), a.difference(b).collect());
+    out.push(format!("## {title}: +{} -{}", added.len(), gone.len()));
+    out.extend(added.iter().map(|s| format!("+ {s}")));
+    out.extend(gone.iter().map(|s| format!("- {s}")));
+}
+
+/// What changed from `old` to `new`: classes, methods of classes both define, permissions,
+/// changed named constants (the rotated-key answer) and (with `strings`) string-pool values
+/// with likely rotated/renamed pairs. One line each, `+ ...` added or `- ...` removed, under
 /// a `## section: +N -M` header.
 pub fn diff(old: &str, new: &str, strings: bool) -> Result<Vec<String>, String> {
     use std::collections::BTreeSet;
     let both = |f: &dyn Fn(&str) -> Result<BTreeSet<String>, String>| -> Result<(BTreeSet<String>, BTreeSet<String>), String> { Ok((f(old)?, f(new)?)) };
     let mut out = Vec::new();
-    let mut section = |title: &str, (a, b): &(BTreeSet<String>, BTreeSet<String>)| {
-        let (added, gone): (Vec<&String>, Vec<&String>) =
-            (b.difference(a).collect(), a.difference(b).collect());
-        out.push(format!("## {title}: +{} -{}", added.len(), gone.len()));
-        out.extend(added.iter().map(|s| format!("+ {s}")));
-        out.extend(gone.iter().map(|s| format!("- {s}")));
-    };
     let classes = both(&|p| Ok(classes(p, "", false, true)?.into_iter().collect()))?;
-    section("classes", &classes);
+    push_section(&mut out, "classes", &classes);
     // methods only of classes both versions have: an added class's methods are no news
     let kept: BTreeSet<&String> = classes.0.intersection(&classes.1).collect();
     let methods = both(&|p| {
@@ -878,7 +888,7 @@ pub fn diff(old: &str, new: &str, strings: bool) -> Result<Vec<String>, String> 
             .map(str::to_string)
             .collect())
     })?;
-    section("methods", &methods);
+    push_section(&mut out, "methods", &methods);
     let perms = both(&|p| {
         let m = read_entry(p, "AndroidManifest.xml")?
             .ok_or_else(|| format!("{p}: no AndroidManifest.xml"))?;
@@ -886,14 +896,121 @@ pub fn diff(old: &str, new: &str, strings: bool) -> Result<Vec<String>, String> 
             .into_iter()
             .collect())
     })?;
-    section("permissions", &perms);
+    push_section(&mut out, "permissions", &perms);
+    // named constants, keyed `Class#FIELD`: a value that changed between the builds — the
+    // exact, no-heuristic answer to "they rotated the key, what's the new one"
+    let (ca, cb) = (static_strings(old)?, static_strings(new)?);
+    let changed: Vec<String> = ca
+        .iter()
+        .filter_map(|(k, v)| {
+            cb.get(k)
+                .filter(|w| *w != v)
+                .map(|w| format!("~ {k}: {v} -> {w}"))
+        })
+        .collect();
+    out.push(format!("## constants (changed values): {}", changed.len()));
+    out.extend(changed);
     if strings {
-        section(
-            "strings",
-            &both(&|p| Ok(self::strings(p, "")?.into_iter().collect()))?,
+        let sets = both(&|p| Ok(self::strings(p, "")?.into_iter().collect()))?;
+        push_section(&mut out, "strings", &sets);
+        let pairs = near_pairs(
+            &sets.0.difference(&sets.1).collect::<Vec<_>>(),
+            &sets.1.difference(&sets.0).collect::<Vec<_>>(),
         );
+        if !pairs.is_empty() {
+            out.push(format!(
+                "! likely rotated/renamed ({} pair{}; rule: length within 15%, shared 4-char prefix, edit distance <= 10% of length)",
+                pairs.len(),
+                if pairs.len() == 1 { "" } else { "s" }
+            ));
+            out.extend(pairs);
+        }
     }
     Ok(out)
+}
+
+/// Static string constants of an APK as `Class#FIELD` -> stored value, through the shared
+/// constants walk. The diff's exact key for values that rotated between builds.
+fn static_strings(path: &str) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let lists = scan(path, |l| {
+        l.all()?;
+        Ok((std::mem::take(&mut l.name), std::mem::take(&mut l.buf)))
+    })?;
+    let mut out = std::collections::BTreeMap::new();
+    for (_, buf) in &lists {
+        if let Ok(dx) = Dex::parse(buf) {
+            for c in session::string_constants(&[dx]) {
+                out.insert(format!("{}#{}", c.class, c.field), c.value);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Deterministic pairing of the removed and added strings that look like one value rotated
+/// or renamed: length within 15%, a shared 4-character prefix, and an edit distance of at
+/// most 10% of the length. Blocking by length and prefix keeps the search cheap over big
+/// string pools (every candidate against every candidate is not an option there); the rule
+/// is printed with the results so a reader can see why two strings paired. Capped.
+fn near_pairs(removed: &[&String], added: &[&String]) -> Vec<String> {
+    const PAIR_CAP: usize = 50;
+    let mut out = Vec::new();
+    let mut used = vec![false; added.len()];
+    for r in removed {
+        if out.len() >= PAIR_CAP {
+            break;
+        }
+        let rl = r.chars().count();
+        let (lo, hi) = ((rl * 85) / 100, (rl * 115) / 100 + 1);
+        let limit = rl / 10 + 1;
+        let mut best: Option<(usize, usize)> = None;
+        for (i, a) in added.iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            let al = a.chars().count();
+            if al < lo || al > hi {
+                continue;
+            }
+            if !r.chars().zip(a.chars()).take(4).all(|(x, y)| x == y) {
+                continue;
+            }
+            let d = bounded_edit_distance(r, a, limit);
+            if d <= limit && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, i));
+            }
+        }
+        if let Some((d, i)) = best {
+            used[i] = true;
+            out.push(format!("! {r} -> {} (edit distance {d})", added[i]));
+        }
+    }
+    out
+}
+
+/// Levenshtein distance, cut off at `limit` rows past it (returns `limit + 1`): the pairing
+/// only cares whether strings are near, so whole rows can be abandoned early.
+fn bounded_edit_distance(a: &str, b: &str, limit: usize) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > limit {
+        return limit + 1;
+    }
+    let (mut prev, mut cur) = ((0..=b.len()).collect::<Vec<_>>(), vec![0usize; b.len() + 1]);
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        let mut row_min = cur[0];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1);
+            row_min = row_min.min(cur[j + 1]);
+        }
+        if row_min > limit {
+            return limit + 1;
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 /// `uses-permission` (and `-sdk-23`) names in decoded manifest XML, whose attributes are
