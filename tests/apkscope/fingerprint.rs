@@ -7,17 +7,27 @@
 //! synth_fake_apk.py); these tests cover the pure parts: catalog shape, category
 //! parsing, snapshot stability, and diff keying.
 
-use crate::fingerprint::{self, exodus, Category, Confidence, FINGERPRINTS};
+use crate::fingerprint::{self, Category, Confidence, FINGERPRINTS, exodus};
 
 #[test]
 fn catalogs_are_nonempty_and_unique() {
-    assert!(!FINGERPRINTS.is_empty(), "curated catalog should not be empty");
+    assert!(
+        !FINGERPRINTS.is_empty(),
+        "curated catalog should not be empty"
+    );
     let mut ids: Vec<&str> = FINGERPRINTS.iter().map(|f| f.id).collect();
     ids.sort();
     let before = ids.len();
     ids.dedup();
-    assert_eq!(ids.len(), before, "duplicate fingerprint ids in the curated catalog");
-    assert!(exodus::TRACKERS.len() > 400, "Exodus import should be substantial");
+    assert_eq!(
+        ids.len(),
+        before,
+        "duplicate fingerprint ids in the curated catalog"
+    );
+    assert!(
+        exodus::TRACKERS.len() > 400,
+        "Exodus import should be substantial"
+    );
     let mut names = exodus::TRACKERS.iter().map(|t| t.name).collect::<Vec<_>>();
     names.sort_unstable();
     // names may repeat across ids in the source; ids must not
@@ -42,7 +52,11 @@ fn catalog_entries_have_signals() {
         );
     }
     for t in exodus::TRACKERS {
-        assert!(!t.alts.is_empty(), "Exodus tracker {} has no alternatives", t.name);
+        assert!(
+            !t.alts.is_empty(),
+            "Exodus tracker {} has no alternatives",
+            t.name
+        );
     }
 }
 
@@ -53,8 +67,16 @@ fn exodus_alternatives_are_slash_form() {
     for t in exodus::TRACKERS {
         for a in t.alts {
             assert!(!a.is_empty(), "{}: empty alternative", t.name);
-            assert!(!a.contains('.'), "{}: dot-form alternative {a} leaked through", t.name);
-            assert!(!a.starts_with('/') && !a.ends_with('/'), "{}: bad edges in {a}", t.name);
+            assert!(
+                !a.contains('.'),
+                "{}: dot-form alternative {a} leaked through",
+                t.name
+            );
+            assert!(
+                !a.starts_with('/') && !a.ends_with('/'),
+                "{}: bad edges in {a}",
+                t.name
+            );
         }
     }
 }
@@ -62,10 +84,21 @@ fn exodus_alternatives_are_slash_form() {
 #[test]
 fn category_parse_roundtrips() {
     let all = [
-        Category::Ads, Category::Analytics, Category::Crash, Category::Framework,
-        Category::Integrity, Category::License, Category::Monetization, Category::Network,
-        Category::Push, Category::Auth, Category::Media, Category::Storage,
-        Category::Di, Category::Util, Category::Obfuscator,
+        Category::Ads,
+        Category::Analytics,
+        Category::Crash,
+        Category::Framework,
+        Category::Integrity,
+        Category::License,
+        Category::Monetization,
+        Category::Network,
+        Category::Push,
+        Category::Auth,
+        Category::Media,
+        Category::Storage,
+        Category::Di,
+        Category::Util,
+        Category::Obfuscator,
     ];
     for c in all {
         assert_eq!(Category::parse(c.as_str()), Some(c));
@@ -133,8 +166,18 @@ fn diff_buckets_by_id() {
         origin: fingerprint::Origin::Curated,
         exodus_id: None,
     };
-    let a = vec![d("kept", None), d("gone", None), d("same", Some("1.0.0")), d("bump", Some("1.0.0"))];
-    let b = vec![d("kept", None), d("added", None), d("same", Some("1.0.0")), d("bump", Some("1.1.0"))];
+    let a = vec![
+        d("kept", None),
+        d("gone", None),
+        d("same", Some("1.0.0")),
+        d("bump", Some("1.0.0")),
+    ];
+    let b = vec![
+        d("kept", None),
+        d("added", None),
+        d("same", Some("1.0.0")),
+        d("bump", Some("1.1.0")),
+    ];
     let (added, removed, changed) = fingerprint::diff(&a, &b);
     assert_eq!(added.iter().map(|d| d.id).collect::<Vec<_>>(), ["added"]);
     assert_eq!(removed.iter().map(|d| d.id).collect::<Vec<_>>(), ["gone"]);
@@ -171,7 +214,8 @@ fn gms_version_table_and_lookup() {
     use crate::fingerprint::pin;
     assert_eq!(pin::gms_version(12451000), Some("12.4.51"));
     assert_eq!(pin::gms_version(999), None);
-    let values = "<resources><integer name=\"google_play_services_version\">12451000</integer></resources>";
+    let values =
+        "<resources><integer name=\"google_play_services_version\">12451000</integer></resources>";
     assert_eq!(pin::gms_version_from_texts(values), Some("12.4.51"));
     assert_eq!(pin::gms_version_from_texts("nothing here"), None);
 }

@@ -23,10 +23,11 @@ pub fn banner(id: &str, pool: &[String]) -> Option<(String, String)> {
         "okhttp" => semver_banner(pool, &["okhttp/"]),
         "retrofit" => semver_banner(pool, &["retrofit/"]),
         "flutter" => None, // pinned from libapp.so snapshot magic, see snapshot()
-        "react_native" => semver_banner(pool, &["react-native/", "com.facebook.react:react-native:"]),
-        "firebase_core" | "firebase_analytics" | "firebase_messaging" | "firebase_auth" | "crashlytics" => {
-            firebase_pairs(pool)
+        "react_native" => {
+            semver_banner(pool, &["react-native/", "com.facebook.react:react-native:"])
         }
+        "firebase_core" | "firebase_analytics" | "firebase_messaging" | "firebase_auth"
+        | "crashlytics" => firebase_pairs(pool),
         "kotlin" => kotlin_version(pool),
         "applovin_max" => semver_banner(pool, &["applovin-sdk/"]),
         "glide" => semver_banner(pool, &["glide/"]),
@@ -120,7 +121,10 @@ fn kotlin_version(pool: &[String]) -> Option<(String, String)> {
         if let Some(at) = s.find("kotlin/") {
             let rest = &s[at + "kotlin/".len()..];
             if let Some(v) = plausible_semver(rest) {
-                return Some((v.to_string(), s[at..at + "kotlin/".len() + v.len()].to_string()));
+                return Some((
+                    v.to_string(),
+                    s[at..at + "kotlin/".len() + v.len()].to_string(),
+                ));
             }
         }
     }
@@ -165,12 +169,7 @@ pub fn gms_version_from_texts(values_text: &str) -> Option<&'static str> {
     let at = values_text.find("google_play_services_version")?;
     // the integer starts after the tag's `>` and ends at `<`
     let body = values_text[at..].split('>').nth(1)?;
-    let int: u32 = body
-        .split('<')
-        .next()?
-        .trim()
-        .parse()
-        .ok()?;
+    let int: u32 = body.split('<').next()?.trim().parse().ok()?;
     gms_version(int)
 }
 

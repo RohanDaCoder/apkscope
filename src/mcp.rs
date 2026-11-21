@@ -629,11 +629,22 @@ fn call(
         "scan" => run_cli(&["scan".into(), apk]),
         "fingerprint" => {
             let mut args = vec!["fingerprint".into(), apk.clone()];
-            if b(a, "strings") { args.push("--strings".into()); }
-            if b(a, "exodus") { args.push("--exodus".into()); }
-            if b(a, "all") { args.push("--all".into()); }
-            if b(a, "snapshot") { args.push("--snapshot".into()); }
-            if let Some(c) = s(a, "category") { args.push("--category".into()); args.push(c); }
+            if b(a, "strings") {
+                args.push("--strings".into());
+            }
+            if b(a, "exodus") {
+                args.push("--exodus".into());
+            }
+            if b(a, "all") {
+                args.push("--all".into());
+            }
+            if b(a, "snapshot") {
+                args.push("--snapshot".into());
+            }
+            if let Some(c) = s(a, "category") {
+                args.push("--category".into());
+                args.push(c);
+            }
             run_cli(&args)
         }
         _ => Err(format!("unknown tool {name}")),

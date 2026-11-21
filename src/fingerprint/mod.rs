@@ -157,7 +157,11 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         manifest_meta: &["com.google.android.gms.ads.APPLICATION_ID"],
         manifest_activities: &["com.google.android.gms.ads.AdActivity"],
         permissions: &["com.google.android.gms.permission.AD_ID"],
-        urls: &["pubads.g.doubleclick.net", "googleads.g.doubleclick.net", "pagead2.googlesyndication.com"],
+        urls: &[
+            "pubads.g.doubleclick.net",
+            "googleads.g.doubleclick.net",
+            "pagead2.googlesyndication.com",
+        ],
         maven: &["com.google.android.gms:play-services-ads"],
         ..Fingerprint::empty()
     },
@@ -174,7 +178,10 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         id: "applovin_max",
         category: Category::Ads,
         dex: &["Lcom/applovin/"],
-        manifest_activities: &["com.applovin.adview.AppLovinInterstitialActivity", "com.applovin.adview.AppLovinConfirmationActivity"],
+        manifest_activities: &[
+            "com.applovin.adview.AppLovinInterstitialActivity",
+            "com.applovin.adview.AppLovinConfirmationActivity",
+        ],
         manifest_services: &["com.applovin.impl.sdk.AppLovinService"],
         maven: &["com.applovin:applovin-sdk"],
         ..Fingerprint::empty()
@@ -231,7 +238,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         dex: &["Lcom/inmobi/"],
         ..Fingerprint::empty()
     },
-
     // ── Analytics / attribution ───────────────────────────────────
     Fingerprint {
         id: "google_analytics",
@@ -244,8 +250,14 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
     Fingerprint {
         id: "firebase_analytics",
         category: Category::Analytics,
-        dex: &["Lcom/google/firebase/analytics/", "Lcom/google/android/gms/measurement/"],
-        manifest_meta: &["firebase_data_collection_default_enabled", "firebase_analytics_collection_enabled"],
+        dex: &[
+            "Lcom/google/firebase/analytics/",
+            "Lcom/google/android/gms/measurement/",
+        ],
+        manifest_meta: &[
+            "firebase_data_collection_default_enabled",
+            "firebase_analytics_collection_enabled",
+        ],
         maven: &["com.google.firebase:firebase-analytics"],
         ..Fingerprint::empty()
     },
@@ -330,7 +342,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         dex: &["Lcom/kochava/base/"],
         ..Fingerprint::empty()
     },
-
     // ── Crash reporting ───────────────────────────────────────────
     Fingerprint {
         id: "bugsnag",
@@ -357,7 +368,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         maven: &["com.google.firebase:firebase-crashlytics"],
         ..Fingerprint::empty()
     },
-
     // ── Frameworks ────────────────────────────────────────────────
     Fingerprint {
         id: "react_native",
@@ -427,7 +437,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         maven: &["androidx.core:core-ktx"],
         ..Fingerprint::empty()
     },
-
     // ── Integrity / license / monetization ────────────────────────
     Fingerprint {
         id: "pairip",
@@ -501,7 +510,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         dex: &["Lcom/adyen/"],
         ..Fingerprint::empty()
     },
-
     // ── Push ──────────────────────────────────────────────────────
     Fingerprint {
         id: "firebase_messaging",
@@ -533,7 +541,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         urls: &["api.pusher.com"],
         ..Fingerprint::empty()
     },
-
     // ── Auth ──────────────────────────────────────────────────────
     Fingerprint {
         id: "firebase_auth",
@@ -571,13 +578,17 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         dex: &["Lcom/okta/"],
         ..Fingerprint::empty()
     },
-
     // ── Firebase platform catch-all / GMS core ────────────────────
     Fingerprint {
         id: "firebase_core",
         category: Category::Framework,
         dex: &["Lcom/google/firebase/"],
-        manifest_meta: &["firebase_app_id", "google_app_id", "google_api_key", "google_crash_reporting_api_key"],
+        manifest_meta: &[
+            "firebase_app_id",
+            "google_app_id",
+            "google_api_key",
+            "google_crash_reporting_api_key",
+        ],
         maven: &["com.google.firebase:firebase-core"],
         ..Fingerprint::empty()
     },
@@ -589,7 +600,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         maven: &["com.google.android.gms:play-services-base"],
         ..Fingerprint::empty()
     },
-
     // ── Network / media / storage / util / DI ─────────────────────
     Fingerprint {
         id: "okhttp",
@@ -630,7 +640,10 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         id: "exoplayer",
         category: Category::Media,
         dex: &["Lcom/google/android/exoplayer2/", "Landroidx/media3/"],
-        maven: &["com.google.android.exoplayer:exoplayer-core", "androidx.media3:media3-exoplayer"],
+        maven: &[
+            "com.google.android.exoplayer:exoplayer-core",
+            "androidx.media3:media3-exoplayer",
+        ],
         ..Fingerprint::empty()
     },
     Fingerprint {
@@ -723,7 +736,6 @@ pub const FINGERPRINTS: &[Fingerprint] = &[
         dex: &["Lcom/facebook/shimmer/"],
         ..Fingerprint::empty()
     },
-
     // ── Obfuscators / packers (separate, high-signal) ─────────────
     Fingerprint {
         id: "dexguard",
@@ -1043,7 +1055,10 @@ impl Signals {
             .trim_end_matches(';')
             .trim_end_matches('/');
         let needle = format!("{slash}/");
-        self.class_names.iter().filter(|c| c.starts_with(&needle)).count()
+        self.class_names
+            .iter()
+            .filter(|c| c.starts_with(&needle))
+            .count()
     }
 }
 
@@ -1052,8 +1067,16 @@ impl Signals {
 /// Kinds that survive renaming: an R8 pass can move a class out of its package only
 /// by renaming the package itself, which breaks the whole app's own code too.
 const STRONG_KINDS: &[&str] = &[
-    "native_lib", "manifest_meta", "activity", "service", "asset", "magic", "maven",
-    "elf_symbol", "snapshot", "banner",
+    "native_lib",
+    "manifest_meta",
+    "activity",
+    "service",
+    "asset",
+    "magic",
+    "maven",
+    "elf_symbol",
+    "snapshot",
+    "banner",
 ];
 
 /// Generic permissions that never confirm anything on their own.
@@ -1072,7 +1095,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
     for p in fp.dex {
         let n = s.classes_under(p);
         if n > 0 {
-            ev.push(Evidence { kind: "dex_package", value: p.to_string(), count: n });
+            ev.push(Evidence {
+                kind: "dex_package",
+                value: p.to_string(),
+                count: n,
+            });
             matched_classes += n;
         }
     }
@@ -1083,7 +1110,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
         if !hits.is_empty() {
             ev.push(Evidence {
                 kind: "native_lib",
-                value: hits.iter().map(|h| h.as_str()).collect::<Vec<_>>().join(","),
+                value: hits
+                    .iter()
+                    .map(|h| h.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 count: hits.len(),
             });
         }
@@ -1092,22 +1123,38 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
     // 3. Manifest meta-data keys, activities, services, permissions
     for k in fp.manifest_meta {
         if s.meta_keys.contains(*k) {
-            ev.push(Evidence { kind: "manifest_meta", value: (*k).to_string(), count: 1 });
+            ev.push(Evidence {
+                kind: "manifest_meta",
+                value: (*k).to_string(),
+                count: 1,
+            });
         }
     }
     for a in fp.manifest_activities {
         if s.activities.iter().any(|x| x.contains(a)) {
-            ev.push(Evidence { kind: "activity", value: (*a).to_string(), count: 1 });
+            ev.push(Evidence {
+                kind: "activity",
+                value: (*a).to_string(),
+                count: 1,
+            });
         }
     }
     for a in fp.manifest_services {
         if s.services.iter().any(|x| x.contains(a)) {
-            ev.push(Evidence { kind: "service", value: (*a).to_string(), count: 1 });
+            ev.push(Evidence {
+                kind: "service",
+                value: (*a).to_string(),
+                count: 1,
+            });
         }
     }
     for p in fp.permissions {
         if s.permissions.contains(*p) {
-            ev.push(Evidence { kind: "permission", value: (*p).to_string(), count: 1 });
+            ev.push(Evidence {
+                kind: "permission",
+                value: (*p).to_string(),
+                count: 1,
+            });
         }
     }
 
@@ -1115,7 +1162,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
     for a in fp.assets {
         let n = s.entries.iter().filter(|p| p.starts_with(a)).count();
         if n > 0 {
-            ev.push(Evidence { kind: "asset", value: (*a).to_string(), count: n });
+            ev.push(Evidence {
+                kind: "asset",
+                value: (*a).to_string(),
+                count: n,
+            });
         }
     }
 
@@ -1123,7 +1174,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
     for u in fp.urls {
         let n = s.haystack.iter().filter(|x| x.contains(u)).count();
         if n > 0 {
-            ev.push(Evidence { kind: "url", value: (*u).to_string(), count: n });
+            ev.push(Evidence {
+                kind: "url",
+                value: (*u).to_string(),
+                count: n,
+            });
         }
     }
 
@@ -1138,7 +1193,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
                     .trim_end_matches('/');
                 cls_slash.starts_with(root)
             }) {
-                ev.push(Evidence { kind: "elf_symbol", value: sym.clone(), count: 1 });
+                ev.push(Evidence {
+                    kind: "elf_symbol",
+                    value: sym.clone(),
+                    count: 1,
+                });
             }
         }
     }
@@ -1148,7 +1207,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
     for coord in fp.maven {
         if let Some(v) = s.maven.get(*coord) {
             version = Some(v.clone());
-            ev.push(Evidence { kind: "maven", value: (*coord).to_string(), count: 1 });
+            ev.push(Evidence {
+                kind: "maven",
+                value: (*coord).to_string(),
+                count: 1,
+            });
         }
     }
 
@@ -1157,7 +1220,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
         && let Some(h) = &s.dart_snapshot
     {
         version = Some(h.clone());
-        ev.push(Evidence { kind: "snapshot", value: h.clone(), count: 1 });
+        ev.push(Evidence {
+            kind: "snapshot",
+            value: h.clone(),
+            count: 1,
+        });
     }
 
     // 9. Google Play services: the manifest references
@@ -1167,7 +1234,11 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
         && let Some(v) = pin::gms_version_from_texts(&s.values_text)
     {
         version = Some(v.to_string());
-        ev.push(Evidence { kind: "banner", value: format!("google_play_services_version={v}"), count: 1 });
+        ev.push(Evidence {
+            kind: "banner",
+            value: format!("google_play_services_version={v}"),
+            count: 1,
+        });
     }
 
     if ev.is_empty() {
@@ -1180,15 +1251,20 @@ fn match_curated(fp: &Fingerprint, s: &Signals) -> Option<Detection> {
         && !s.haystack.is_empty()
         && let Some(v) = pin::banner(fp.id, &s.haystack)
     {
-        ev.push(Evidence { kind: "banner", value: v.1.clone(), count: 1 });
+        ev.push(Evidence {
+            kind: "banner",
+            value: v.1.clone(),
+            count: 1,
+        });
         version = Some(v.0);
     }
 
     let dex_ev = ev.iter().any(|e| e.kind == "dex_package");
     let strong_ev = ev.iter().any(|e| STRONG_KINDS.contains(&e.kind));
-    let generic_only = ev.iter().all(|e| {
-        e.kind != "permission" || GENERIC_PERMS.contains(&e.value.as_str())
-    }) && ev.iter().all(|e| e.kind == "permission" || e.kind == "url");
+    let generic_only = ev
+        .iter()
+        .all(|e| e.kind != "permission" || GENERIC_PERMS.contains(&e.value.as_str()))
+        && ev.iter().all(|e| e.kind == "permission" || e.kind == "url");
 
     let confidence = if (dex_ev && matched_classes >= 3) || (strong_ev && ev.len() >= 2) {
         Confidence::Confirmed
@@ -1229,10 +1305,17 @@ fn match_exodus(t: &exodus::ExodusTracker, s: &Signals) -> Option<Detection> {
             continue;
         } else {
             let needle = format!("{alt}/");
-            s.class_names.iter().filter(|c| c.starts_with(&needle)).count()
+            s.class_names
+                .iter()
+                .filter(|c| c.starts_with(&needle))
+                .count()
         };
         if n > 0 {
-            ev.push(Evidence { kind: "dex_package", value: alt.to_string(), count: n });
+            ev.push(Evidence {
+                kind: "dex_package",
+                value: alt.to_string(),
+                count: n,
+            });
             matched += n;
         }
     }
@@ -1247,7 +1330,11 @@ fn match_exodus(t: &exodus::ExodusTracker, s: &Signals) -> Option<Detection> {
             }
             let n = s.haystack.iter().filter(|x| x.contains(alt)).count();
             if n > 0 {
-                ev.push(Evidence { kind: "url", value: alt.to_string(), count: n });
+                ev.push(Evidence {
+                    kind: "url",
+                    value: alt.to_string(),
+                    count: n,
+                });
             }
         }
     }
@@ -1300,12 +1387,22 @@ pub struct Analysis {
 
 /// Run the fingerprint pass and return all detections, sorted: `confirmed` first,
 /// then `strong`, then `weak`; ties broken by id.
-pub fn run(st: &session::State, strings: bool, catalog: Catalog, category: Option<Category>) -> Vec<Detection> {
+pub fn run(
+    st: &session::State,
+    strings: bool,
+    catalog: Catalog,
+    category: Option<Category>,
+) -> Vec<Detection> {
     analyze(st, strings, catalog, category).detections
 }
 
 /// `run` plus the context the reports need.
-pub fn analyze(st: &session::State, strings: bool, catalog: Catalog, category: Option<Category>) -> Analysis {
+pub fn analyze(
+    st: &session::State,
+    strings: bool,
+    catalog: Catalog,
+    category: Option<Category>,
+) -> Analysis {
     let s = Signals::collect(st, strings);
     let mut out = Vec::new();
     if matches!(catalog, Catalog::Curated | Catalog::Both) {
@@ -1349,7 +1446,9 @@ pub fn analyze(st: &session::State, strings: bool, catalog: Catalog, category: O
                 .map(|e| e.value.as_str())
                 .collect();
             !curated_roots.iter().any(|c| {
-                roots.iter().any(|r| c.contains(r) || r.contains(c.as_str()))
+                roots
+                    .iter()
+                    .any(|r| c.contains(r) || r.contains(c.as_str()))
             })
         });
     }
@@ -1393,7 +1492,10 @@ pub fn summarize(dets: &[Detection]) -> String {
         } else {
             String::new()
         },
-        cats.into_iter().map(|(c, n)| format!("{n} {c}")).collect::<Vec<_>>().join(", ")
+        cats.into_iter()
+            .map(|(c, n)| format!("{n} {c}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -1425,14 +1527,22 @@ pub fn text_report(an: &Analysis, strings: bool) -> Vec<String> {
             d.category.as_str(),
             d.confidence.as_str(),
             ver,
-            if d.origin == Origin::Exodus { "  [exodus]" } else { "" }
+            if d.origin == Origin::Exodus {
+                "  [exodus]"
+            } else {
+                ""
+            }
         ));
         for e in &d.evidence {
             out.push(format!(
                 "      {:<13} {}{}",
                 e.kind,
                 e.value,
-                if e.count > 1 { format!(" (x{})", e.count) } else { String::new() }
+                if e.count > 1 {
+                    format!(" (x{})", e.count)
+                } else {
+                    String::new()
+                }
             ));
         }
     }
@@ -1451,7 +1561,9 @@ pub fn text_report(an: &Analysis, strings: bool) -> Vec<String> {
         (an.obf_ratio * 100.0) as u64
     ));
     if !strings {
-        out.push("strings: DEX string pool not scanned (pass --strings for URL/banner evidence)".into());
+        out.push(
+            "strings: DEX string pool not scanned (pass --strings for URL/banner evidence)".into(),
+        );
     }
     out
 }
@@ -1465,8 +1577,16 @@ pub fn json_report(detections: &[Detection]) -> String {
         }
         out.push('{');
         let _ = write!(out, "\"id\":{},", session::json_str(d.id));
-        let _ = write!(out, "\"category\":{},", session::json_str(d.category.as_str()));
-        let _ = write!(out, "\"confidence\":{},", session::json_str(d.confidence.as_str()));
+        let _ = write!(
+            out,
+            "\"category\":{},",
+            session::json_str(d.category.as_str())
+        );
+        let _ = write!(
+            out,
+            "\"confidence\":{},",
+            session::json_str(d.confidence.as_str())
+        );
         let _ = write!(out, "\"origin\":{},", session::json_str(d.origin.as_str()));
         if let Some(id) = d.exodus_id {
             let _ = write!(out, "\"exodus_id\":{id},");
@@ -1525,7 +1645,11 @@ pub fn snapshot(detections: &[Detection]) -> String {
 pub fn diff<'a>(
     a: &'a [Detection],
     b: &'a [Detection],
-) -> (Vec<&'a Detection>, Vec<&'a Detection>, Vec<(&'a Detection, &'a Detection)>) {
+) -> (
+    Vec<&'a Detection>,
+    Vec<&'a Detection>,
+    Vec<(&'a Detection, &'a Detection)>,
+) {
     let key = |d: &Detection| (d.id, d.origin);
     let ma: BTreeMap<_, &Detection> = a.iter().map(|d| (key(d), d)).collect();
     let mb: BTreeMap<_, &Detection> = b.iter().map(|d| (key(d), d)).collect();
@@ -1600,10 +1724,7 @@ pub fn fingerprint(a: &crate::cli::FingerprintArgs, apk: &str) -> Result<(), Str
     if let Some(c) = &a.category
         && category.is_none()
     {
-        return Err(format!(
-            "unknown category '{}' (see fingerprint --list)",
-            c
-        ));
+        return Err(format!("unknown category '{}' (see fingerprint --list)", c));
     }
     let st = cli::load(apk, false)?;
     if let Some(other) = &a.diff {
@@ -1660,7 +1781,11 @@ fn json_diff(a: &[Detection], b: &[Detection]) -> String {
     o += "  \"added\": [";
     o += &added.iter().map(|d| one(d)).collect::<Vec<_>>().join(", ");
     o += "],\n  \"removed\": [";
-    o += &removed.iter().map(|d| one(d)).collect::<Vec<_>>().join(", ");
+    o += &removed
+        .iter()
+        .map(|d| one(d))
+        .collect::<Vec<_>>()
+        .join(", ");
     o += "],\n  \"changed\": [";
     o += &changed
         .iter()
@@ -1706,7 +1831,10 @@ pub fn list_catalog() -> Vec<String> {
         }
     }
     out.push(String::new());
-    out.push(format!("exodus ({}): use --exodus / --all to include", exodus::TRACKERS.len()));
+    out.push(format!(
+        "exodus ({}): use --exodus / --all to include",
+        exodus::TRACKERS.len()
+    ));
     let mut ex_by_cat: BTreeMap<&'static str, usize> = BTreeMap::new();
     for t in exodus::TRACKERS {
         *ex_by_cat.entry(t.cat.as_str()).or_default() += 1;
@@ -1720,4 +1848,3 @@ pub fn list_catalog() -> Vec<String> {
 #[cfg(test)]
 #[path = "../../tests/apkscope/fingerprint.rs"]
 mod tests;
-
