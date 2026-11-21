@@ -475,6 +475,16 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
 DEX parser, decompiler, deobfuscator, resource decoder, search index, APK signer, MCP server and
 viewer: all Rust, from zero. Not a JADX fork, not a wrapper.
 
+## Contributors
+
+- [Ahmad](https://github.com/suffixing): author and maintainer
+- [Inam Ul Haq Shah](https://github.com/cyberphantom52): the `apkscope-core` library, resource decoding and
+  rebuilding, the resource table and binary XML editors, Smali round-trip fixes
+- [AL Zami Rohan](https://github.com/RohanDaCoder): the clap CLI, self-upgrade, Linux/macOS/ARM64 releases,
+  the search scopes (api, config, first-party ranking), the secrets tier, the constants diff, ProGuard mappings
+
+Contributions are welcome under the same license.
+
 Wrong output? Open an issue with the class name and what JADX shows. [Apache 2.0](LICENSE);
 "apkscope" and its logo are trademarks of Ahmad, see [NOTICE](NOTICE).
 `src/data/android_public.txt` comes from AOSP (Apache 2.0).
