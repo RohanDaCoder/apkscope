@@ -69,7 +69,7 @@ pub fn search_on(
         return Err("search needs a scope".into());
     };
     let scope = session::Scope::parse(scope).ok_or_else(|| {
-        format!("unknown scope {scope}: code string usages class res urls http secrets")
+        format!("unknown scope {scope}: code string usages class res urls http secrets api")
     })?;
     let mut m = session::Matcher::new(&rest.join(" "), scope, a.regex, a.case)?;
     m.app_only = a.app_only;
