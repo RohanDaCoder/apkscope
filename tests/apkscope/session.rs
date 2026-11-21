@@ -291,3 +291,142 @@ fn info_native_libs_sdk_share_and_scan_crossref() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `search api` reconstructs the app's declared HTTP API from the Retrofit annotations:
+/// verb, path and parameters are exact; the base URL resolves through `BuildConfig`; the
+/// response model and the call-site arguments are inferred from the callers and labelled.
+#[test]
+fn search_api_reconstructs_retrofit_sheet() {
+    use std::io::Write as _;
+    let buildconfig = r#"
+.class public Lcom/example/app/BuildConfig;
+.super Ljava/lang/Object;
+
+.field public static final API_URL:Ljava/lang/String; = "https://api.example.com/"
+.field public static final API_KEY:Ljava/lang/String; = "qbznP4Xj9kLm2Rst8Vwx3Yz5Abc8Def1Ghi4"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let api = r#"
+.class public interface abstract Lcom/example/app/Api;
+.super Ljava/lang/Object;
+
+.method public abstract books(Ljava/lang/String;)Lretrofit2/Call;
+    .annotation runtime Lretrofit2/http/GET;
+        value = "v1/books"
+    .end annotation
+    .param p1
+        .annotation runtime Lretrofit2/http/Query;
+            value = "key"
+        .end annotation
+    .end param
+.end method
+"#;
+    let book = r#"
+.class public Lcom/example/app/Book;
+.super Ljava/lang/Object;
+
+.field public name:Ljava/lang/String;
+.field public id:I
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let client = r#"
+.class public Lcom/example/app/Client;
+.super Ljava/lang/Object;
+
+.method public static build(Lretrofit2/Retrofit$Builder;)V
+    .locals 1
+    sget-object v0, Lcom/example/app/BuildConfig;->API_URL:Ljava/lang/String;
+    invoke-virtual {p0, v0}, Lretrofit2/Retrofit$Builder;->baseUrl(Ljava/lang/String;)Lretrofit2/Retrofit$Builder;
+    return-void
+.end method
+"#;
+    let repo = r#"
+.class public Lcom/example/app/Repo;
+.super Ljava/lang/Object;
+
+.method public static load(Lcom/example/app/Api;)V
+    .locals 2
+    const-class v0, Lcom/example/app/Book;
+    sget-object v1, Lcom/example/app/BuildConfig;->API_KEY:Ljava/lang/String;
+    invoke-static {v0}, Lcom/example/app/Repo;->parse(Ljava/lang/Class;)V
+    invoke-interface {p0, v1}, Lcom/example/app/Api;->books(Ljava/lang/String;)Lretrofit2/Call;
+    return-void
+.end method
+
+.method private static parse(Ljava/lang/Class;)V
+    .locals 0
+    return-void
+.end method
+"#;
+    let classes = [buildconfig, api, book, client, repo]
+        .iter()
+        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
+        .collect::<Vec<_>>();
+    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dir = std::env::temp_dir().join(format!("apkscope-api-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let apk = dir.join("fixture.apk");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&apk).unwrap());
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("classes.dex", stored).unwrap();
+        z.write_all(&dex).unwrap();
+        z.finish().unwrap();
+    }
+    let st = load(apk.to_str().unwrap(), false).unwrap();
+    st.build_index();
+    let m = Matcher::new("", Scope::Api, false, false).unwrap();
+    let hits = search(&st, &m, &Progress::default());
+    let text = || {
+        hits.iter()
+            .map(|h| h.2.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // exact, from the annotations: verb + path, the parameter and its type
+    assert!(
+        text().contains("GET https://api.example.com/v1/books"),
+        "{}",
+        text()
+    );
+    assert!(text().contains("key (query, String)"), "{}", text());
+    // the base URL, resolved through BuildConfig by its caller
+    assert!(
+        text().contains("base URL: https://api.example.com/"),
+        "{}",
+        text()
+    );
+    // inferred and labelled: the model and the resolved call argument
+    assert!(text().contains("model inferred: Book{"), "{}", text());
+    assert!(
+        text().contains("name: String") && text().contains("id: int"),
+        "{}",
+        text()
+    );
+    assert!(
+        text().contains(
+            "curl 'https://api.example.com/v1/books?key=qbznP4Xj9kLm2Rst8Vwx3Yz5Abc8Def1Ghi4'"
+        ),
+        "{}",
+        text()
+    );
+    // a query narrows the sheet
+    let m = Matcher::new("nothing-matches-this", Scope::Api, false, false).unwrap();
+    let hits = search(&st, &m, &Progress::default());
+    assert!(
+        hits.is_empty(),
+        "a query that matches nothing filters the sheet: {hits:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
