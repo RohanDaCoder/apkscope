@@ -274,7 +274,8 @@ apkscope scan      app.apk                                  # flags, exported co
 apkscope info      app.apk                                  # permissions, components, deep links, signature
 apkscope search    app.apk urls                             # every endpoint (app code only; --all includes libraries)
 apkscope search    app.apk secrets                           # keys & tokens; plus a labelled entropy tier of app constants
-apkscope search    app.apk api                              # the app's HTTP API: Retrofit endpoints, params, curl lines
+apkscope search    app.apk api                              # the app's HTTP API from Retrofit, obfuscated or not
+apkscope size      app.apk                                  # where the bytes go: dex, libs per ABI, biggest files, duplicates
 apkscope diff      old.apk new.apk --strings                # what changed in this update
 
 # follow the code
@@ -283,6 +284,9 @@ apkscope decompile app.apk com.example.Api --method login   # one method, as Jav
 apkscope callers   app.apk com.example.Api login            # every caller (callgraph: the tree)
 apkscope access    app.apk com.example.Session token        # who reads / writes a field
 apkscope decrypt   app.apk                                  # run string decryptors on their constant args
+apkscope consts    app.apk --value 0xB8D0AFDF               # which constant is this number (or: consts app.apk a.b.Codes)
+apkscope returns   app.apk uri --impl com.example.IProtocol # every message class and the id its uri() returns
+apkscope search    app.apk code token --in com.example.net.*   # search one package (--impl T: subtypes of T)
 
 # go further
 apkscope dump      app.apk out/ --attach                    # packed app: save the DEX it unpacked in memory
@@ -292,6 +296,7 @@ apkscope rename    app.apk "com.a.b#c()" login              # names and comments
 apkscope map       app.apk import mapping.txt                # ProGuard/R8 names, or .jobf/.mapping; export back
 apkscope export    app.apk out/                             # Gradle project for Android Studio
 apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
+apkscope build     app.apk out.apk --ks release.jks --ks-pass env:KS_PASS   # sign with your JKS / PKCS#12 keystore
 
 # patch the code
 apkscope smali     app.apk com.example.Api > Api.smali          # one class as editable Smali
@@ -311,10 +316,12 @@ directory you delete. New files under `res/` add their resources, with XML compi
 (a layout can use a string added with it), and files you delete are removed. A new directory gets
 the configuration aapt2 would give it for the app's `minSdkVersion`. Images aren't processed, so a
 new `.9.png` must already be compiled, as one taken from another APK is. Renaming resources isn't
-supported yet.
+supported yet. `--res` also takes a folder from apktool or APKEditor; from those, changed and new
+files are applied and nothing is removed.
 
-`--json`, `--limit N`, `--offset N` work everywhere. Takes `.apk`, `.jar` (Android framework JARs), `.apks`, `.xapk`, `.apkm`, `.dex`.
-`apkscope --help` lists everything.
+`--json`, `--limit N`, `--offset N` work everywhere; `-q` keeps progress lines off stderr. Takes `.apk`, `.jar` (Android framework JARs), `.apks`, `.xapk`, `.apkm`, `.dex`.
+`apkscope --help` lists everything with recipes, `apkscope <command> --help` has examples, and
+[docs/agents.md](docs/agents.md) maps questions to commands for AI agents and scripts.
 
 <details>
 <summary><b>How decrypt and dump work</b></summary>
@@ -377,6 +384,7 @@ other 2. Uncertain methods get a
 | `get_smali` / `decode_resources` / `build_apk` | edit smali, the manifest and resources, then rebuild and sign |
 | `il2cpp` / `flutter` / `disassemble` | Unity C# methods with addresses, Flutter's Dart API, raw bytecode |
 | `frida_hook_script` / `dump_app` | a standalone hook script; DEX and scripts a packed app unpacks at runtime |
+| `consts` / `returns` / `size` | constants by class or value, constant-returning methods (message ids), where the size goes |
 
 Every CLI command is also an MCP tool and a menu item in the viewer.
 
@@ -469,6 +477,11 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
   a real game yet (an x86 emulator can't hook ARM-only engines).
 - `il2cpp` reads arm64 builds and was checked on metadata v39 (Unity 6); older versions may misparse.
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
+- `build` signs with v2 + v3, not v1 (JAR): Android 5-6 devices refuse the result, and `build` warns
+  when the app's `minSdkVersion` is below 24. Keystores: RSA keys in JKS or PKCS#12 (not JCEKS, not EC).
+- `--res` with an apktool or APKEditor folder was checked on folders laid out like theirs, not on
+  their own output; Retrofit's parameter names in obfuscated apps are mapped for standard Retrofit
+  (forks like TikTok's show endpoints with unnamed parameters).
 
 ## Written from scratch
 

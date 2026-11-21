@@ -1,6 +1,7 @@
 # AGENTS.md
 
-Guide for AI coding agents working in this repository. Humans: see [CONTRIBUTING.md](CONTRIBUTING.md);
+Guide for AI coding agents working **on** this repository. To **use** apkscope from an agent,
+see [docs/agents.md](docs/agents.md). Humans: see [CONTRIBUTING.md](CONTRIBUTING.md);
 the rules are the same.
 
 ## What this is
@@ -27,6 +28,10 @@ cargo test --release --no-default-features
 - `src/quick.rs`: stateless queries (no index, no cache)
 - `src/java.rs`, `src/ir.rs`, `src/opt.rs`, `src/cfg.rs`: the decompiler
 - `src/re.rs`: xrefs, call graphs, Frida scripts, scan
+- `src/lookup.rs`: answers from the DEX tables without decompiling (`consts`, `returns`, `--in`/`--impl`)
+- `src/retrofit_map.rs`: Retrofit's annotation names in obfuscated apps (for `search api`)
+- `src/examples.rs`: the examples under every `--help`; a new command or flag gets one here
+- `core/src/keystore/`: JKS / PKCS#12 reading for `build --ks` (its ciphers are written out, no dependency)
 - `src/upgrade/`: self-update
 - `core/`: the `apkscope-core` library (DEX, smali, resources, signing, rebuild)
 - `tests/`: unit tests, wired in with `#[cfg(test)] #[path = "..."] mod tests;` (see `tests/README.md`)
@@ -47,4 +52,5 @@ cargo test --release --no-default-features
 
 - `--version` is apkscope's own flag, not clap's: `upgrade` checks new binaries with `--version --json`.
 - CI runs clippy without the `gui` feature; viewer code still has old lints there, so don't add new ones.
+- Progress and summary lines on stderr go through `note!` (silenced by `-q`); only errors use `eprintln!`.
 - Keep source files free of literal NUL or other control bytes (write `\0`); grep treats such files as binary.

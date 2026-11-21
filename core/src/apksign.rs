@@ -187,6 +187,35 @@ pub fn load(key_file: &Path, cert_file: &Path) -> Result<Key> {
     Ok(Key { private, cert })
 }
 
+/// The signing key of a JKS or PKCS#12 keystore: the entry `alias` (or the only one), its
+/// password `key_password` (default: the store password). RSA keys only.
+pub fn load_keystore(
+    path: &Path,
+    store_password: &str,
+    key_password: Option<&str>,
+    alias: Option<&str>,
+) -> Result<Key> {
+    let data = std::fs::read(path).map_err(Error::io(path))?;
+    let e = crate::keystore::pick(
+        crate::keystore::open(&data, store_password, key_password)?,
+        alias,
+    )?;
+    let private = RsaPrivateKey::from_pkcs8_der(&e.key).map_err(|_| {
+        Error::Keystore(format!(
+            "key {} is not an RSA key; apkscope signs with RSA keys only",
+            e.alias
+        ))
+    })?;
+    let cert = e
+        .chain
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Keystore(format!("key {} has no certificate", e.alias)))?;
+    crate::sign::parse_cert(&cert)
+        .ok_or_else(|| Error::Keystore(format!("key {}: certificate is not X.509", e.alias)))?;
+    Ok(Key { private, cert })
+}
+
 /// apkscope's own key: `%APPDATA%\apkscope\keys\apkscope.pk8` + `apkscope.crt`, created on first use.
 pub fn default_key() -> Result<(Key, PathBuf)> {
     let base = std::env::var_os("APPDATA")

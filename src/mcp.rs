@@ -61,6 +61,7 @@ fn tools() -> Value {
             "method": {"type": "string", "description": "Only return the method(s) with this name"},
             "smali": {"type": "boolean"},
             "full": {"type": "boolean", "description": "Also decompile methods the deobfuscator would leave out (synthetic / bridge)"},
+            "out_dir": {"type": "string", "description": "Write one file per class (a.b.C.java) to this folder instead of returning the text"},
             "cache": cache,
             "deobfuscate": {"type": "boolean", "description": "Rename obfuscated names (default true)"}}))}},
         {"name": "search", "description": "Search decompiled code and resources. Scopes: code (decompiled Java), string (literals), usages (xref by name), class, res (XML resources + manifest), urls (endpoints, also in native libs), http (Retrofit / OkHttp / HttpURLConnection calls), secrets (API keys, tokens, plus a labelled lower-confidence entropy tier of app constants), api (the app's HTTP API: Retrofit endpoints with verb, path, params, base URL and a curl line each), config (what the server can change: BuildConfig defaults, remote-config defaults, reads with fallbacks). Uses the reference index so only classes that can match get decompiled.",
@@ -70,6 +71,8 @@ fn tools() -> Value {
             "regex": {"type": "boolean"}, "case_sensitive": {"type": "boolean"},
             "app_only": {"type": "boolean", "description": "Skip known SDKs and libraries"},
             "all": {"type": "boolean", "description": "Include library/SDK code in urls / http / secrets, which default to app code only"},
+            "in": {"type": "array", "items": {"type": "string"}, "description": "Only these classes or packages: a.b.C, a.b.*"},
+            "impl": {"type": "string", "description": "Only classes that extend / implement this class or interface (directly or not)"},
             "context": {"type": "integer", "description": "Lines of code around each hit"},
             "whole_method": {"type": "boolean", "description": "Return the whole enclosing method of each hit"},
             "format": {"type": "string", "enum": ["txt", "json", "csv"]},
@@ -116,7 +119,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "class": {"type": "string"}}))}},
         {"name": "decode_resources", "description": "Write the manifest and res/ as editable files to a folder. Edit them, then pass the folder to build_apk's res_dir.",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
-        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v1+v2+v3; a debug key unless key/cert are given).",
+        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v2+v3; apkscope's debug key unless a keystore or key/cert is given).",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_path"], "properties": {"apk_path": apk, "out_path": {"type": "string"},
             "put": {"type": "array", "items": {"type": "string"}, "description": "name=file: store this local file under that entry name"},
             "delete": {"type": "array", "items": {"type": "string"}, "description": "entry names to leave out"},
@@ -125,7 +128,17 @@ fn tools() -> Value {
             "res_dir": {"type": "string", "description": "a folder from decode_resources"},
             "strings": {"type": "array", "items": {"type": "string"}, "description": "name[@config]=value string-resource edits"},
             "key": {"type": "string", "description": "PKCS#8 .pk8 private key"}, "cert": {"type": "string", "description": "X.509 certificate"},
+            "keystore": {"type": "string", "description": "JKS or PKCS#12 keystore (.jks, .keystore, .p12, .pfx) to sign with"},
+            "keystore_pass": {"type": "string", "description": "pass:TEXT, env:VAR or file:PATH"},
+            "key_pass": {"type": "string", "description": "key password, same forms (default: keystore_pass)"},
+            "key_alias": {"type": "string", "description": "which key (default: the only one)"},
             "no_sign": {"type": "boolean"}}}},
+        {"name": "consts", "description": "Static final constants (int, long, String...) stored in the DEX, by class / package, value or name. Decodes numbers: value 405 or 0xB8D0AFDF lists every constant with that value.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "classes": {"type": "array", "items": {"type": "string"}, "description": "a.b.C or a.b.* (omitted = all)"}, "value": {"type": "string"}, "name": {"type": "string", "description": "regex on the constant's name"}}))}},
+        {"name": "returns", "description": "Methods whose whole body is `return <constant>;`: message ids, opcodes, type codes. E.g. method uri with impl com.example.IProtocol lists every message class and its id; value finds the class for an id.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "method": {"type": "string", "description": "method name (omitted = any)"}, "impl": {"type": "string"}, "in": {"type": "array", "items": {"type": "string"}}, "value": {"type": "string"}}))}},
+        {"name": "size", "description": "Where the APK's size goes: share per kind (dex, native libs per ABI, res, assets), the biggest entries and duplicate files (same CRC and size).",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "top": {"type": "integer", "description": "how many biggest entries (default 25)"}}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
         {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Takes effect at once, no restart.",
@@ -394,6 +407,10 @@ fn call(
             if !deobf {
                 args.push("--no-deobf".into())
             }
+            if let Some(dir) = s(a, "out_dir") {
+                args.extend(["--out-dir".into(), dir]);
+                return run_cli(&args);
+            }
             if cached(a) {
                 return ask_worker(workers, &apk, deobf, &req, Some(args));
             }
@@ -416,6 +433,14 @@ fn call(
                     req.push(f.into())
                 }
             }
+            if let Some(Value::Array(v)) = a.get("in") {
+                for x in v.iter().filter_map(Value::as_str) {
+                    req.extend(["--in".to_string(), x.to_string()]);
+                }
+            } else if let Some(x) = s(a, "in") {
+                req.extend(["--in".to_string(), x]);
+            }
+            push_opt(&mut req, "--impl", s(a, "impl"));
             push_opt(
                 &mut req,
                 "--context",
@@ -618,9 +643,41 @@ fn call(
             push_opt(&mut args, "--res", s(a, "res_dir"));
             push_opt(&mut args, "--key", s(a, "key"));
             push_opt(&mut args, "--cert", s(a, "cert"));
+            push_opt(&mut args, "--ks", s(a, "keystore"));
+            push_opt(&mut args, "--ks-pass", s(a, "keystore_pass"));
+            push_opt(&mut args, "--ks-key-pass", s(a, "key_pass"));
+            push_opt(&mut args, "--ks-alias", s(a, "key_alias"));
             if b(a, "no_sign") {
                 args.push("--no-sign".into())
             }
+            run_cli(&args)
+        }
+        "consts" => {
+            args.extend(["consts".into(), apk]);
+            if let Some(Value::Array(v)) = a.get("classes") {
+                args.extend(v.iter().filter_map(|x| x.as_str().map(str::to_string)));
+            }
+            push_opt(&mut args, "--value", s(a, "value"));
+            push_opt(&mut args, "--name", s(a, "name"));
+            paging(&mut args);
+            run_cli(&args)
+        }
+        "returns" => {
+            args.extend(["returns".into(), apk]);
+            args.extend(s(a, "method"));
+            push_opt(&mut args, "--impl", s(a, "impl"));
+            if let Some(Value::Array(v)) = a.get("in") {
+                for x in v.iter().filter_map(Value::as_str) {
+                    args.extend(["--in".to_string(), x.to_string()]);
+                }
+            }
+            push_opt(&mut args, "--value", s(a, "value"));
+            paging(&mut args);
+            run_cli(&args)
+        }
+        "size" => {
+            args.extend(["size".into(), apk]);
+            push_opt(&mut args, "--top", n(a, "top").map(|v| v.to_string()));
             run_cli(&args)
         }
         "decrypt_strings" => run_cli(&["decrypt".into(), apk]),

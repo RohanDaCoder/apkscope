@@ -18,6 +18,10 @@ pub struct SearchOpts {
     pub app_only: bool,
     /// include library code even in the scopes that default to app-only
     pub all: bool,
+    /// `--in`: only these classes / packages
+    pub within: Vec<String>,
+    /// `--impl`: only subtypes of this class or interface
+    pub implements: Option<String>,
     pub ctx: usize,
     pub fmt: session::Format,
     pub out: Option<String>,
@@ -31,6 +35,8 @@ pub fn search_args(args: &[String]) -> Result<SearchOpts, String> {
         method: false,
         app_only: false,
         all: false,
+        within: Vec::new(),
+        implements: None,
         ctx: 0,
         fmt: session::Format::Text,
         out: None,
@@ -43,6 +49,10 @@ pub fn search_args(args: &[String]) -> Result<SearchOpts, String> {
             "--method" => s.method = true,
             "--app-only" => s.app_only = true,
             "--all" => s.all = true,
+            "--in" => s
+                .within
+                .push(it.next().ok_or("--in needs a class or package")?.clone()),
+            "--impl" => s.implements = Some(it.next().ok_or("--impl needs a type")?.clone()),
             "--context" => {
                 s.ctx = it
                     .next()
@@ -79,10 +89,15 @@ pub fn search_on(
     let mut m = session::Matcher::new(&rest.join(" "), scope, a.regex, a.case)?;
     // the API scopes default to app code only; --all opts back out, --app-only still works
     m.app_only = a.app_only || (scope.query_optional() && !a.all);
+    m.only = crate::lookup::class_mask(st, &a.within, a.implements.as_deref())?;
     if scope.decompiles() && st.index.get().is_none() {
         st.build_index();
     }
-    let (hits, hidden) = session::search_stats(st, &m, &session::Progress::default());
+    let (mut hits, hidden) = session::search_stats(st, &m, &session::Progress::default());
+    if let Some(only) = &m.only {
+        // the sheets (api, config) and resource / native hits: keep classes the filter accepts
+        hits.retain(|h| crate::lookup::class_id(st, &h.0).is_some_and(|k| only[k]));
+    }
     let mut text = session::export(&hits, a.ctx, a.method, a.fmt, |x| st.target_text(x));
     if a.fmt == session::Format::Text {
         let head = session::search_summary(st, scope, &hits);
@@ -92,7 +107,7 @@ pub fn search_on(
     }
     let mut n = hits.len();
     if scope == session::Scope::Secrets {
-        n += secrets_entropy_tier(st, a, &mut text);
+        n += secrets_entropy_tier(st, a, m.only.as_deref(), &mut text);
     }
     let mut note = scope.note().to_string();
     if hidden > 0 {
@@ -108,8 +123,16 @@ pub fn search_on(
 /// Append the labelled entropy tier of `search secrets` to the exported output. Kept out of
 /// the pattern hits on purpose: its own section in text output, trailing rows in csv/json.
 /// Returns how many entries it added.
-fn secrets_entropy_tier(st: &session::State, a: &SearchOpts, text: &mut String) -> usize {
-    let found = session::entropy_secrets(st);
+fn secrets_entropy_tier(
+    st: &session::State,
+    a: &SearchOpts,
+    only: Option<&[bool]>,
+    text: &mut String,
+) -> usize {
+    let mut found = session::entropy_secrets(st);
+    if let Some(only) = only {
+        found.retain(|c| crate::lookup::class_id(st, &c.class).is_some_and(|k| only[k]));
+    }
     if found.is_empty() {
         return 0;
     }
@@ -180,6 +203,8 @@ pub fn search(a: &SearchArgs, deobf: bool) -> Result<(), String> {
         method: a.method,
         app_only: a.app_only,
         all: a.all,
+        within: a.r#in.clone(),
+        implements: a.r#impl.clone(),
         ctx: a.context,
         fmt,
         out: a.out.clone(),
@@ -194,7 +219,7 @@ pub fn search(a: &SearchArgs, deobf: bool) -> Result<(), String> {
             let _ = std::io::stdout().lock().write_all(text.as_bytes());
         }
     }
-    eprintln!(
+    crate::note!(
         "{n} hits | load {:.2}s, index + search {:.2}s{}",
         loaded.as_secs_f64(),
         (t.elapsed() - loaded).as_secs_f64(),
@@ -204,7 +229,7 @@ pub fn search(a: &SearchArgs, deobf: bool) -> Result<(), String> {
             ""
         }
     );
-    eprintln!("note: {note}");
+    crate::note!("note: {note}");
     Ok(())
 }
 

@@ -42,6 +42,9 @@ fn dispatch(cmd: Cmd, deobf: bool) -> Result<(), String> {
         Refs(a) => crate::cli::run_big_stack(|| query::refs(&a)),
         Decompile(a) => crate::cli::run_big_stack(|| query::decompile(&a, deobf)),
         Diff(a) => query::diff(&a),
+        Consts(a) => lookup::consts(&a, deobf),
+        Returns(a) => lookup::returns(&a, deobf),
+        Size(a) => size::size(&a),
         Manifest(a) => query::manifest(&a),
         Callers(a) => recon::callers(&a),
         Callgraph(a) => recon::callgraph(&a),
@@ -76,9 +79,11 @@ mod build;
 mod edit;
 mod flutter;
 mod il2cpp;
+mod lookup;
 mod map;
 mod mcp;
 mod misc;
 mod query;
 mod recon;
 mod search;
+mod size;
