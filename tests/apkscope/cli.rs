@@ -380,16 +380,24 @@ fn defect4_version_and_help_are_builtins() {
     // --help is a clap "error" of kind DisplayHelp (printed to stdout, exit 0 in the real binary)
     assert_eq!(parse_err(&["--help"]).kind(), ErrorKind::DisplayHelp);
 
-    // --version works in any position, not only as the sole argument
-    assert_eq!(parse_err(&["--version"]).kind(), ErrorKind::DisplayVersion);
-
-    // -V short form
-    assert_eq!(parse_err(&["-V"]).kind(), ErrorKind::DisplayVersion);
-
-    // --version after a global flag still works (today: `apkscope --json --version` -> usage)
-    assert_eq!(
-        parse_err(&["--json", "--version"]).kind(),
-        ErrorKind::DisplayVersion
+    // --version is our own flag, not clap's: `apkscope upgrade` runs `--version --json`
+    // on a staged binary to check its identity, so --json must reach it
+    for args in [
+        &["apkscope", "--version"][..],
+        &["apkscope", "-V"],
+        &["apkscope", "--json", "--version"],
+    ] {
+        assert!(Cli::try_parse_from(args).unwrap().version);
+    }
+    assert!(
+        Cli::try_parse_from(["apkscope", "--version", "--json"])
+            .unwrap()
+            .json
+    );
+    assert!(
+        Cli::try_parse_from(["apkscope", "--revision"])
+            .unwrap()
+            .revision
     );
 }
 
