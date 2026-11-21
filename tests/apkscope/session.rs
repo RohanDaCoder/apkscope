@@ -560,3 +560,136 @@ fn secrets_fixture_first_party_keys() {
     assert!(scan.contains("HMAC_KEY"), "scan secrets section:\n{scan}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `search config` reports what the app ships as changeable, in labelled tiers: the
+/// BuildConfig string defaults exactly (and only `*.BuildConfig` classes — other string
+/// constants are not config), the remote-config defaults XML entries, and reads of
+/// Firebase Remote Config / SharedPreferences grouped by key with their fallbacks
+/// (inferred).
+#[test]
+fn search_config_reports_changeable_surface() {
+    use std::io::Write as _;
+    // the defaults-XML parser, on a Firebase-style defaults map
+    let xml = "<?xml version=\"1.0\"?><defaultsMap>\
+               <entry><key>tier</key><value>stable</value></entry>\
+               <entry><key>hidden</key><value>false</value></entry></defaultsMap>";
+    assert_eq!(
+        xml_entries(xml),
+        vec![
+            ("tier".to_string(), "stable".to_string()),
+            ("hidden".to_string(), "false".to_string())
+        ]
+    );
+
+    let buildconfig = r#"
+.class public Lcom/example/app/BuildConfig;
+.super Ljava/lang/Object;
+
+.field public static final TIER:Ljava/lang/String; = "stable"
+
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+"#;
+    let app = r#"
+.class public Lcom/example/app/Prefs;
+.super Ljava/lang/Object;
+
+.field public static final NOT_DEFAULT:Ljava/lang/String; = "not a config default"
+
+.method public static load(Landroid/content/SharedPreferences;)Ljava/lang/String;
+    .locals 2
+    const-string v0, "tier"
+    const-string v1, "beta"
+    invoke-interface {p0, v0, v1}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+.end method
+"#;
+    // a second reader of the same key: the grouped tier collapses both into one row
+    let other = r#"
+.class public Lcom/example/app/Other;
+.super Ljava/lang/Object;
+
+.method public static peek(Landroid/content/SharedPreferences;)I
+    .locals 1
+    const-string v0, "tier"
+    const-string v1, "beta"
+    invoke-interface {p0, v0, v1}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v0
+    const-string v0, "hidden"
+    invoke-interface {p0, v0}, Landroid/content/SharedPreferences;->getInt(Ljava/lang/String;)I
+    move-result v0
+    return v0
+.end method
+"#;
+    let classes = [buildconfig, app, other]
+        .iter()
+        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
+        .collect::<Vec<_>>();
+    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dir = std::env::temp_dir().join(format!("apkscope-config-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let apk = dir.join("fixture.apk");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&apk).unwrap());
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("classes.dex", stored).unwrap();
+        z.write_all(&dex).unwrap();
+        z.finish().unwrap();
+    }
+    let st = load(apk.to_str().unwrap(), false).unwrap();
+    st.build_index();
+    let m = Matcher::new("", Scope::Config, false, false).unwrap();
+    let hits = search(&st, &m, &Progress::default());
+    let text = || {
+        hits.iter()
+            .map(|h| h.2.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // exact: the shipped default, from the DEX tables — BuildConfig only
+    assert!(
+        text().contains("default: com.example.app.BuildConfig#TIER = \"stable\""),
+        "{}",
+        text()
+    );
+    // other static string constants are not config: the noise tier is gone
+    assert!(
+        !text().contains("NOT_DEFAULT") && !text().contains("not a config default"),
+        "only *.BuildConfig classes list defaults:\n{}",
+        text()
+    );
+    // inferred and grouped by key: two readers of `tier`, one row, first class + count
+    let tier_rows = text()
+        .lines()
+        .filter(|l| l.starts_with("read: tier"))
+        .count();
+    assert_eq!(tier_rows, 1, "grouped by key:\n{}", text());
+    assert!(
+        text().contains(
+            "read: tier    fallback: \"beta\"    (inferred)    in com.example.app.Other +1 more"
+        ),
+        "{}",
+        text()
+    );
+    // a read with no literal fallback says so instead of pretending
+    assert!(
+        text().contains(
+            "read: hidden    (inferred, no literal fallback)    in com.example.app.Other"
+        ),
+        "{}",
+        text()
+    );
+    // a query narrows the sheet
+    let m = Matcher::new("tier", Scope::Config, false, false).unwrap();
+    let hits = search(&st, &m, &Progress::default());
+    assert!(
+        hits.iter().all(|h| h.2.to_lowercase().contains("tier")),
+        "{hits:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
