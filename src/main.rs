@@ -20,6 +20,7 @@ mod opt;
 mod proguard;
 mod quick;
 mod re;
+mod search;
 mod session;
 mod upgrade;
 
