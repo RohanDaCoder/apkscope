@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 mod cache;
 mod cfg;
 mod cli;

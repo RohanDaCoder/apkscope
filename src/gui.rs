@@ -1292,9 +1292,15 @@ impl App {
 
     /// Store a rename or comment in the project file and redraw the open classes with it.
     fn save_note(&mut self, key: &str, comment: bool, text: &str) {
-        let Some(st) = self.st else { return };
         let mut n = crate::deobf::notes();
         crate::re::apply_note(&mut n, key, comment, text);
+        self.store_notes(n, None);
+    }
+
+    /// Save names and comments to the project file, then redraw the open classes with them.
+    /// `done` replaces the "Saved to" toast.
+    fn store_notes(&mut self, n: crate::deobf::Notes, done: Option<String>) {
+        let Some(st) = self.st else { return };
         if let Err(e) = crate::re::save_notes(&st.path, &n) {
             self.toast(format!("Not saved: {e}"));
             return;
@@ -1317,10 +1323,35 @@ impl App {
             self.open(o, Some(v), None);
         }
         self.active = active.min(self.docs.len().saturating_sub(1));
-        self.toast(format!(
-            "Saved to {}",
-            crate::re::project_file(&st.path).display()
-        ));
+        self.toast(done.unwrap_or_else(|| {
+            format!("Saved to {}", crate::re::project_file(&st.path).display())
+        }));
+    }
+
+    /// Run one CLI command in the background and show what it printed as a report, so
+    /// every command the CLI has is one menu item away without a second implementation.
+    fn cli_report(&mut self, title: &str, args: Vec<std::ffi::OsString>) {
+        self.report(title.into(), move |_| {
+            let out = std::env::current_exe().and_then(|exe| {
+                let mut cmd = std::process::Command::new(exe);
+                cmd.args(&args).stdin(std::process::Stdio::null());
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flash
+                }
+                cmd.output()
+            });
+            let text = match out {
+                Ok(o) => format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(e) => format!("error: {e}"),
+            };
+            text.lines().map(|l| (l.to_string(), None)).collect()
+        });
     }
 
     /// Carry out a context-menu choice.
@@ -3209,6 +3240,60 @@ impl eframe::App for App {
                         if ui.button("Decrypt strings").on_hover_text("Run string-decryptor methods on their constant arguments (also shown inline in the code as /* = \"...\" */)").clicked() {
                             self.report("Decrypted strings".into(), |st| crate::re::decrypt_report(&st.dexes));
                             ui.close_menu();
+                        }
+                        let path = std::ffi::OsString::from(self.path.clone());
+                        if ui.button("Compare with another APK…").on_hover_text("Added / removed classes, methods, permissions and strings between this APK and another version").clicked() {
+                            ui.close_menu();
+                            if let Some(other) = rfd::FileDialog::new().add_filter("Android app", &session::INPUTS).pick_file() {
+                                self.cli_report("Diff", vec!["diff".into(), path.clone(), other.into(), "--strings".into()]);
+                            }
+                        }
+                        if ui.button("Disassemble this class").on_hover_text("Raw Dalvik bytecode of the open class").clicked() {
+                            ui.close_menu();
+                            match self.docs.get(self.active).map(|d| d.open.clone()) {
+                                Some(Open::Class(c)) => self.cli_report("Bytecode", vec!["disasm".into(), path.clone(), crate::dex::java_name(&c).into()]),
+                                _ => self.toast("Open a class first"),
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Unity IL2CPP").on_hover_text("Unity games: C# methods with their native addresses").clicked() {
+                            ui.close_menu();
+                            self.cli_report("IL2CPP", vec!["il2cpp".into(), path.clone()]);
+                        }
+                        if ui.button("Flutter").on_hover_text("Flutter apps: Dart version, libraries, hosts, routes and model fields").clicked() {
+                            ui.close_menu();
+                            self.cli_report("Flutter", vec!["flutter".into(), path.clone(), "--api".into()]);
+                        }
+                        if ui.button("Dump unpacked code (Frida)…").on_hover_text("Run the app on the device and save the DEX it unpacks and the scripts it decrypts (needs frida-server)").clicked() {
+                            ui.close_menu();
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                self.cli_report("Dump", vec!["dump".into(), path.clone(), dir.into()]);
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Import names…").on_hover_text("Take renames from a JADX (.jobf), Enigma (.mapping) or ProGuard/R8 (mapping.txt) file").clicked() {
+                            ui.close_menu();
+                            if let Some(f) = rfd::FileDialog::new().add_filter("Mapping", &["jobf", "mapping", "txt"]).pick_file() {
+                                match std::fs::read_to_string(&f) {
+                                    Ok(text) => {
+                                        let mut n = crate::deobf::notes();
+                                        let k = crate::re::import_mapping(&text, &mut n);
+                                        self.store_notes(n, Some(format!("{k} names imported")));
+                                    }
+                                    Err(e) => self.toast(format!("{}: {e}", f.display())),
+                                }
+                            }
+                        }
+                        if ui.button("Export names…").on_hover_text("Write your renames as JADX (.jobf), Enigma (.mapping) or ProGuard (mapping.txt), by file name").clicked() {
+                            ui.close_menu();
+                            if let (Some(st), Some(f)) = (self.st, rfd::FileDialog::new().set_file_name("mapping.txt").save_file()) {
+                                let name = f.to_string_lossy().into_owned();
+                                let text = crate::re::export_mapping(&st.dexes, &crate::deobf::notes(), crate::re::MappingFormat::from_file(&name));
+                                match std::fs::write(&f, text) {
+                                    Ok(()) => self.toast(format!("Wrote {name}")),
+                                    Err(e) => self.toast(format!("{name}: {e}")),
+                                }
+                            }
                         }
                     });
                 });

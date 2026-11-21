@@ -59,7 +59,9 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path", "classes"], "properties": page(json!({"apk_path": apk,
             "classes": {"type": "array", "items": {"type": "string"}, "description": "Class names, e.g. com.example.Main"},
             "method": {"type": "string", "description": "Only return the method(s) with this name"},
-            "smali": {"type": "boolean"}, "cache": cache,
+            "smali": {"type": "boolean"},
+            "full": {"type": "boolean", "description": "Also decompile methods the deobfuscator would leave out (synthetic / bridge)"},
+            "cache": cache,
             "deobfuscate": {"type": "boolean", "description": "Rename obfuscated names (default true)"}}))}},
         {"name": "search", "description": "Search decompiled code and resources. Scopes: code (decompiled Java), string (literals), usages (xref by name), class, res (XML resources + manifest), urls (endpoints, also in native libs), http (Retrofit / OkHttp / HttpURLConnection calls), secrets (API keys, tokens). Uses the reference index so only classes that can match get decompiled.",
          "inputSchema": {"type": "object", "required": ["apk_path", "scope"], "properties": page(json!({"apk_path": apk,
@@ -93,6 +95,36 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
         {"name": "scan", "description": "One-shot security scan as a single report: endpoints / URLs, embedded secrets (API keys, tokens) and HTTP-client calls across code, resources and native libraries.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
+        {"name": "frida_hook_script", "description": "Write a standalone Frida hook script for a method (or every method of a class) that logs arguments, return values and exceptions. For running hooks now, use frida_start + frida_hook instead.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string"}, "method": {"type": "string", "description": "omit for all methods"}, "live": {"type": "boolean", "description": "event body for live sessions instead of a console.log script"}}}},
+        {"name": "dump_app", "description": "Run the app under Frida and save the DEX files it unpacks at runtime and the scripts it decrypts (packed / protected apps). Needs frida-tools here and frida-server on the device.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": {"type": "string", "description": "APK path or the app's package name"}, "out_dir": {"type": "string"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id"}, "wait": {"type": "integer", "description": "seconds to collect DEX files (default 15)"}, "scripts_for": {"type": "integer", "description": "seconds to collect scripts (default 15)"}}}},
+        {"name": "il2cpp", "description": "Unity IL2CPP games: C# methods with their native addresses, which method uses a string, or the strings and calls inside one method.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "extra_paths": {"type": "array", "items": {"type": "string"}, "description": "more APK / split files of the same game"}, "uses": {"type": "string", "description": "methods that use this string"}, "method": {"type": "string", "description": "strings and calls inside this method"}}))}},
+        {"name": "flutter", "description": "Flutter apps: Dart snapshot version, native libs and the recovered Dart library tree; api lists hosts, routes and model fields; strings dumps libapp.so strings.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "abi": {"type": "string", "description": "e.g. arm64-v8a"}, "api": {"type": "boolean"}, "strings": {"type": "boolean"}}))}},
+        {"name": "rename", "description": "Rename a class or member everywhere apkscope shows it (decompiler, xrefs, GUI, export). Saved in <apk>.apkscope.json next to the APK. An empty new_name removes the rename.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "target", "new_name"], "properties": {"apk_path": apk, "target": {"type": "string", "description": "a.b.C, a.b.C#field or a.b.C#method()"}, "new_name": {"type": "string"}}}},
+        {"name": "comment", "description": "Attach a comment to a class or member; shown above it in decompiled code. Saved in <apk>.apkscope.json. Empty text removes it.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "target", "text"], "properties": {"apk_path": apk, "target": {"type": "string"}, "text": {"type": "string"}}}},
+        {"name": "mapping", "description": "Exchange names with other tools: export the renames to, or import them from, a JADX (.jobf), Enigma (.mapping) or ProGuard/R8 (mapping.txt) file. The format follows the file name.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "direction", "file"], "properties": {"apk_path": apk, "direction": {"type": "string", "enum": ["import", "export"]}, "file": {"type": "string"}}}},
+        {"name": "get_smali", "description": "Editable smali of one class (with its nested classes). Edit it, then pass the file to build_apk's smali list.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string"}}}},
+        {"name": "disassemble", "description": "Raw Dalvik bytecode listing of one class, or of every class when class is omitted.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "class": {"type": "string"}}))}},
+        {"name": "decode_resources", "description": "Write the manifest and res/ as editable files to a folder. Edit them, then pass the folder to build_apk's res_dir.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
+        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v1+v2+v3; a debug key unless key/cert are given).",
+         "inputSchema": {"type": "object", "required": ["apk_path", "out_path"], "properties": {"apk_path": apk, "out_path": {"type": "string"},
+            "put": {"type": "array", "items": {"type": "string"}, "description": "name=file: store this local file under that entry name"},
+            "delete": {"type": "array", "items": {"type": "string"}, "description": "entry names to leave out"},
+            "smali": {"type": "array", "items": {"type": "string"}, "description": "edited .smali files"},
+            "manifest": {"type": "string", "description": "edited AndroidManifest.xml (text)"},
+            "res_dir": {"type": "string", "description": "a folder from decode_resources"},
+            "strings": {"type": "array", "items": {"type": "string"}, "description": "name[@config]=value string-resource edits"},
+            "key": {"type": "string", "description": "PKCS#8 .pk8 private key"}, "cert": {"type": "string", "description": "X.509 certificate"},
+            "no_sign": {"type": "boolean"}}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
         {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Takes effect at once, no restart.",
@@ -349,6 +381,9 @@ fn call(
             if b(a, "smali") {
                 opts.push("--smali".into())
             }
+            if b(a, "full") {
+                opts.push("--full".into())
+            }
             let mut req = vec!["decompile".to_string()];
             req.extend(classes.iter().cloned());
             req.extend(opts.iter().cloned());
@@ -466,6 +501,124 @@ fn call(
                 s(a, "class").ok_or("class is required")?,
                 s(a, "field").ok_or("field is required")?,
             ]);
+            run_cli(&args)
+        }
+        "frida_hook_script" => {
+            args.extend([
+                "frida".into(),
+                apk,
+                s(a, "class").ok_or("class is required")?,
+            ]);
+            args.extend(s(a, "method"));
+            if b(a, "live") {
+                args.push("--live".into())
+            }
+            run_cli(&args)
+        }
+        "dump_app" => {
+            args.extend([
+                "dump".into(),
+                apk,
+                s(a, "out_dir").ok_or("out_dir is required")?,
+            ]);
+            if b(a, "attach") {
+                args.push("--attach".into())
+            }
+            push_opt(&mut args, "--device", s(a, "device"));
+            push_opt(&mut args, "--wait", n(a, "wait").map(|v| v.to_string()));
+            push_opt(
+                &mut args,
+                "--scripts-for",
+                n(a, "scripts_for").map(|v| v.to_string()),
+            );
+            run_cli(&args)
+        }
+        "il2cpp" => {
+            args.extend(["il2cpp".into(), apk]);
+            if let Some(Value::Array(v)) = a.get("extra_paths") {
+                args.extend(v.iter().filter_map(|x| x.as_str().map(str::to_string)));
+            }
+            push_opt(&mut args, "--uses", s(a, "uses"));
+            push_opt(&mut args, "--method", s(a, "method"));
+            paging(&mut args);
+            run_cli(&args)
+        }
+        "flutter" => {
+            args.extend(["flutter".into(), apk]);
+            push_opt(&mut args, "--abi", s(a, "abi"));
+            for k in ["api", "strings"] {
+                if b(a, k) {
+                    args.push(format!("--{k}"))
+                }
+            }
+            paging(&mut args);
+            run_cli(&args)
+        }
+        "rename" | "comment" | "mapping" => {
+            if name == "mapping" {
+                args.extend([
+                    "map".into(),
+                    apk.clone(),
+                    s(a, "direction").ok_or("direction is required")?,
+                    s(a, "file").ok_or("file is required")?,
+                ]);
+            } else {
+                let key = if name == "rename" { "new_name" } else { "text" };
+                args.extend([
+                    name.into(),
+                    apk.clone(),
+                    s(a, "target").ok_or("target is required")?,
+                    // `--`: a name or comment that starts with '-' stays text
+                    "--".into(),
+                    s(a, key).ok_or(format!("{key} is required"))?,
+                ]);
+            }
+            // a warm session holds the old names: drop it so the next call reloads them
+            let prefix = format!("{apk}\0");
+            workers.retain(|k, _| !k.starts_with(&prefix));
+            run_cli(&args)
+        }
+        "get_smali" => run_cli(&[
+            "smali".into(),
+            apk,
+            s(a, "class").ok_or("class is required")?,
+        ]),
+        "disassemble" => {
+            args.extend(["disasm".into(), apk]);
+            args.extend(s(a, "class"));
+            paging(&mut args);
+            run_cli(&args)
+        }
+        "decode_resources" => run_cli(&[
+            "res".into(),
+            apk,
+            s(a, "out_dir").ok_or("out_dir is required")?,
+        ]),
+        "build_apk" => {
+            args.extend([
+                "build".into(),
+                apk,
+                s(a, "out_path").ok_or("out_path is required")?,
+            ]);
+            for (k, f) in [
+                ("put", "--put"),
+                ("delete", "--delete"),
+                ("smali", "--smali"),
+                ("strings", "--string"),
+            ] {
+                if let Some(Value::Array(v)) = a.get(k) {
+                    for x in v.iter().filter_map(Value::as_str) {
+                        args.extend([f.to_string(), x.to_string()]);
+                    }
+                }
+            }
+            push_opt(&mut args, "--manifest", s(a, "manifest"));
+            push_opt(&mut args, "--res", s(a, "res_dir"));
+            push_opt(&mut args, "--key", s(a, "key"));
+            push_opt(&mut args, "--cert", s(a, "cert"));
+            if b(a, "no_sign") {
+                args.push("--no-sign".into())
+            }
             run_cli(&args)
         }
         "decrypt_strings" => run_cli(&["decrypt".into(), apk]),
@@ -624,7 +777,7 @@ pub fn serve() -> Result<(), String> {
                 let name = params["name"].as_str().unwrap_or_default();
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let max = n(&args, "max_chars").map_or(MAX_CHARS, |m| m as usize);
-                let res = if name.starts_with("frida_") {
+                let res = if name.starts_with("frida_") && name != "frida_hook_script" {
                     live_call(&mut live, name, &args)
                 } else {
                     call(&mut workers, name, &args)
@@ -785,3 +938,7 @@ pub fn worker(apk: &str, deobf: bool) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/apkscope/mcp.rs"]
+mod tests;
