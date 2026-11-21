@@ -84,7 +84,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
         {"name": "verify_signature", "description": "Check the APK's v1 / v2 / v3 signatures and print the signer certificate.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
-        {"name": "diff_apks", "description": "What changed between two versions of an app: added / removed classes, methods of classes both have, permissions, and optionally strings (new URLs, keys). Lines start with + or -.",
+        {"name": "diff_apks", "description": "What changed between two versions of an app: added / removed classes, methods of classes both have, permissions, changed named constants (a rotated key shows its new value), and optionally strings (new URLs, keys) with likely rotated/renamed pairs. Lines start with + or -.",
          "inputSchema": {"type": "object", "required": ["apk_path", "new_apk_path"], "properties": {"apk_path": apk, "new_apk_path": {"type": "string", "description": "the newer APK"}, "strings": {"type": "boolean", "description": "also diff string-pool values"}, "limit": {"type": "integer"}, "offset": {"type": "integer"}}}},
         {"name": "callers", "description": "Methods that call a given method (or any method of a class): who invokes it, one level up.",
          "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string", "description": "Java class name or descriptor"}, "method": {"type": "string", "description": "Method name; omit for all methods of the class"}}}},

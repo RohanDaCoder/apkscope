@@ -174,7 +174,7 @@ Fast, stateless queries (parallel, no index, no cache) - built for scripts and A
                           [--class C] [--fuzzy-class] [--regex] [--ignore-case] [--java]
   apkscope decompile <apk> <Class>... [--method name] [--smali] [--full]
   apkscope manifest <apk>
-  apkscope diff     <old.apk> <new.apk> [--strings]   added / removed classes, methods, permissions
+  apkscope diff     <old.apk> <new.apk> [--strings]   added / removed classes, methods, permissions; changed constants
 Indexed + cached (first run builds it, later runs reuse the disk cache):
   apkscope decompile <apk>                 every class, to stdout
   apkscope search <apk> <scope> [query] [--regex] [--case] [--app-only] [--all] [--context N] [--method]
