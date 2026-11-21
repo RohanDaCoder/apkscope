@@ -920,6 +920,8 @@ pub struct Matcher {
     pub scope: Scope,
     /// skip classes from known libraries
     pub app_only: bool,
+    /// `--in` / `--impl`: only the classes (by id) marked true
+    pub only: Option<Vec<bool>>,
     query: Option<regex::Regex>,
     builtin: Option<regex::Regex>,
 }
@@ -951,6 +953,7 @@ impl Matcher {
         Ok(Matcher {
             scope,
             app_only: false,
+            only: None,
             query,
             builtin,
         })
@@ -1125,6 +1128,9 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
                 hidden += 1;
                 continue;
             }
+            if m.only.as_ref().is_some_and(|o| !o[k]) {
+                continue;
+            }
             if hits.len() < LIMIT {
                 hits.push((c.0.clone(), 0, String::new()));
             }
@@ -1161,6 +1167,7 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
             }
         }
         if m.scope == Scope::Res {
+            hits.extend(crate::res_search::xml_hits(st, m, prog));
             hits.extend(
                 st.files
                     .keys()
@@ -1204,6 +1211,9 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
             let before = list.len();
             list.retain(|&k| st.origin[k] != Origin::Library);
             hidden += before - list.len();
+        }
+        if let Some(only) = &m.only {
+            list.retain(|&k| only[k]);
         }
         hits.extend(scan(st, m, &list, prog));
     }
@@ -1403,11 +1413,20 @@ fn retrofit_endpoints(st: &State) -> Vec<Endpoint> {
     let Some(idx) = st.index.get() else {
         return vec![];
     };
+    // obfuscated Retrofit: the renamed annotation types (empty when the names are intact)
+    let renamed = crate::retrofit_map::retrofit_names(st);
+    let real_of = |t: String| renamed.get(&t).cloned().unwrap_or(t);
+    let named = |real: String| {
+        renamed
+            .iter()
+            .find(|(_, r)| **r == real)
+            .map_or(real.clone(), |(o, _)| o.clone())
+    };
     let mut ifaces: Vec<usize> = Vec::new();
     for (d, dx) in st.dexes.iter().enumerate() {
         for v in VERBS {
             let Some(tid) = dx
-                .find_string(format!("Lretrofit2/http/{v};").as_bytes())
+                .find_string(named(format!("Lretrofit2/http/{v};")).as_bytes())
                 .and_then(|s| dx.find_type(s))
             else {
                 continue;
@@ -1433,7 +1452,7 @@ fn retrofit_endpoints(st: &State) -> Vec<Endpoint> {
             let mut verb = String::new();
             let mut path = String::new();
             for a in &annos.methods[&mid] {
-                let Ok(t) = dx.type_name(a.type_idx) else {
+                let Ok(t) = dx.type_name(a.type_idx).map(real_of) else {
                     continue;
                 };
                 let Some(v) = t
@@ -1471,7 +1490,7 @@ fn retrofit_endpoints(st: &State) -> Vec<Endpoint> {
                     && let Some(ann) = list.get(i)
                 {
                     for a in ann {
-                        let Ok(t) = dx.type_name(a.type_idx) else {
+                        let Ok(t) = dx.type_name(a.type_idx).map(real_of) else {
                             continue;
                         };
                         if let Some((k, named)) = param_kind(&t) {

@@ -406,7 +406,7 @@ pub fn init(dexes: &[Dex]) {
         }
     }
     let enums = enum_names(dexes);
-    eprintln!(
+    crate::note!(
         "deobf: {} classes renamed, {} enum constants named from their strings",
         map.len(),
         enums.len()

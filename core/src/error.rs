@@ -39,6 +39,9 @@ pub enum Error {
         #[source]
         source: rsa::pkcs8::Error,
     },
+    /// A keystore that cannot be read: wrong password, unsupported format or cipher.
+    #[error("keystore: {0}")]
+    Keystore(String),
     /// A certificate that is not X.509.
     #[error("{}: not an X.509 certificate", path.display())]
     Certificate { path: PathBuf },

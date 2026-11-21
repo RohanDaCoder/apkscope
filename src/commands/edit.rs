@@ -24,7 +24,7 @@ fn note(a: &NoteArgs, is_comment: bool) -> Result<(), String> {
     };
     crate::re::apply_note(&mut n, &key, is_comment, &text);
     crate::re::save_notes(&a.apk, &n)?;
-    eprintln!(
+    crate::note!(
         "saved {} ({key})",
         crate::re::project_file(&a.apk).display()
     );
@@ -48,7 +48,7 @@ fn res_cmd(apk: &str, out: &str) -> Result<(), String> {
         }
         std::fs::write(&to, data).map_err(|e| format!("{}: {e}", to.display()))?;
     }
-    eprintln!("wrote {} file(s) to {out}", files.len());
+    crate::note!("wrote {} file(s) to {out}", files.len());
     Ok(())
 }
 

@@ -87,7 +87,7 @@ pub fn refs(a: &RefsArgs) -> Result<(), String> {
     };
     let text = refs_text(&q, hits, o.json, if java { Some(&java_of) } else { None })?;
     cli::emit(&text)?;
-    eprintln!(
+    crate::note!(
         "{} refs in {:.0} ms",
         hits.len(),
         t.elapsed().as_secs_f64() * 1000.0
@@ -224,8 +224,24 @@ pub fn decompile(a: &DecompileArgs, deobf: bool) -> Result<(), String> {
     let apk = a.apk.as_str();
     let method = &a.method;
     let (smali, full) = (a.smali, a.full);
-    let names = &a.names;
+    let mut names = a.names.clone();
+    if let Some(f) = &a.classes_file {
+        let list = std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?;
+        names.extend(
+            list.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string),
+        );
+    }
+    let names = &names;
     if names.is_empty() {
+        if a.out_dir.is_some() {
+            return Err(
+                "--out-dir needs class names (or --classes-file); for every class use `apkscope export`"
+                    .into(),
+            );
+        }
         return decompile_all(apk, None, deobf);
     }
     let results: Vec<(String, Result<String, String>)> = if full {
@@ -246,22 +262,42 @@ pub fn decompile(a: &DecompileArgs, deobf: bool) -> Result<(), String> {
     };
     let mut text = String::new();
     let mut missing = Vec::new();
+    let mut written = 0;
+    if let Some(dir) = &a.out_dir {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+    }
     for (name, r) in results {
-        match r {
+        let body = match r {
             Ok(t) => match method {
                 Some(m) => match quick::method_of(&t, m) {
-                    Some(x) => text += &x,
-                    None => missing.push(format!("method {m} not found in {name}")),
+                    Some(x) => x,
+                    None => {
+                        missing.push(format!("method {m} not found in {name}"));
+                        continue;
+                    }
                 },
-                None => {
-                    text += &t;
-                    text.push('\n');
-                }
+                None => t + "\n",
             },
-            Err(e) => missing.push(e),
+            Err(e) => {
+                missing.push(e);
+                continue;
+            }
+        };
+        match &a.out_dir {
+            Some(dir) => {
+                let ext = if smali { "smali" } else { "java" };
+                let safe = name.replace(['/', '\\', ':'], "_");
+                let file = std::path::Path::new(dir).join(format!("{safe}.{ext}"));
+                std::fs::write(&file, body).map_err(|e| format!("{}: {e}", file.display()))?;
+                written += 1;
+            }
+            None => text += &body,
         }
     }
-    cli::emit(&text)?;
+    match &a.out_dir {
+        Some(dir) => crate::note!("wrote {written} file(s) to {dir}"),
+        None => cli::emit(&text)?,
+    }
     if missing.is_empty() {
         Ok(())
     } else {

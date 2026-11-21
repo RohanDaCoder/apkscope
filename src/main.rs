@@ -1,4 +1,15 @@
 #![recursion_limit = "256"]
+
+/// A progress or summary line on stderr; `-q` turns these off (errors always print).
+macro_rules! note {
+    ($($t:tt)*) => {
+        if !crate::cli::quiet() {
+            eprintln!($($t)*)
+        }
+    };
+}
+pub(crate) use note;
+
 mod cache;
 mod cfg;
 mod cli;
@@ -6,6 +17,7 @@ mod commands;
 mod deobf;
 mod dex;
 mod elf;
+mod examples;
 mod export;
 #[cfg(feature = "gui")]
 mod gui;
@@ -15,11 +27,14 @@ mod index;
 mod ir;
 mod java;
 mod live;
+mod lookup;
 mod mcp;
 mod opt;
 mod proguard;
 mod quick;
 mod re;
+mod res_search;
+mod retrofit_map;
 mod session;
 mod upgrade;
 

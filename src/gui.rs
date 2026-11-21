@@ -968,6 +968,8 @@ pub struct App {
     counts: [usize; 3],
     show_libs: bool,
     app_only: bool,
+    /// search filter: packages / classes (`a.b.*`, comma-separated) and `impl:Type`
+    within: String,
     res: BTreeMap<String, Vec<String>>,
     tx: mpsc::Sender<Msg>,
     rx: mpsc::Receiver<Msg>,
@@ -1069,6 +1071,7 @@ impl App {
             counts: [0; 3],
             show_libs: false,
             app_only: false,
+            within: String::new(),
             res: BTreeMap::new(),
             tx,
             rx,
@@ -1494,9 +1497,30 @@ impl App {
         if self.query.is_empty() && !self.scope.query_optional() {
             return;
         }
+        // `a.b.*, impl:a.b.Proto`: the --in / --impl filters of the command line
+        let (mut within, mut implements) = (Vec::new(), None);
+        for part in self
+            .within
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            match part.strip_prefix("impl:") {
+                Some(t) => implements = Some(t.trim().to_string()),
+                None => within.push(part.to_string()),
+            }
+        }
+        let only = match crate::lookup::class_mask(st, &within, implements.as_deref()) {
+            Ok(o) => o,
+            Err(e) => {
+                self.search_err = Some(e);
+                return;
+            }
+        };
         let m = match Matcher::new(&self.query, self.scope, self.use_regex, self.case) {
             Ok(mut m) => {
                 m.app_only = self.app_only;
+                m.only = only;
                 m
             }
             Err(e) => {
@@ -1518,12 +1542,18 @@ impl App {
         if self.app_only {
             self.hits_title += " (app code only)";
         }
+        if !self.within.trim().is_empty() {
+            self.hits_title += &format!(" in {}", self.within.trim());
+        }
         self.search_started = Some(std::time::Instant::now());
         let prog = Arc::new(Progress::default());
         self.prog = Some(prog.clone());
         let (tx, id) = (self.tx.clone(), self.search_id);
         spawn(&self.tx, "search", move || {
-            let (hits, hidden) = session::search_stats(st, &m, &prog);
+            let (mut hits, hidden) = session::search_stats(st, &m, &prog);
+            if let Some(only) = &m.only {
+                hits.retain(|h| crate::lookup::class_id(st, &h.0).is_some_and(|k| only[k]));
+            }
             let _ = tx.send(Msg::Hits(id, hits, hidden));
         });
     }
@@ -3290,6 +3320,24 @@ impl eframe::App for App {
                                 _ => self.toast("Open a class first"),
                             }
                         }
+                        if ui.button("Constants of this class").on_hover_text("Static final values stored in the DEX (ids, codes, keys)").clicked() {
+                            ui.close_menu();
+                            match self.docs.get(self.active).map(|d| d.open.clone()) {
+                                Some(Open::Class(c)) => self.cli_report("Constants", vec!["consts".into(), path.clone(), crate::lookup::raw_name(&c).into()]),
+                                _ => self.toast("Open a class first"),
+                            }
+                        }
+                        if ui.button("Constant returns in this class").on_hover_text("Methods whose body is return <constant>: ids, opcodes, type codes").clicked() {
+                            ui.close_menu();
+                            match self.docs.get(self.active).map(|d| d.open.clone()) {
+                                Some(Open::Class(c)) => self.cli_report("Returns", vec!["returns".into(), path.clone(), "--in".into(), crate::lookup::raw_name(&c).into()]),
+                                _ => self.toast("Open a class first"),
+                            }
+                        }
+                        if ui.button("Size breakdown").on_hover_text("Where the APK's bytes go: dex, native libs per ABI, res, biggest files, duplicates").clicked() {
+                            ui.close_menu();
+                            self.cli_report("Size", vec!["size".into(), path.clone()]);
+                        }
                         ui.separator();
                         if ui.button("Unity IL2CPP").on_hover_text("Unity games: C# methods with their native addresses").clicked() {
                             ui.close_menu();
@@ -3343,7 +3391,7 @@ impl eframe::App for App {
                 .on_hover_text("Search scope (Up / Down in the search box)")
                 .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("Search scope: {scope}")));
                 let hint = if self.scope.query_optional() { "optional filter (Enter lists all)" } else { "Search…  (Ctrl+F)" };
-                let r = edit(ui, &mut self.query, hint, (ui.available_width() - 470.0).clamp(140.0, 520.0));
+                let r = edit(ui, &mut self.query, hint, (ui.available_width() - 600.0).clamp(140.0, 520.0));
                 if std::mem::take(&mut self.focus_search) {
                     r.request_focus();
                 }
@@ -3365,9 +3413,11 @@ impl eframe::App for App {
                 ui.toggle_value(&mut self.case, "Aa").on_hover_text("Match case").widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, case, "Match case"));
                 ui.toggle_value(&mut self.use_regex, ".*").on_hover_text("Regular expression").widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, re, "Regular expression"));
                 ui.toggle_value(&mut self.app_only, "App only").on_hover_text("Skip classes from known libraries and SDKs (faster, less noise)");
+                let w = edit(ui, &mut self.within, "in: a.b.*", 120.0).on_hover_text("Only these classes or packages (a.b.*, comma-separated); impl:a.b.Type keeps classes that extend or implement it");
+                let enter_w = w.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let go = ui.add_enabled(self.st.is_some(), egui::Button::new(RichText::new("Search").strong()).fill(p.accent.gamma_multiply(0.55)));
-                if go.clicked() || enter {
+                if go.clicked() || enter || enter_w {
                     self.run_search();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

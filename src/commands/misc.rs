@@ -93,14 +93,14 @@ fn export_run(path: &str, out: &str, deobf: bool) -> Result<(), String> {
     let root = std::path::Path::new(out);
     let main_dir = root.join("app/src/main");
     let (n, failed) = export::sources(&apk, &main_dir.join("java"), deobf);
-    eprintln!(
+    crate::note!(
         "sources: {n} classes ({failed} failed) in {:.1}s",
         start.elapsed().as_secs_f64()
     );
     let t = std::time::Instant::now();
     let (st, manifest) = export::resources(&mut apk, &main_dir)?;
     export::gradle(root, &manifest.unwrap_or_default())?;
-    eprintln!(
+    crate::note!(
         "resources: {} values files, {} res files ({} binary XML decoded), {} assets/libs in {:.1}s",
         st.values,
         st.files,
@@ -108,7 +108,7 @@ fn export_run(path: &str, out: &str, deobf: bool) -> Result<(), String> {
         st.other,
         t.elapsed().as_secs_f64()
     );
-    eprintln!(
+    crate::note!(
         "done in {:.1}s -> {}",
         start.elapsed().as_secs_f64(),
         root.display()

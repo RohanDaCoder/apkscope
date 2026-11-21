@@ -6,6 +6,21 @@ use crate::cli::BuildArgs;
 use crate::export;
 use crate::session;
 
+/// A password from `pass:TEXT`, `env:VAR` or `file:PATH` (first line), else the text itself
+/// (the forms apksigner takes). `env:` / `file:` keep it out of shell history and process lists.
+fn password(spec: &str) -> Result<String, String> {
+    if let Some(t) = spec.strip_prefix("pass:") {
+        Ok(t.to_string())
+    } else if let Some(v) = spec.strip_prefix("env:") {
+        std::env::var(v).map_err(|_| format!("environment variable {v} is not set"))
+    } else if let Some(f) = spec.strip_prefix("file:") {
+        let t = std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?;
+        Ok(t.lines().next().unwrap_or("").to_string())
+    } else {
+        Ok(spec.to_string())
+    }
+}
+
 /// `--no-sign` leaves the APK unsigned; a JAR never is signed, Android does not verify one.
 pub fn build(a: &BuildArgs) -> Result<(), String> {
     let input = a.input.as_str();
@@ -38,18 +53,35 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     let key = a.key.clone();
     let cert = a.cert.clone();
     let jar = input.to_lowercase().ends_with(".jar");
-    if (jar || !sign) && (key.is_some() || cert.is_some()) {
-        return Err("--key and --cert sign an APK: not a .jar, and not with --no-sign".into());
+    if (jar || !sign) && (key.is_some() || cert.is_some() || a.ks.is_some()) {
+        return Err("--key/--cert/--ks sign an APK: not a .jar, and not with --no-sign".into());
+    }
+    if a.ks.is_some() && (key.is_some() || cert.is_some()) {
+        return Err("use either --ks or --key/--cert".into());
+    }
+    if a.ks.is_none() && (a.ks_pass.is_some() || a.ks_key_pass.is_some() || a.ks_alias.is_some()) {
+        return Err("--ks-pass, --ks-key-pass and --ks-alias go with --ks".into());
     }
     let key = match (key, cert) {
         _ if jar || !sign => None,
+        _ if a.ks.is_some() => {
+            let ks = a.ks.as_deref().unwrap_or_default();
+            let store = password(a.ks_pass.as_deref().ok_or("--ks needs --ks-pass")?)?;
+            let key_pass = a.ks_key_pass.as_deref().map(password).transpose()?;
+            Some(apksign::load_keystore(
+                std::path::Path::new(ks),
+                &store,
+                key_pass.as_deref(),
+                a.ks_alias.as_deref(),
+            )?)
+        }
         (Some(k), Some(c)) => Some(apksign::load(
             std::path::Path::new(&k),
             std::path::Path::new(&c),
         )?),
         (None, None) => {
             let (k, dir) = apksign::default_key()?;
-            eprintln!("signing with apkscope's key in {}", dir.display());
+            crate::note!("signing with apkscope's key in {}", dir.display());
             Some(k)
         }
         _ => return Err("--key and --cert go together".into()),
@@ -63,10 +95,15 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     }
     if let Some(dir) = &res_dir {
         // everything `apkscope res` wrote: a values file that is gone has no values
-        let files = crate::read_tree(std::path::Path::new(dir))?;
+        let (files, complete, kind) = foreign_tree(crate::read_tree(std::path::Path::new(dir))?);
+        if let Some(kind) = kind {
+            crate::note!(
+                "{dir}: {kind} layout; changed and new files are applied, files missing from it are kept"
+            );
+        }
         let mut apk = export::open(&src)?;
-        let changed = resources::edits(&mut apk, &files, true)?;
-        eprintln!("{} resource file(s) changed", changed.len());
+        let changed = resources::edits(&mut apk, &files, complete)?;
+        crate::note!("{} resource file(s) changed", changed.len());
         edits.extend(changed);
     }
     if let Some(m) = &manifest {
@@ -93,7 +130,7 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     }
     if !smali_srcs.is_empty() {
         let changed = smali::inject(&src, &smali_srcs, &mut edits)?;
-        eprintln!(
+        crate::note!(
             "assembled {} smali class(es) into {}",
             smali_srcs.len(),
             changed.join(", ")
@@ -105,16 +142,64 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
         None => apk,
     };
     std::fs::write(output, &signed).map_err(|e| format!("{output}: {e}"))?;
-    eprintln!(
+    crate::note!(
         "wrote {output} ({} bytes, {} edits) in {:.1}s",
         signed.len(),
         edits.len(),
         t.elapsed().as_secs_f64()
     );
-    if key.is_some() {
+    if let Some(k) = &key {
         for l in apksign::verify(output)? {
-            eprintln!("{l}");
+            crate::note!("{l}");
+        }
+        if let Some(c) = apkscope_core::sign::parse_cert(&k.cert) {
+            crate::note!("signer: {}  (SHA-256 {})", c.subject, c.sha256);
+        }
+        // v2/v3 only: Android before 7.0 (API 24) needs a v1 JAR signature too
+        if let Some(min) = min_sdk(output)
+            && min < 24
+        {
+            crate::note!(
+                "warning: minSdkVersion {min}: Android 5-6 devices need a v1 (JAR) signature, which apkscope does not write; they will refuse this APK"
+            );
         }
     }
     Ok(())
+}
+
+type Tree = std::collections::BTreeMap<String, Vec<u8>>;
+
+/// A resource folder from another tool, mapped onto the layout `apkscope res` writes
+/// (`AndroidManifest.xml`, `res/...`): apktool (`apktool.yml` + `res/`) or APKEditor
+/// (`resources/package_1/res/`). Returns (files, complete, the tool's name). Another tool's
+/// folder is never taken as complete, so a file it leaves out is not removed from the APK;
+/// its `public.xml` (an id listing, not an edit) is ignored.
+fn foreign_tree(files: Tree) -> (Tree, bool, Option<&'static str>) {
+    let keep = |k: &str| {
+        k == "AndroidManifest.xml" || (k.starts_with("res/") && k != "res/values/public.xml")
+    };
+    if files.contains_key("apktool.yml") {
+        let out = files.into_iter().filter(|(k, _)| keep(k)).collect();
+        return (out, false, Some("apktool"));
+    }
+    const EDITOR: &str = "resources/package_1/";
+    if files.keys().any(|k| k.starts_with(EDITOR)) {
+        let out = files
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let k = k.strip_prefix(EDITOR).map(str::to_string).unwrap_or(k);
+                keep(&k).then_some((k, v))
+            })
+            .collect();
+        return (out, false, Some("APKEditor"));
+    }
+    (files, true, None)
+}
+
+/// `android:minSdkVersion` of an APK's manifest.
+fn min_sdk(apk: &str) -> Option<u32> {
+    let data = crate::quick::read_entry(apk, "AndroidManifest.xml").ok()??;
+    let text = res::decode_xml(&data, None).ok()?;
+    let at = text.find("minSdkVersion=\"")? + "minSdkVersion=\"".len();
+    text[at..].split('"').next()?.parse().ok()
 }
