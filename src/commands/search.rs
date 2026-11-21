@@ -90,6 +90,10 @@ pub fn search_on(
             text = head.join("\n") + "\n\n" + &text;
         }
     }
+    let mut n = hits.len();
+    if scope == session::Scope::Secrets {
+        n += secrets_entropy_tier(st, a, &mut text);
+    }
     let mut note = scope.note().to_string();
     if hidden > 0 {
         let _ = write!(
@@ -98,7 +102,64 @@ pub fn search_on(
             if hidden == 1 { "" } else { "es" }
         );
     }
-    Ok((text, hits.len(), note))
+    Ok((text, n, note))
+}
+
+/// Append the labelled entropy tier of `search secrets` to the exported output. Kept out of
+/// the pattern hits on purpose: its own section in text output, trailing rows in csv/json.
+/// Returns how many entries it added.
+fn secrets_entropy_tier(st: &session::State, a: &SearchOpts, text: &mut String) -> usize {
+    let found = session::entropy_secrets(st);
+    if found.is_empty() {
+        return 0;
+    }
+    let line = |c: &session::Const| {
+        format!(
+            "possible secret (entropy): {}#{} = \"{}\"",
+            c.class, c.field, c.value
+        )
+    };
+    match a.fmt {
+        session::Format::Text => {
+            let _ = write!(
+                text,
+                "\n// possible secrets (entropy, app code only, {} shown) — lower confidence:\n// token-shaped, mixed, high-entropy constants of the app that no known pattern matched. A hit is not proof.\n",
+                found.len()
+            );
+            for c in &found {
+                let _ = writeln!(text, "{}#{} = \"{}\"", c.class, c.field, c.value);
+            }
+        }
+        session::Format::Csv => {
+            for c in &found {
+                let (t, m) = (format!("{}#{}", c.class, c.field), line(c));
+                let _ = writeln!(
+                    text,
+                    "{},{},{},{}",
+                    session::csv_field(&t),
+                    0,
+                    session::csv_field(&m),
+                    session::csv_field(&m)
+                );
+            }
+        }
+        session::Format::Json => {
+            let rows: Vec<String> = found
+                .iter()
+                .map(|c| {
+                    let (t, m) = (format!("{}#{}", c.class, c.field), line(c));
+                    format!(
+                        "  {{\"target\":{},\"line\":0,\"match\":{},\"excerpt\":{}}}",
+                        session::json_str(&t),
+                        session::json_str(&m),
+                        session::json_str(&m)
+                    )
+                })
+                .collect();
+            session::json_extend(text, &rows);
+        }
+    }
+    found.len()
 }
 
 /// `apkscope search`: same engine as the viewer; results go to stdout or `--out`.

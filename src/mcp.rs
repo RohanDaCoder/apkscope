@@ -63,7 +63,7 @@ fn tools() -> Value {
             "full": {"type": "boolean", "description": "Also decompile methods the deobfuscator would leave out (synthetic / bridge)"},
             "cache": cache,
             "deobfuscate": {"type": "boolean", "description": "Rename obfuscated names (default true)"}}))}},
-        {"name": "search", "description": "Search decompiled code and resources. Scopes: code (decompiled Java), string (literals), usages (xref by name), class, res (XML resources + manifest), urls (endpoints, also in native libs), http (Retrofit / OkHttp / HttpURLConnection calls), secrets (API keys, tokens), api (the app's HTTP API: Retrofit endpoints with verb, path, params, base URL and a curl line each). Uses the reference index so only classes that can match get decompiled.",
+        {"name": "search", "description": "Search decompiled code and resources. Scopes: code (decompiled Java), string (literals), usages (xref by name), class, res (XML resources + manifest), urls (endpoints, also in native libs), http (Retrofit / OkHttp / HttpURLConnection calls), secrets (API keys, tokens, plus a labelled lower-confidence entropy tier of app constants), api (the app's HTTP API: Retrofit endpoints with verb, path, params, base URL and a curl line each). Uses the reference index so only classes that can match get decompiled.",
          "inputSchema": {"type": "object", "required": ["apk_path", "scope"], "properties": page(json!({"apk_path": apk,
             "scope": {"type": "string", "enum": ["code", "string", "usages", "class", "res", "urls", "http", "secrets", "api"]},
             "query": {"type": "string", "description": "Optional for urls / http / secrets / api"},
