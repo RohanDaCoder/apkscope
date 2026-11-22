@@ -4,6 +4,7 @@
 pub mod document;
 pub mod model;
 pub mod read;
+pub mod source;
 pub mod text;
 pub mod write;
 
