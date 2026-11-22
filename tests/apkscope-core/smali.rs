@@ -358,6 +358,75 @@ fn edits_an_apk_in_memory() {
 }
 
 #[test]
+fn edits_classes_of_open_documents() {
+    use model::{Item, Operand};
+    let class = |name: &str, body: &str| {
+        text::parse(&format!(
+            ".class public L{name};\n.super Ljava/lang/Object;\n\
+             .method public static f()Ljava/lang/String;\n    .registers 1\n{body}\
+             \n    return-object v0\n.end method\n"
+        ))
+        .unwrap()
+    };
+    let a = class("a/A", "    const-string v0, \"one\"");
+    let b = class("a/B", "    const/16 v0, 0x64\n    const-string v0, \"two\"");
+    let dex = |c: &[model::Class]| write::write(c, *b"035").unwrap();
+    let mut classes = Classes::new(vec![
+        ("classes.dex".into(), dex(&[a.clone()])),
+        ("classes2.dex".into(), dex(&[b.clone()])),
+    ]);
+    let (one, two) = (
+        text::parse_operand("\"one\"").unwrap(),
+        text::parse_operand("\"two\"").unwrap(),
+    );
+    let n = Operand::Lit(0x64);
+    assert_eq!(classes.find(&one).unwrap(), ["La/A;"]);
+    assert_eq!(classes.find(&n).unwrap(), ["La/B;"]);
+    // `return-object` holds no literal, and a string in no table is in no class
+    assert!(classes.find(&Operand::Lit(0)).unwrap().is_empty());
+    assert!(
+        classes
+            .find(&text::parse_operand("\"three\"").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+
+    // reading a class, or setting it as it is, is no edit
+    let mut edits = crate::rebuild::Edits::new();
+    let read = classes.class("a.B").unwrap();
+    assert_eq!(read, b);
+    classes.set(read.clone()).unwrap();
+    assert!(classes.write(&mut edits).unwrap().is_empty());
+
+    // an edit is found as edited, and only its file is written
+    let mut edited = read;
+    for item in &mut edited.methods[0].code.as_mut().unwrap().items {
+        if let Item::Ins(i) = item {
+            i.replace(&two, &one);
+        }
+    }
+    classes.set(edited.clone()).unwrap();
+    assert_eq!(classes.find(&one).unwrap(), ["La/A;", "La/B;"]);
+    assert!(classes.find(&two).unwrap().is_empty());
+    assert_eq!(classes.write(&mut edits).unwrap(), ["classes2.dex"]);
+    let written = edits["classes2.dex"].clone().unwrap();
+    // "one" is not in classes2.dex's tables, so the file was written again, not patched
+    assert_eq!(read::read(&written).unwrap(), [edited]);
+
+    // setting it back is no edit again; a new class goes to classes.dex
+    classes.set(b).unwrap();
+    classes
+        .set(class("a/C", "    const-string v0, \"new\""))
+        .unwrap();
+    let mut edits = crate::rebuild::Edits::new();
+    assert_eq!(classes.write(&mut edits).unwrap(), ["classes.dex"]);
+    let written = read::read(edits["classes.dex"].as_ref().unwrap()).unwrap();
+    assert_eq!(written.len(), 2);
+    assert_eq!(classes.class("La/C;").unwrap().name, model::s(b"La/C;"));
+    assert!(classes.class("a.Missing").is_err());
+}
+
+#[test]
 fn patches_instruction_in_place() {
     let src = ".class public Lcom/ex/P;\n.super Ljava/lang/Object;\n\
                    .method public static f()I\n    .registers 1\n    const/16 v0, 0x64\n    return v0\n.end method\n";
