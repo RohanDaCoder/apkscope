@@ -411,7 +411,9 @@ fn edits_classes_of_open_documents() {
     assert_eq!(classes.write(&mut edits).unwrap(), ["classes2.dex"]);
     let written = edits["classes2.dex"].clone().unwrap();
     // "one" is not in classes2.dex's tables, so the file was written again, not patched
-    assert_eq!(read::read(&written).unwrap(), [edited]);
+    assert_eq!(read::read(&written).unwrap(), [edited.clone()]);
+    // a file written again one class at a time is the file its classes write together
+    assert_eq!(written, dex(&[edited]));
 
     // setting it back is no edit again; a new class goes to classes.dex
     classes.set(b).unwrap();

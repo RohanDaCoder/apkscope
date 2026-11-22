@@ -6,6 +6,7 @@ use super::model::{Class, Item, Operand, Ref, S};
 use super::{read, version, write};
 use crate::bytecode;
 use crate::{Error, Result};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
 /// One DEX file open for editing.
@@ -132,7 +133,8 @@ impl Document {
     }
 
     /// The file as edited. Edits that only change the instructions of existing methods are
-    /// patched into its bytes; anything else writes the file again.
+    /// patched into its bytes; anything else writes the file again, with no more than one of
+    /// its unedited classes modelled at a time.
     pub fn write(&self) -> Result<Vec<u8>> {
         if self.edited.is_empty() {
             return Ok(self.reader.bytes().to_vec());
@@ -147,16 +149,21 @@ impl Document {
         {
             return Ok(dex);
         }
-        let mut all = Vec::with_capacity(self.reader.class_count());
-        for i in 0..self.reader.class_count() {
-            all.push(match self.edited.get(&self.reader.class_name(i)?) {
-                Some(c) => c.clone(),
-                None => self.reader.class(i)?,
-            });
-        }
-        let new = self.edited.values();
-        all.extend(new.filter(|c| !self.index.contains_key(&c.name)).cloned());
-        write::write(&all, version(self.reader.bytes()))
+        // the file's classes in their order, each read as it is written, then the new ones
+        let count = self.reader.class_count();
+        let new: Vec<&Class> = (self.edited.values())
+            .filter(|c| !self.index.contains_key(&c.name))
+            .collect();
+        let class = |i: usize| -> Result<Cow<'_, Class>> {
+            if i >= count {
+                return Ok(Cow::Borrowed(new[i - count]));
+            }
+            Ok(match self.edited.get(&self.reader.class_name(i)?) {
+                Some(c) => Cow::Borrowed(c),
+                None => Cow::Owned(self.reader.class(i)?),
+            })
+        };
+        write::write_each(count + new.len(), &class, version(self.reader.bytes()))
     }
 }
 
