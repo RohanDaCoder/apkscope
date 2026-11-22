@@ -63,6 +63,7 @@ top level or be declared with an explicit `[[test]]` table.
 | source file | `#[path]` |
 |---|---|
 | `src/java.rs` | `../tests/apkscope/java.rs` |
+| `src/session/mod.rs` | `../../tests/apkscope/session.rs` |
 | `src/gui/live_ui.rs` | `../../tests/apkscope/gui_live_ui.rs` |
 | `core/src/axml.rs` | `../../tests/apkscope-core/axml.rs` |
 | `core/src/smali/mod.rs` | `../../tests/apkscope-core/smali.rs` |
