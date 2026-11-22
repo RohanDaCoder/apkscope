@@ -216,8 +216,8 @@ impl Method {
     }
     /// registers taken by the arguments, `this` included
     pub fn ins(&self, src: &Source) -> u16 {
-        let params = src.proto(src.method(self.id).proto).params;
-        let words: u16 = params.iter().map(|p| width(src.descriptor(*p))).sum();
+        let params = src.params(src.method(self.id).proto);
+        let words: u16 = params.map(|p| width(src.descriptor(p))).sum();
         words + u16::from(self.access & ACC_STATIC == 0)
     }
 }

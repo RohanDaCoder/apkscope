@@ -382,7 +382,7 @@ impl View<'_> {
                     let access = uleb128(d, &mut off)?;
                     let code_off = uleb128(d, &mut off)? as usize;
                     let id = self.me(idx)?;
-                    let nparams = self.s.proto(self.s.method(id).proto).params.len();
+                    let nparams = self.s.params(self.s.method(id).proto).count();
                     let mut method = Method {
                         id,
                         access,
@@ -622,30 +622,33 @@ impl View<'_> {
 
         // at each address: its label, then its debug events, then what is there
         let mut items = Vec::with_capacity(body.len() + labels.len() + events.len());
-        let (mut labels, mut events, mut body) = (
-            labels.into_iter().peekable(),
-            events.into_iter().peekable(),
-            body.into_iter().peekable(),
-        );
-        loop {
-            let next = [
-                labels.peek().copied(),
-                events.peek().map(|x| x.0),
-                body.peek().map(|x| x.0),
-            ];
-            let Some(k) = next.into_iter().flatten().min() else {
-                break;
-            };
-            if labels.next_if_eq(&k).is_some() {
-                items.push(Item::Label(k));
+        let (mut labels, mut events) =
+            (labels.into_iter().peekable(), events.into_iter().peekable());
+        // the labels and events up to the address `to`, or all that are left
+        let mut before = |items: &mut Vec<Item>, to: Option<u32>| {
+            loop {
+                let next = match (labels.peek(), events.peek()) {
+                    (Some(l), Some(e)) => (*l).min(e.0),
+                    (Some(l), None) => *l,
+                    (None, Some(e)) => e.0,
+                    (None, None) => break,
+                };
+                if to.is_some_and(|to| next > to) {
+                    break;
+                }
+                if labels.next_if_eq(&next).is_some() {
+                    items.push(Item::Label(next));
+                }
+                while let Some((_, ev)) = events.next_if(|x| x.0 == next) {
+                    items.push(ev);
+                }
             }
-            while let Some((_, ev)) = events.next_if(|x| x.0 == k) {
-                items.push(ev);
-            }
-            while let Some((_, item)) = body.next_if(|x| x.0 == k) {
-                items.push(item);
-            }
+        };
+        for (at, item) in body {
+            before(&mut items, Some(at));
+            items.push(item);
         }
+        before(&mut items, None);
         Ok(Code {
             registers,
             items,

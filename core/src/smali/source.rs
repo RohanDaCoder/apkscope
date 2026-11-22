@@ -282,6 +282,25 @@ impl Source {
         }
     }
 
+    /// The parameter types of a prototype, read where they are: nothing is allocated.
+    pub fn params(&self, id: ProtoId) -> impl Iterator<Item = TypeId> + '_ {
+        let (file, added) = match id.ix().checked_sub(self.tables[2].0) {
+            None => {
+                let list = u32_at(&self.d, self.tables[2].1 + id.ix() * 12 + 8).expect(CHECKED);
+                let count = match list {
+                    0 => 0,
+                    list => u32_at(&self.d, list as usize).expect(CHECKED) as usize,
+                };
+                (Some((list as usize, 0..count)), None)
+            }
+            Some(at) => (None, Some(self.added.protos[at].params.iter().copied())),
+        };
+        let file = file.into_iter().flat_map(move |(list, each)| {
+            each.map(move |k| TypeId(u16_at(&self.d, list + 4 + k * 2).expect(CHECKED) as u32))
+        });
+        file.chain(added.into_iter().flatten())
+    }
+
     pub fn field(&self, id: FieldId) -> FieldRef {
         match id.ix().checked_sub(self.tables[3].0) {
             None => self.file_field(id.ix()).expect(CHECKED),
