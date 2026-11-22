@@ -5,7 +5,7 @@ use super::model::*;
 use crate::bytecode::{self, Fmt};
 use crate::dex::{sleb128, uleb128};
 use crate::{Error, Result};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 type R<T> = Result<T>;
@@ -428,16 +428,18 @@ impl View<'_> {
         };
         let decoded = bytecode::decode(insns)?;
 
-        let mut labels = BTreeSet::new();
-        // offset -> item, merged in address order (payloads are skipped by decode)
-        let mut at: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
+        // Everything is gathered by address and merged once at the end. The instructions come
+        // decoded in address order and the debug events are stored in it, so only the labels
+        // and the few payloads (which decode skips) are sorted.
+        let mut labels: Vec<u32> = vec![];
+        let mut body: Vec<(u32, Item)> = Vec::with_capacity(decoded.len());
         let mut payload_users: BTreeMap<u32, u32> = BTreeMap::new();
         for i in &decoded {
             let (_, f, kind) = bytecode::info(i.op).unwrap();
             let operand = match (f, kind) {
                 (Fmt::F10t | Fmt::F20t | Fmt::F30t | Fmt::F21t | Fmt::F22t | Fmt::F31t, _) => {
                     let t = (i.off as i64 + i.lit) as u32;
-                    labels.insert(t);
+                    labels.push(t);
                     if f == Fmt::F31t {
                         payload_users.insert(t, i.off);
                     }
@@ -468,8 +470,10 @@ impl View<'_> {
                 n: i.nregs,
                 operand,
             };
-            at.entry(i.off).or_default().push(Item::Ins(ins));
+            body.push((i.off, Item::Ins(ins)));
         }
+        let mut payloads: Vec<(u32, Item)> = vec![];
+        let mut padding: Vec<u32> = vec![];
         for (&p, &user) in &payload_users {
             let p = p as usize;
             let item = match unit(p)? {
@@ -514,27 +518,30 @@ impl View<'_> {
                 }
                 w => return Err(Error::dex(format!("bad payload {w:#x} at {p:#x}"))),
             };
-            at.entry(p as u32).or_default().push(item);
+            payloads.push((p as u32, item));
             // the nop just before an aligned payload is padding; the writer re-adds it
-            if p.is_multiple_of(2)
-                && p > 0
-                && let Some(v) = at.get_mut(&(p as u32 - 1))
-                && matches!(v.as_slice(), [Item::Ins(i)] if i.op == 0)
-            {
-                at.remove(&(p as u32 - 1));
+            if p.is_multiple_of(2) && p > 0 {
+                padding.push(p as u32 - 1);
             }
+        }
+        if !payloads.is_empty() {
+            body.retain(|(a, item)| {
+                !(matches!(item, Item::Ins(i) if i.op == 0) && padding.contains(a))
+            });
+            body.extend(payloads);
+            body.sort_by_key(|x| x.0);
         }
 
         let mut tries = Vec::with_capacity(ntries);
         for t in crate::dex::parse_tries(d, co, units)? {
             let end = t.start + t.count;
-            labels.insert(t.start);
-            labels.insert(end);
+            labels.push(t.start);
+            labels.push(end);
             let handlers = t
                 .handlers
                 .into_iter()
                 .map(|(ty, a)| {
-                    labels.insert(a);
+                    labels.push(a);
                     Ok((ty.map(|x| self.ty(x)).transpose()?, a))
                 })
                 .collect::<R<Vec<_>>>()?;
@@ -546,7 +553,7 @@ impl View<'_> {
         }
 
         // debug events by address
-        let mut events: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
+        let mut events: Vec<(u32, Item)> = vec![];
         let mut param_names = vec![];
         if debug_off != 0 {
             let mut o = debug_off;
@@ -592,7 +599,7 @@ impl View<'_> {
                         Item::Line(line)
                     }
                 };
-                events.entry(addr).or_default().push(ev);
+                events.push((addr, ev));
             }
         }
         // debug info with no events and no names says nothing; the text form cannot carry it
@@ -600,30 +607,43 @@ impl View<'_> {
         let debug =
             debug_off != 0 && (!events.is_empty() || param_names.iter().any(|n| n.is_some()));
 
-        // shrinkers leave line entries inside an instruction; Smali can only place them between
-        let starts: BTreeSet<u32> = at.keys().copied().chain([units as u32]).collect();
-        if events.keys().any(|a| !starts.contains(a)) {
-            let mut snapped: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
-            for (a, ev) in std::mem::take(&mut events) {
-                let to = starts.range(a..).next().copied().unwrap_or(a);
-                snapped.entry(to).or_default().extend(ev);
+        // shrinkers leave line entries inside an instruction; Smali can only place them between:
+        // each goes to the next start of one, or the end of the code
+        let start = |a: u32| body.binary_search_by_key(&a, |x| x.0).is_ok() || a == units as u32;
+        if events.iter().any(|(a, _)| !start(*a)) {
+            for (a, _) in &mut events {
+                let next = body.get(body.partition_point(|x| x.0 < *a)).map(|x| x.0);
+                let end = (units as u32 >= *a).then_some(units as u32);
+                *a = [next, end].into_iter().flatten().min().unwrap_or(*a);
             }
-            events = snapped;
         }
+        labels.sort_unstable();
+        labels.dedup();
 
-        let mut items = Vec::with_capacity(decoded.len() + labels.len());
-        let mut keys: BTreeSet<u32> = at.keys().copied().collect();
-        keys.extend(labels.iter().copied());
-        keys.extend(events.keys().copied());
-        for k in keys {
-            if labels.contains(&k) {
+        // at each address: its label, then its debug events, then what is there
+        let mut items = Vec::with_capacity(body.len() + labels.len() + events.len());
+        let (mut labels, mut events, mut body) = (
+            labels.into_iter().peekable(),
+            events.into_iter().peekable(),
+            body.into_iter().peekable(),
+        );
+        loop {
+            let next = [
+                labels.peek().copied(),
+                events.peek().map(|x| x.0),
+                body.peek().map(|x| x.0),
+            ];
+            let Some(k) = next.into_iter().flatten().min() else {
+                break;
+            };
+            if labels.next_if_eq(&k).is_some() {
                 items.push(Item::Label(k));
             }
-            if let Some(ev) = events.remove(&k) {
-                items.extend(ev);
+            while let Some((_, ev)) = events.next_if(|x| x.0 == k) {
+                items.push(ev);
             }
-            if let Some(v) = at.remove(&k) {
-                items.extend(v);
+            while let Some((_, item)) = body.next_if(|x| x.0 == k) {
+                items.push(item);
             }
         }
         Ok(Code {
