@@ -34,6 +34,13 @@ pub enum Fmt {
 }
 use Fmt::*;
 
+impl Fmt {
+    /// Whether instructions of this format hold a literal number (branch offsets aside).
+    pub fn has_literal(self) -> bool {
+        matches!(self, F11n | F21s | F21h | F31i | F51l | F22b | F22s)
+    }
+}
+
 /// What `Insn::idx` points into.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Ref {

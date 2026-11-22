@@ -1132,6 +1132,64 @@ fn literal(w: &str) -> Option<Value> {
     })
 }
 
+/// The literal of an instruction, as `lit` holds it: a float or a double as its bits.
+fn ins_literal(w: &str) -> Option<i64> {
+    match literal(w) {
+        Some(Value::Float(b)) => Some(b as i32 as i64),
+        Some(Value::Double(b)) => Some(b as i64),
+        _ => parse_int(w),
+    }
+}
+
+/// Parse one method, `.method` to `.end method`, as it is written inside a class.
+pub fn parse_method(text: &str) -> R<Method> {
+    let mut p = P {
+        s: text.as_bytes(),
+        i: 0,
+    };
+    p.wsn();
+    p.expect(".method")?;
+    let m = method_p(&mut p)?;
+    p.wsn();
+    match p.peek() {
+        None => Ok(m),
+        Some(_) => p.err(format!("unexpected `{}`", p.rest_of_line())),
+    }
+}
+
+/// Parse a method's name and prototype, `name(params)return`, as a `.method` line and a method
+/// reference write them.
+pub fn parse_signature(text: &str) -> R<(S, Proto)> {
+    let mut p = P {
+        s: text.as_bytes(),
+        i: 0,
+    };
+    let name = spec_name(&mut p, b"(")?;
+    Ok((name, p.proto()?))
+}
+
+/// Parse one instruction operand: a string in its quotes, a type, a field or method reference,
+/// or a number.
+pub fn parse_operand(text: &str) -> R<Operand> {
+    let mut p = P {
+        s: text.as_bytes(),
+        i: 0,
+    };
+    p.ws();
+    Ok(match p.peek() {
+        Some(b'"') => Operand::Ref(Ref::Str(p.string()?)),
+        Some(b'L' | b'[') if text.contains("->") => Operand::Ref(match p.member()? {
+            Member::Field(f) => Ref::Field(f),
+            Member::Method(m) => Ref::Method(m),
+        }),
+        Some(b'L' | b'[') => Operand::Ref(Ref::Type(p.ty()?)),
+        _ => match ins_literal(text.trim()) {
+            Some(v) => Operand::Lit(v),
+            None => return p.err(format!("bad operand `{}`", text.trim())),
+        },
+    })
+}
+
 /// Parse one class from Smali.
 pub fn parse(text: &str) -> R<Class> {
     let mut p = P {
@@ -1550,13 +1608,9 @@ fn method_p(p: &mut P) -> R<Method> {
         let lit = |p: &mut P, i: &mut Ins| -> R<()> {
             p.expect(",")?;
             let w = p.word();
-            i.lit = match literal(w) {
-                Some(Value::Float(b)) => b as i32 as i64,
-                Some(Value::Double(b)) => b as i64,
-                _ => match parse_int(w) {
-                    Some(v) => v,
-                    None => return p.err(format!("bad literal `{w}`")),
-                },
+            i.lit = match ins_literal(w) {
+                Some(v) => v,
+                None => return p.err(format!("bad literal `{w}`")),
             };
             Ok(())
         };

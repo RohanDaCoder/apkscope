@@ -229,6 +229,71 @@ fn assembles_hand_written_smali() {
 }
 
 #[test]
+fn parses_a_method_and_an_operand_alone() {
+    use model::{Item, Operand, Ref};
+    let mut m = text::parse_method(
+        r#"
+.method public static pick(I)Ljava/lang/String;
+    .locals 2
+    const v0, 0x5a0
+    const-wide/16 v0, 0x5a0
+    const/high16 v0, 0x40000000    # 2.0f
+    const-string v1, "a \"b\""
+    return-object v1
+.end method
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        text::parse_signature("pick(I)Ljava/lang/String;").unwrap(),
+        (m.name.clone(), m.proto.clone())
+    );
+    let count = |m: &model::Method, o: &Operand| {
+        let items = &m.code.as_ref().unwrap().items;
+        items
+            .iter()
+            .filter(|i| matches!(i, Item::Ins(i) if i.has(o)))
+            .count()
+    };
+    // a number matches by value, in the narrow and the wide instruction, and nowhere a literal
+    // is not held: `return-object` has `lit` 0 without holding a 0
+    let n = text::parse_operand("0x5a0").unwrap();
+    assert_eq!(n, Operand::Lit(0x5a0));
+    assert_eq!(count(&m, &n), 2);
+    assert_eq!(count(&m, &text::parse_operand("0x0").unwrap()), 0);
+    assert_eq!(count(&m, &text::parse_operand("2.0f").unwrap()), 1);
+    let s = text::parse_operand(r#""a \"b\"""#).unwrap();
+    assert_eq!(s, Operand::Ref(Ref::Str(model::s(b"a \"b\""))));
+    assert_eq!(count(&m, &s), 1);
+    assert_eq!(
+        text::parse_operand("Lcom/example/A;->f:I").unwrap(),
+        Operand::Ref(Ref::Field(model::FieldRef {
+            class: model::s(b"Lcom/example/A;"),
+            name: model::s(b"f"),
+            ty: model::s(b"I"),
+        }))
+    );
+    assert!(matches!(
+        text::parse_operand("Lcom/example/A;->f(I)V").unwrap(),
+        Operand::Ref(Ref::Method(_))
+    ));
+    assert_eq!(
+        text::parse_operand("[Lcom/example/A;").unwrap(),
+        Operand::Ref(Ref::Type(model::s(b"[Lcom/example/A;")))
+    );
+    assert!(text::parse_operand("nonsense").is_err());
+
+    let to = text::parse_operand("0x4c4").unwrap();
+    for item in &mut m.code.as_mut().unwrap().items {
+        if let Item::Ins(i) = item {
+            i.replace(&n, &to);
+        }
+    }
+    assert_eq!((count(&m, &n), count(&m, &to)), (0, 2));
+    assert!(text::parse_method(".method public a()V\n.end method\n.field x:I").is_err());
+}
+
+#[test]
 fn local_type_is_a_type_index() {
     let src = ".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 1\n    const/4 v0, 0x0\n    .local v0, \"s\":Ljava/lang/String;\n    return-void\n.end method\n";
     let c = text::parse(src).unwrap();

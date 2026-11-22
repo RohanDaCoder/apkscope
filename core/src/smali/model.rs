@@ -97,6 +97,44 @@ pub struct Ins {
     pub proto: Option<Proto>,
 }
 
+/// What an instruction acts on besides its registers and its branch target: the literal number
+/// it holds, or what it refers to (a string, a type, a field, a method).
+#[derive(Clone, PartialEq, Debug)]
+pub enum Operand {
+    Lit(i64),
+    Ref(Ref),
+}
+
+impl Ins {
+    /// The literal this instruction holds, if its format has one. `lit` is 0 in every other
+    /// instruction, so it cannot be told from a literal 0 by itself.
+    pub fn literal(&self) -> Option<i64> {
+        let (_, f, _) = crate::bytecode::info(self.op)?;
+        f.has_literal().then_some(self.lit)
+    }
+
+    /// Whether this instruction has the operand `o`. A literal is compared by value, however
+    /// wide the instruction that holds it.
+    pub fn has(&self, o: &Operand) -> bool {
+        match o {
+            Operand::Lit(v) => self.literal() == Some(*v),
+            Operand::Ref(r) => self.r == *r,
+        }
+    }
+
+    /// Give this instruction the operand `to` where it has `from`; whether it had it.
+    pub fn replace(&mut self, from: &Operand, to: &Operand) -> bool {
+        if !self.has(from) {
+            return false;
+        }
+        match to {
+            Operand::Lit(v) => self.lit = *v,
+            Operand::Ref(r) => self.r = r.clone(),
+        }
+        true
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Item {
     Label(u32),
