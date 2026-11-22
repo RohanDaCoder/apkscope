@@ -328,7 +328,7 @@ impl Pools {
 
     /// Reuse a DEX's own id tables, in their existing (sorted) order, as the write pools. Lets an
     /// edit be assembled against the indices already in the file, so untouched classes stay valid.
-    fn from_reader(r: &read::Reader<'_>) -> Self {
+    fn from_reader<D: AsRef<[u8]>>(r: &read::Reader<D>) -> Self {
         let (strings, types, protos, fields, methods, handles, sites) = r.pool_tables();
         Pools {
             si: index_map(strings),
@@ -1572,8 +1572,16 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
 /// entries, no field/annotation/signature changes); returns `None` to fall back to [`write`]
 /// otherwise. Keeps peak memory near the DEX size instead of modelling every class.
 pub fn patch(dex: &[u8], edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
-    let r = read::Reader::new(dex)?;
-    let p = Pools::from_reader(&r);
+    patch_read(&read::Reader::new(dex)?, edits)
+}
+
+/// [`patch`] the file of a reader that has its tables already.
+pub fn patch_read<D: AsRef<[u8]>>(
+    r: &read::Reader<D>,
+    edits: &[(usize, &Class)],
+) -> R<Option<Vec<u8>>> {
+    let dex = r.bytes();
+    let p = Pools::from_reader(r);
     let dx = crate::dex::Dex::parse(dex)?;
     let mut out = dex.to_vec();
     for &(ci, new) in edits {

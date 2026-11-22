@@ -20,8 +20,10 @@ fn u16_at(d: &[u8], o: usize) -> R<u16> {
         .ok_or_else(|| Error::dex(format!("read past end at {o:#x}")))
 }
 
-pub struct Reader<'a> {
-    d: &'a [u8],
+/// A DEX file's id tables in model form, read once, and its classes read from its bytes one at
+/// a time. `D` holds the bytes: a slice, or a `Vec` for a reader that owns its file.
+pub struct Reader<D> {
+    d: D,
     strings: Vec<S>,
     types: Vec<S>,
     protos: Vec<Proto>,
@@ -41,7 +43,39 @@ pub fn read(d: &[u8]) -> R<Vec<Class>> {
     (0..r.class_count).map(|i| r.class(i)).collect()
 }
 
-impl<'a> Reader<'a> {
+impl Reader<Vec<u8>> {
+    /// A reader that owns the file it reads.
+    pub fn owned(d: Vec<u8>) -> R<Self> {
+        let Reader {
+            d: _,
+            strings,
+            types,
+            protos,
+            fields,
+            methods,
+            handles,
+            call_sites,
+            class_defs,
+            class_count,
+            hidden,
+        } = Reader::new(&d[..])?;
+        Ok(Reader {
+            d,
+            strings,
+            types,
+            protos,
+            fields,
+            methods,
+            handles,
+            call_sites,
+            class_defs,
+            class_count,
+            hidden,
+        })
+    }
+}
+
+impl<'a> Reader<&'a [u8]> {
     pub fn new(d: &'a [u8]) -> R<Self> {
         if d.len() < 0x70 || &d[..4] != b"dex\n" {
             return Err(Error::dex("not a DEX file"));
@@ -186,6 +220,22 @@ impl<'a> Reader<'a> {
         }
         Ok(r)
     }
+}
+
+impl<D: AsRef<[u8]>> Reader<D> {
+    /// The file's bytes.
+    pub fn bytes(&self) -> &[u8] {
+        self.d.as_ref()
+    }
+
+    pub fn class_count(&self) -> usize {
+        self.class_count
+    }
+
+    /// The descriptor of class `i`, in class_def order.
+    pub fn class_name(&self, i: usize) -> R<S> {
+        self.ty(u32_at(self.d.as_ref(), self.class_defs + i * 32)?)
+    }
 
     fn st(&self, i: u32) -> R<S> {
         self.strings
@@ -208,14 +258,14 @@ impl<'a> Reader<'a> {
     }
     /// uleb128p1 string index
     fn p1(&self, o: &mut usize) -> R<Option<S>> {
-        match uleb128(self.d, o)? {
+        match uleb128(self.d.as_ref(), o)? {
             0 => Ok(None),
             v => self.st(v - 1).map(Some),
         }
     }
 
     fn array(&self, o: &mut usize) -> R<Vec<Value>> {
-        let n = uleb128(self.d, o)?;
+        let n = uleb128(self.d.as_ref(), o)?;
         (0..n).map(|_| self.value(o, 0)).collect()
     }
 
@@ -223,7 +273,7 @@ impl<'a> Reader<'a> {
         if depth > 64 {
             return Err(Error::dex("encoded value nesting too deep"));
         }
-        let d = self.d;
+        let d = self.d.as_ref();
         let h = *d.get(*o).ok_or_else(|| Error::dex("value past end"))?;
         *o += 1;
         let (t, arg) = (h & 0x1f, (h >> 5) as usize);
@@ -288,11 +338,11 @@ impl<'a> Reader<'a> {
     }
 
     fn anno(&self, o: &mut usize, vis: u8, depth: u32) -> R<Anno> {
-        let ty = self.ty(uleb128(self.d, o)?)?;
-        let n = uleb128(self.d, o)?;
+        let ty = self.ty(uleb128(self.d.as_ref(), o)?)?;
+        let n = uleb128(self.d.as_ref(), o)?;
         let mut elems = Vec::with_capacity(n.min(64) as usize);
         for _ in 0..n {
-            let name = self.st(uleb128(self.d, o)?)?;
+            let name = self.st(uleb128(self.d.as_ref(), o)?)?;
             elems.push((name, self.value(o, depth)?));
         }
         Ok(Anno { vis, ty, elems })
@@ -302,11 +352,11 @@ impl<'a> Reader<'a> {
         if off == 0 {
             return Ok(vec![]);
         }
-        (0..u32_at(self.d, off)? as usize)
+        (0..u32_at(self.d.as_ref(), off)? as usize)
             .map(|k| {
-                let mut o = u32_at(self.d, off + 4 + k * 4)? as usize;
+                let mut o = u32_at(self.d.as_ref(), off + 4 + k * 4)? as usize;
                 let vis = *self
-                    .d
+                    .bytes()
                     .get(o)
                     .ok_or_else(|| Error::dex("annotation past end"))?;
                 o += 1;
@@ -340,7 +390,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn class(&self, i: usize) -> R<Class> {
-        let d = self.d;
+        let d = self.d.as_ref();
         let o = self.class_defs + i * 32;
         let name = self.ty(u32_at(d, o)?)?;
         let sup = match u32_at(d, o + 8)? {
@@ -499,7 +549,7 @@ impl<'a> Reader<'a> {
     }
 
     fn code(&self, co: usize, nparams: usize) -> R<Code> {
-        let d = self.d;
+        let d = self.d.as_ref();
         let registers = u16_at(d, co)?;
         let ntries = u16_at(d, co + 6)? as usize;
         let debug_off = u32_at(d, co + 8)? as usize;
