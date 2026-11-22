@@ -158,24 +158,25 @@ impl<'s> Collect<'s> {
             }
             for it in &code.items {
                 match it {
-                    Item::Ins(i) => {
-                        match &i.r {
-                            Ref::None => {}
-                            Ref::Str(x) => self.str(x),
-                            Ref::Type(t) => self.ty(t),
-                            Ref::Field(f) => self.field(f),
-                            Ref::Method(m) => self.method(m),
-                            Ref::Proto(p) => self.proto(p),
-                            Ref::CallSite(cs) => {
-                                cs.iter().for_each(|v| self.value(v));
-                                if self.site_set.insert(cs.clone()) {
-                                    self.sites.push(cs.clone());
-                                }
+                    Item::Ins(i) => match &i.operand {
+                        Operand::None | Operand::Lit(_) | Operand::Label(_) => {}
+                        Operand::Str(x) => self.str(x),
+                        Operand::Type(t) => self.ty(t),
+                        Operand::Field(f) => self.field(f),
+                        Operand::Method(m) => self.method(m),
+                        Operand::Proto(p) => self.proto(p),
+                        Operand::CallSite(cs) => {
+                            cs.iter().for_each(|v| self.value(v));
+                            if self.site_set.insert(cs.clone()) {
+                                self.sites.push(cs.clone());
                             }
-                            Ref::Handle(h) => self.handle(h),
                         }
-                        i.proto.iter().for_each(|p| self.proto(p));
-                    }
+                        Operand::Handle(h) => self.handle(h),
+                        Operand::Polymorphic(m, p) => {
+                            self.method(m);
+                            self.proto(p);
+                        }
+                    },
                     Item::Local { name, ty, sig, .. } => {
                         [name, sig].into_iter().flatten().for_each(|x| self.str(x));
                         ty.iter().for_each(|t| self.ty(t));
@@ -431,6 +432,22 @@ fn fits(v: i64, bits: u32) -> bool {
 
 fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
     let err = |m: String| Error::assemble(format!("{}: {m}", what()));
+    // each instruction has the kind of operand its opcode takes, so the label of one that
+    // branches and the literal of one that holds one are there
+    for it in &code.items {
+        if let Item::Ins(i) = it
+            && !i.operand.fits(i.op)
+        {
+            let name = bytecode::info(i.op).map_or("unknown opcode", |x| x.0);
+            return Err(err(format!(
+                "{name}: its operand is of another kind than it takes"
+            )));
+        }
+    }
+    let target = |i: &Ins| match i.operand {
+        Operand::Label(t) => t,
+        _ => unreachable!("an instruction that branches has a label"),
+    };
     // choose final opcodes: const-string widens past 65535 strings, gotos widen to reach
     let mut ops: Vec<u8> = code
         .items
@@ -440,7 +457,7 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
     for (k, it) in code.items.iter().enumerate() {
         if let Item::Ins(i) = it
             && i.op == 0x1a
-            && let Ref::Str(x) = &i.r
+            && let Operand::Str(x) = &i.operand
             && p.si[x] > 0xffff
         {
             ops[k] = 0x1b;
@@ -492,8 +509,8 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                 && matches!(ops[k], 0x28 | 0x29)
             {
                 let to = *labels
-                    .get(&i.target)
-                    .ok_or_else(|| err(format!("undefined label {}", i.target)))?;
+                    .get(&target(i))
+                    .ok_or_else(|| err(format!("undefined label {}", target(i))))?;
                 let rel = to as i64 - offs[k] as i64;
                 let need = if rel != 0 && fits(rel, 8) {
                     0x28
@@ -525,7 +542,7 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
         if let Item::Ins(i) = it
             && matches!(ops[k], 0x2b | 0x2c)
         {
-            users.insert(label(i.target)?, offs[k]);
+            users.insert(label(target(i))?, offs[k]);
         }
     }
 
@@ -588,27 +605,34 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                         )))
                     }
                 };
+                let lit = match i.operand {
+                    Operand::Lit(v) => v,
+                    _ => 0,
+                };
                 let lit_fit = |bits: u32| {
-                    if fits(i.lit, bits) {
-                        Ok(i.lit)
+                    if fits(lit, bits) {
+                        Ok(lit)
                     } else {
                         Err(bad(&format!(
-                            "literal {:#x} does not fit in {bits} bits",
-                            i.lit
+                            "literal {lit:#x} does not fit in {bits} bits"
                         )))
                     }
                 };
-                let rel = || -> R<i64> { Ok(label(i.target)? as i64 - at as i64) };
+                let rel = || -> R<i64> { Ok(label(target(i))? as i64 - at as i64) };
+                let called_as = || match &i.operand {
+                    Operand::Polymorphic(_, proto) => p.pi[proto] as u16,
+                    _ => unreachable!("an invoke-polymorphic has its prototype"),
+                };
                 let idx = || -> R<u32> {
-                    Ok(match &i.r {
-                        Ref::None => 0,
-                        Ref::Str(x) => p.si[x],
-                        Ref::Type(t) => p.ti[t],
-                        Ref::Field(x) => p.fi[x],
-                        Ref::Method(m) => p.mi[m],
-                        Ref::Proto(x) => p.pi[x],
-                        Ref::CallSite(c) => p.ci[c],
-                        Ref::Handle(h) => p.hi[h],
+                    Ok(match &i.operand {
+                        Operand::None | Operand::Lit(_) | Operand::Label(_) => 0,
+                        Operand::Str(x) => p.si[x],
+                        Operand::Type(t) => p.ti[t],
+                        Operand::Field(x) => p.fi[x],
+                        Operand::Method(m) | Operand::Polymorphic(m, _) => p.mi[m],
+                        Operand::Proto(x) => p.pi[x],
+                        Operand::CallSite(c) => p.ci[c],
+                        Operand::Handle(h) => p.hi[h],
                     })
                 };
                 let op = op as u16;
@@ -630,14 +654,14 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                     Fmt::F21s => w.extend([op | reg8(0)? << 8, lit_fit(16)? as u16]),
                     Fmt::F21h => {
                         let sh = if op == 0x19 { 48 } else { 16 };
-                        let v = if sh == 16 { i.lit as i32 as i64 } else { i.lit };
-                        if v != i.lit || v & ((1i64 << sh) - 1) != 0 {
+                        let v = if sh == 16 { lit as i32 as i64 } else { lit };
+                        if v != lit || v & ((1i64 << sh) - 1) != 0 {
                             return Err(bad(&format!(
                                 "literal {:#x} must have only its top 16 bits set",
-                                i.lit
+                                lit
                             )));
                         }
-                        w.extend([op | reg8(0)? << 8, (i.lit >> sh) as u16])
+                        w.extend([op | reg8(0)? << 8, (lit >> sh) as u16])
                     }
                     Fmt::F21c => {
                         let x = idx()?;
@@ -698,22 +722,18 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                             g[0] | g[1] << 4 | g[2] << 8 | g[3] << 12,
                         ]);
                         if f == Fmt::F45cc {
-                            w.push(
-                                p.pi[i.proto.as_ref().ok_or_else(|| bad("missing proto"))?] as u16,
-                            );
+                            w.push(called_as());
                         }
                     }
                     Fmt::F3rc | Fmt::F4rcc => {
                         let x = idx()?;
                         w.extend([op | (i.n as u16) << 8, x as u16, r(0)]);
                         if f == Fmt::F4rcc {
-                            w.push(
-                                p.pi[i.proto.as_ref().ok_or_else(|| bad("missing proto"))?] as u16,
-                            );
+                            w.push(called_as());
                         }
                     }
                     Fmt::F51l => {
-                        let v = i.lit as u64;
+                        let v = lit as u64;
                         w.extend([
                             op | reg8(0)? << 8,
                             v as u16,

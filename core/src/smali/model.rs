@@ -48,27 +48,85 @@ pub struct Anno {
     pub elems: Vec<(StrId, Value)>,
 }
 
+/// What an instruction acts on besides its registers: nothing, or one of these. Which kind an
+/// instruction has is its opcode's, so an instruction has no literal to mistake for a 0, and no
+/// string where its opcode takes a type.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Ref {
+pub enum Operand {
     None,
+    /// A literal number; a float or a double as its bits.
+    Lit(i64),
+    /// The label a branch goes to, or of the payload a switch or an array fill uses.
+    Label(u32),
     Str(StrId),
     Type(TypeId),
     Field(FieldId),
     Method(MethodId),
     Proto(ProtoId),
+    /// bootstrap handle, name, method type, extra arguments
     CallSite(Arc<Vec<Value>>),
     Handle(Handle),
+    /// `invoke-polymorphic`: the method, and the prototype it is called with.
+    Polymorphic(MethodId, ProtoId),
 }
 
+impl Operand {
+    /// Whether this is the kind of operand the opcode `op` takes.
+    pub fn fits(&self, op: u8) -> bool {
+        let Some((_, f, kind)) = bytecode::info(op) else {
+            return false;
+        };
+        let polymorphic = matches!(f, bytecode::Fmt::F45cc | bytecode::Fmt::F4rcc);
+        match self {
+            Operand::None => kind == bytecode::Ref::None && !f.has_literal() && !f.has_target(),
+            Operand::Lit(_) => f.has_literal(),
+            Operand::Label(_) => f.has_target(),
+            Operand::Str(_) => kind == bytecode::Ref::String,
+            Operand::Type(_) => kind == bytecode::Ref::Type,
+            Operand::Field(_) => kind == bytecode::Ref::Field,
+            Operand::Method(_) => kind == bytecode::Ref::Method && !polymorphic,
+            Operand::Proto(_) => kind == bytecode::Ref::Proto,
+            Operand::CallSite(_) => kind == bytecode::Ref::CallSite,
+            Operand::Handle(_) => kind == bytecode::Ref::MethodHandle,
+            Operand::Polymorphic(..) => kind == bytecode::Ref::Method && polymorphic,
+        }
+    }
+}
+
+/// An instruction: its opcode, its registers, and the one operand its opcode takes.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Ins {
     pub op: u8,
+    /// for /range forms regs[0] is the first register and n the count
     pub regs: [u16; 5],
     pub n: u8,
-    pub lit: i64,
-    pub target: u32,
-    pub r: Ref,
-    pub proto: Option<ProtoId>,
+    pub operand: Operand,
+}
+
+impl Ins {
+    /// Whether this instruction has the operand `o`. A literal is compared by value, however
+    /// wide the instruction that holds it, and the method of an `invoke-polymorphic` is its
+    /// method.
+    pub fn has(&self, o: &Operand) -> bool {
+        match (&self.operand, o) {
+            (Operand::Polymorphic(m, _), Operand::Method(x)) => m == x,
+            (own, o) => own == o,
+        }
+    }
+
+    /// Give this instruction the operand `to` where it has `from`; whether it did. One whose
+    /// opcode takes another kind of operand than `to` is left as it is.
+    pub fn replace(&mut self, from: &Operand, to: &Operand) -> bool {
+        if !self.has(from) {
+            return false;
+        }
+        match (&mut self.operand, to) {
+            (Operand::Polymorphic(m, _), Operand::Method(x)) => *m = *x,
+            (own, to) if to.fits(self.op) => *own = to.clone(),
+            _ => return false,
+        }
+        true
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -161,66 +219,6 @@ impl Method {
         let params = src.proto(src.method(self.id).proto).params;
         let words: u16 = params.iter().map(|p| width(src.descriptor(*p))).sum();
         words + u16::from(self.access & ACC_STATIC == 0)
-    }
-}
-
-/// What an instruction acts on besides its registers and its branch target: the literal number
-/// it holds, or what it refers to (a string, a type, a field, a method).
-#[derive(Clone, PartialEq, Debug)]
-pub enum Operand {
-    Lit(i64),
-    Ref(Ref),
-}
-
-impl Ref {
-    /// The kind of reference an instruction's opcode says it holds.
-    fn kind(&self) -> bytecode::Ref {
-        match self {
-            Ref::None => bytecode::Ref::None,
-            Ref::Str(_) => bytecode::Ref::String,
-            Ref::Type(_) => bytecode::Ref::Type,
-            Ref::Field(_) => bytecode::Ref::Field,
-            Ref::Method(_) => bytecode::Ref::Method,
-            Ref::Proto(_) => bytecode::Ref::Proto,
-            Ref::CallSite(_) => bytecode::Ref::CallSite,
-            Ref::Handle(_) => bytecode::Ref::MethodHandle,
-        }
-    }
-}
-
-impl Ins {
-    /// The literal this instruction holds, if its format has one. `lit` is 0 in every other
-    /// instruction, so it cannot be told from a literal 0 by itself.
-    pub fn literal(&self) -> Option<i64> {
-        let (_, f, _) = bytecode::info(self.op)?;
-        f.has_literal().then_some(self.lit)
-    }
-
-    /// Whether this instruction has the operand `o`. A literal is compared by value, however
-    /// wide the instruction that holds it.
-    pub fn has(&self, o: &Operand) -> bool {
-        match o {
-            Operand::Lit(v) => self.literal() == Some(*v),
-            Operand::Ref(r) => self.r == *r,
-        }
-    }
-
-    /// Give this instruction the operand `to` where it has `from`; whether it did. One that
-    /// holds another kind of operand than `to` is left as it is: a string is no type.
-    pub fn replace(&mut self, from: &Operand, to: &Operand) -> bool {
-        let kind = bytecode::info(self.op).map(|(_, _, kind)| kind);
-        let fits = match to {
-            Operand::Lit(_) => self.literal().is_some(),
-            Operand::Ref(r) => kind == Some(r.kind()),
-        };
-        if !fits || !self.has(from) {
-            return false;
-        }
-        match to {
-            Operand::Lit(v) => self.lit = *v,
-            Operand::Ref(r) => self.r = r.clone(),
-        }
-        true
     }
 }
 

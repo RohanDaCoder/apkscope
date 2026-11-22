@@ -1,6 +1,6 @@
 use super::*;
 use crate::dex::Dex;
-use model::{Class, Id, Item, Operand, Ref};
+use model::{Class, Id, Ins, Item, Operand};
 
 /// The DEX the classes the Smali `texts` are write.
 fn assemble(texts: &[&str], version: [u8; 3]) -> Vec<u8> {
@@ -231,7 +231,7 @@ fn parses_a_method_and_an_operand_alone() {
     );
     let string = r#""a \"b\"""#;
     let s = text::find_operand(&src, string).unwrap().unwrap();
-    assert_eq!(s, Operand::Ref(Ref::Str(src.find_str(b"a \"b\"").unwrap())));
+    assert_eq!(s, Operand::Str(src.find_str(b"a \"b\"").unwrap()));
     assert_eq!(count(&m, &s), 1);
 
     // what a source lacks is found in none of it, and finding adds nothing to it
@@ -245,11 +245,11 @@ fn parses_a_method_and_an_operand_alone() {
     assert_eq!(text::find_operand(&src, "Lb/B;->f:I").unwrap(), Some(field));
     assert!(matches!(
         text::parse_operand(&mut src, "La/A;->pick(I)Ljava/lang/String;").unwrap(),
-        Operand::Ref(Ref::Method(id)) if id == m.id
+        Operand::Method(id) if id == m.id
     ));
     assert!(matches!(
         text::parse_operand(&mut src, "[Lb/B;").unwrap(),
-        Operand::Ref(Ref::Type(_))
+        Operand::Type(_)
     ));
     assert!(text::parse_operand(&mut src, "nonsense").is_err());
 
@@ -268,6 +268,18 @@ fn parses_a_method_and_an_operand_alone() {
     assert_eq!(count(&m, &s), 1);
     let two = ".method public a()V\n.end method\n.field x:I";
     assert!(text::parse_method(&mut src, class, two).is_err());
+
+    // an operand of another kind than an opcode takes is refused when the method is written
+    if let Item::Ins(i) = &mut m.code.as_mut().unwrap().items[0] {
+        i.operand = ty.clone();
+    }
+    let mut wrong =
+        text::parse(&mut src, ".class public La/A;\n.super Ljava/lang/Object;\n").unwrap();
+    wrong.methods.push(m);
+    let e = write::write(&src, &[wrong], *b"035")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("another kind"), "{e}");
 }
 
 #[test]
@@ -427,7 +439,11 @@ fn patches_instruction_in_place() {
         .items
         .iter()
         .find_map(|it| match it {
-            Item::Ins(i) if i.op == 0x13 => Some(i.lit),
+            Item::Ins(Ins {
+                op: 0x13,
+                operand: Operand::Lit(v),
+                ..
+            }) => Some(*v),
             _ => None,
         })
         .unwrap();

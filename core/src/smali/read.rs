@@ -434,52 +434,40 @@ impl View<'_> {
         let mut payload_users: BTreeMap<u32, u32> = BTreeMap::new();
         for i in &decoded {
             let (_, f, kind) = bytecode::info(i.op).unwrap();
-            let mut ins = Ins {
-                op: i.op,
-                regs: i.regs,
-                n: i.nregs,
-                lit: i.lit,
-                target: 0,
-                r: Ref::None,
-                proto: None,
-            };
-            match f {
-                Fmt::F10t | Fmt::F20t | Fmt::F30t | Fmt::F21t | Fmt::F22t | Fmt::F31t => {
+            let operand = match (f, kind) {
+                (Fmt::F10t | Fmt::F20t | Fmt::F30t | Fmt::F21t | Fmt::F22t | Fmt::F31t, _) => {
                     let t = (i.off as i64 + i.lit) as u32;
-                    ins.target = t;
-                    ins.lit = 0;
                     labels.insert(t);
                     if f == Fmt::F31t {
                         payload_users.insert(t, i.off);
                     }
+                    Operand::Label(t)
                 }
-                _ => {}
-            }
-            ins.r = match kind {
-                bytecode::Ref::None => Ref::None,
-                bytecode::Ref::String => Ref::Str(self.st(i.idx)?),
-                bytecode::Ref::Type => Ref::Type(self.ty(i.idx)?),
-                bytecode::Ref::Field => Ref::Field(self.fl(i.idx)?),
-                bytecode::Ref::Method => Ref::Method(self.me(i.idx)?),
-                bytecode::Ref::Proto => Ref::Proto(self.pr(i.idx)?),
-                bytecode::Ref::CallSite => Ref::CallSite(
-                    self.t
-                        .call_sites
-                        .get(i.idx as usize)
-                        .cloned()
+                (Fmt::F45cc | Fmt::F4rcc, _) => {
+                    Operand::Polymorphic(self.me(i.idx)?, self.pr(i.idx2)?)
+                }
+                (_, bytecode::Ref::String) => Operand::Str(self.st(i.idx)?),
+                (_, bytecode::Ref::Type) => Operand::Type(self.ty(i.idx)?),
+                (_, bytecode::Ref::Field) => Operand::Field(self.fl(i.idx)?),
+                (_, bytecode::Ref::Method) => Operand::Method(self.me(i.idx)?),
+                (_, bytecode::Ref::Proto) => Operand::Proto(self.pr(i.idx)?),
+                (_, bytecode::Ref::CallSite) => Operand::CallSite(
+                    (self.t.call_sites.get(i.idx as usize).cloned())
                         .ok_or_else(|| Error::dex("bad call site id"))?,
                 ),
-                bytecode::Ref::MethodHandle => Ref::Handle(
-                    self.t
-                        .handles
-                        .get(i.idx as usize)
-                        .cloned()
+                (_, bytecode::Ref::MethodHandle) => Operand::Handle(
+                    (self.t.handles.get(i.idx as usize).copied())
                         .ok_or_else(|| Error::dex("bad method handle id"))?,
                 ),
+                (f, bytecode::Ref::None) if f.has_literal() => Operand::Lit(i.lit),
+                (_, bytecode::Ref::None) => Operand::None,
             };
-            if matches!(f, Fmt::F45cc | Fmt::F4rcc) {
-                ins.proto = Some(self.pr(i.idx2)?);
-            }
+            let ins = Ins {
+                op: i.op,
+                regs: i.regs,
+                n: i.nregs,
+                operand,
+            };
             at.entry(i.off).or_default().push(Item::Ins(ins));
         }
         for (&p, &user) in &payload_users {

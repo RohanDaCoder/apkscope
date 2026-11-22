@@ -2,7 +2,7 @@
 //! edit changed kept beside it as models. A class is read from the file when it is asked for,
 //! and writing puts back only what changed. [`Classes`] is the DEX files of an APK.
 
-use super::model::{Class, Item, Operand, Ref, Source, TypeId};
+use super::model::{Class, Item, Operand, Source, TypeId};
 use super::{read, text, version, write};
 use crate::bytecode;
 use crate::{Error, Result};
@@ -85,17 +85,22 @@ impl Document {
     pub fn find(&self, o: &Operand) -> Result<Vec<TypeId>> {
         let file = self.src.file_counts();
         let own = |table: usize, id: u32, kind| ((id as usize) < file[table]).then_some((kind, id));
+        // what the bytecode holds for the operand: a literal, or the kind and index of what it
+        // refers to
+        let lit = match o {
+            Operand::Lit(v) => Some(*v),
+            _ => None,
+        };
         let idx = match o {
-            Operand::Lit(_) => None,
-            Operand::Ref(Ref::Str(x)) => own(0, x.0, bytecode::Ref::String),
-            Operand::Ref(Ref::Type(x)) => own(1, x.0, bytecode::Ref::Type),
-            Operand::Ref(Ref::Proto(x)) => own(2, x.0, bytecode::Ref::Proto),
-            Operand::Ref(Ref::Field(x)) => own(3, x.0, bytecode::Ref::Field),
-            Operand::Ref(Ref::Method(x)) => own(4, x.0, bytecode::Ref::Method),
-            Operand::Ref(_) => None,
+            Operand::Str(x) => own(0, x.0, bytecode::Ref::String),
+            Operand::Type(x) => own(1, x.0, bytecode::Ref::Type),
+            Operand::Proto(x) => own(2, x.0, bytecode::Ref::Proto),
+            Operand::Field(x) => own(3, x.0, bytecode::Ref::Field),
+            Operand::Method(x) => own(4, x.0, bytecode::Ref::Method),
+            _ => None,
         };
         let mut found = Vec::new();
-        if idx.is_some() || matches!(o, Operand::Lit(_)) {
+        if idx.is_some() || lit.is_some() {
             let dex = crate::dex::Dex::parse(self.src.bytes())?;
             for i in 0..self.reader.class_count() {
                 let name = self.reader.class_name(&self.src, i)?;
@@ -109,8 +114,8 @@ impl Document {
                         let Some((_, f, kind)) = bytecode::info(ins.op) else {
                             return false;
                         };
-                        match (o, idx) {
-                            (Operand::Lit(v), _) => f.has_literal() && ins.lit == *v,
+                        match (lit, idx) {
+                            (Some(v), _) => f.has_literal() && ins.lit == v,
                             (_, Some(want)) => (kind, ins.idx) == want,
                             _ => false,
                         }

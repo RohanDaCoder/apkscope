@@ -421,14 +421,19 @@ fn method(src: &Source, o: &mut String, m: &Method) {
     };
     for it in &c.items {
         match it {
-            Item::Ins(i) => match i.op {
-                0x28..=0x2a => add(i.target, "goto"),
-                0x32..=0x3d => add(i.target, "cond"),
-                0x26 => add(i.target, "array"),
-                0x2b => add(i.target, "pswitch_data"),
-                0x2c => add(i.target, "sswitch_data"),
+            Item::Ins(Ins {
+                op,
+                operand: Operand::Label(target),
+                ..
+            }) => match op {
+                0x28..=0x2a => add(*target, "goto"),
+                0x32..=0x3d => add(*target, "cond"),
+                0x26 => add(*target, "array"),
+                0x2b => add(*target, "pswitch_data"),
+                0x2c => add(*target, "sswitch_data"),
                 _ => {}
             },
+            Item::Ins(_) => {}
             Item::Packed { targets, .. } => targets.iter().for_each(|t| add(*t, "pswitch")),
             Item::Sparse(v) => v.iter().for_each(|t| add(t.1, "sswitch")),
             _ => {}
@@ -574,18 +579,26 @@ fn print_ins(
             0x2c => "sswitch_data",
             _ => "cond",
         };
-        lbl(kind, i.target)
+        match i.operand {
+            Operand::Label(t) => lbl(kind, t),
+            _ => String::new(),
+        }
+    };
+    let literal = match i.operand {
+        Operand::Lit(v) => v,
+        _ => 0,
     };
     let rf = || -> String {
-        match &i.r {
-            Ref::None => String::new(),
-            Ref::Str(x) => quote(src, x),
-            Ref::Type(t) => name(src, t).into_owned(),
-            Ref::Field(x) => field_ref(src, x),
-            Ref::Method(m) => method_ref(src, m),
-            Ref::Proto(p) => proto(src, p),
-            Ref::Handle(h) => handle(src, h),
-            Ref::CallSite(cs) => {
+        match &i.operand {
+            Operand::None | Operand::Lit(_) | Operand::Label(_) => String::new(),
+            Operand::Str(x) => quote(src, x),
+            Operand::Type(t) => name(src, t).into_owned(),
+            Operand::Field(x) => field_ref(src, x),
+            Operand::Method(m) => method_ref(src, m),
+            Operand::Polymorphic(m, p) => format!("{}, {}", method_ref(src, m), proto(src, p)),
+            Operand::Proto(p) => proto(src, p),
+            Operand::Handle(h) => handle(src, h),
+            Operand::CallSite(cs) => {
                 let mut s = String::from("call_site(");
                 for (k, v) in cs.iter().skip(1).enumerate() {
                     if k > 0 {
@@ -629,23 +642,17 @@ fn print_ins(
         Fmt::F10x => String::new(),
         Fmt::F12x | Fmt::F22x | Fmt::F32x => format!(" {}, {}", r(0), r(1)),
         Fmt::F11n | Fmt::F21s | Fmt::F31i | Fmt::F21h | Fmt::F51l => {
-            format!(" {}, {}", r(0), lit(i.lit))
+            format!(" {}, {}", r(0), lit(literal))
         }
         Fmt::F11x => format!(" {}", r(0)),
         Fmt::F10t | Fmt::F20t | Fmt::F30t => format!(" {}", target()),
         Fmt::F21t | Fmt::F31t => format!(" {}, {}", r(0), target()),
         Fmt::F21c | Fmt::F31c => format!(" {}, {}", r(0), rf()),
         Fmt::F23x => format!(" {}, {}, {}", r(0), r(1), r(2)),
-        Fmt::F22b | Fmt::F22s => format!(" {}, {}, {}", r(0), r(1), hex(i.lit)),
+        Fmt::F22b | Fmt::F22s => format!(" {}, {}, {}", r(0), r(1), hex(literal)),
         Fmt::F22t => format!(" {}, {}, {}", r(0), r(1), target()),
         Fmt::F22c => format!(" {}, {}, {}", r(0), r(1), rf()),
-        Fmt::F35c | Fmt::F3rc => format!(" {}, {}", list(), rf()),
-        Fmt::F45cc | Fmt::F4rcc => format!(
-            " {}, {}, {}",
-            list(),
-            rf(),
-            i.proto.as_ref().map_or(String::new(), |p| proto(src, p))
-        ),
+        Fmt::F35c | Fmt::F3rc | Fmt::F45cc | Fmt::F4rcc => format!(" {}, {}", list(), rf()),
     };
     o.push_str(&s);
 }
@@ -1345,10 +1352,10 @@ fn operand_text(text: &str) -> R<OperandText> {
     })
 }
 
-fn member_ref(m: Member) -> Ref {
+fn member_operand(m: Member) -> Operand {
     match m {
-        Member::Field(f) => Ref::Field(f),
-        Member::Method(m) => Ref::Method(m),
+        Member::Field(f) => Operand::Field(f),
+        Member::Method(m) => Operand::Method(m),
     }
 }
 
@@ -1357,9 +1364,9 @@ fn member_ref(m: Member) -> Ref {
 pub fn parse_operand(src: &mut Source, text: &str) -> R<Operand> {
     Ok(match operand_text(text)? {
         OperandText::Lit(v) => Operand::Lit(v),
-        OperandText::Str(s) => Operand::Ref(Ref::Str(src.intern_str(&s))),
-        OperandText::Type(t) => Operand::Ref(Ref::Type(src.intern_descriptor(&t))),
-        OperandText::Member(m) => Operand::Ref(member_ref(intern_member(src, &m))),
+        OperandText::Str(s) => Operand::Str(src.intern_str(&s)),
+        OperandText::Type(t) => Operand::Type(src.intern_descriptor(&t)),
+        OperandText::Member(m) => member_operand(intern_member(src, &m)),
     })
 }
 
@@ -1368,9 +1375,9 @@ pub fn parse_operand(src: &mut Source, text: &str) -> R<Operand> {
 pub fn find_operand(src: &Source, text: &str) -> R<Option<Operand>> {
     Ok(match operand_text(text)? {
         OperandText::Lit(v) => Some(Operand::Lit(v)),
-        OperandText::Str(s) => src.find_str(&s).map(|s| Operand::Ref(Ref::Str(s))),
-        OperandText::Type(t) => (src.find_descriptor(&t)).map(|t| Operand::Ref(Ref::Type(t))),
-        OperandText::Member(m) => find_member(src, &m).map(|m| Operand::Ref(member_ref(m))),
+        OperandText::Str(s) => src.find_str(&s).map(Operand::Str),
+        OperandText::Type(t) => src.find_descriptor(&t).map(Operand::Type),
+        OperandText::Member(m) => find_member(src, &m).map(member_operand),
     })
 }
 
@@ -1738,10 +1745,7 @@ fn method_p(p: &mut P, class: TypeId) -> R<Method> {
             op,
             regs: [0; 5],
             n: 0,
-            lit: 0,
-            target: 0,
-            r: Ref::None,
-            proto: None,
+            operand: Operand::None,
         };
         let regs = |p: &mut P, k: usize, i: &mut Ins| -> R<()> {
             for (j, slot) in i.regs[..k].iter_mut().enumerate() {
@@ -1755,14 +1759,14 @@ fn method_p(p: &mut P, class: TypeId) -> R<Method> {
         };
         let rf = |p: &mut P, i: &mut Ins| -> R<()> {
             p.expect(",")?;
-            i.r = match kind {
-                bytecode::Ref::String => Ref::Str(p.string()?),
-                bytecode::Ref::Type => Ref::Type(p.ty()?),
-                bytecode::Ref::Field => Ref::Field(p.field_ref()?),
-                bytecode::Ref::Method => Ref::Method(p.method_ref()?),
-                bytecode::Ref::Proto => Ref::Proto(p.proto()?),
+            i.operand = match kind {
+                bytecode::Ref::String => Operand::Str(p.string()?),
+                bytecode::Ref::Type => Operand::Type(p.ty()?),
+                bytecode::Ref::Field => Operand::Field(p.field_ref()?),
+                bytecode::Ref::Method => Operand::Method(p.method_ref()?),
+                bytecode::Ref::Proto => Operand::Proto(p.proto()?),
                 bytecode::Ref::MethodHandle => match p.value(0)? {
-                    Value::MethodHandle(h) => Ref::Handle(h),
+                    Value::MethodHandle(h) => Operand::Handle(h),
                     _ => return p.err("expected a method handle like invoke-static@Lx;->m()V"),
                 },
                 bytecode::Ref::CallSite => {
@@ -1794,17 +1798,17 @@ fn method_p(p: &mut P, class: TypeId) -> R<Method> {
                         p.value(0)?
                     };
                     v.insert(0, h);
-                    Ref::CallSite(Arc::new(v))
+                    Operand::CallSite(Arc::new(v))
                 }
-                bytecode::Ref::None => Ref::None,
+                bytecode::Ref::None => Operand::None,
             };
             Ok(())
         };
         let lit = |p: &mut P, i: &mut Ins| -> R<()> {
             p.expect(",")?;
             let w = p.word();
-            i.lit = match ins_literal(w) {
-                Some(v) => v,
+            i.operand = match ins_literal(w) {
+                Some(v) => Operand::Lit(v),
                 None => return p.err(format!("bad literal `{w}`")),
             };
             Ok(())
@@ -1813,7 +1817,7 @@ fn method_p(p: &mut P, class: TypeId) -> R<Method> {
             if comma {
                 p.expect(",")?;
             }
-            i.target = p.label(labels)?;
+            i.operand = Operand::Label(p.label(labels)?);
             Ok(())
         };
         let list = |p: &mut P, i: &mut Ins, range: bool| -> R<()> {
@@ -1886,7 +1890,10 @@ fn method_p(p: &mut P, class: TypeId) -> R<Method> {
                 list(p, &mut i, f == Fmt::F4rcc)?;
                 rf(p, &mut i)?;
                 p.expect(",")?;
-                i.proto = Some(p.proto()?);
+                let proto = p.proto()?;
+                if let Operand::Method(m) = i.operand {
+                    i.operand = Operand::Polymorphic(m, proto);
+                }
             }
         }
         items.push(Item::Ins(i));
