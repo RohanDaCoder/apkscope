@@ -1,4 +1,5 @@
-//! DEX bytes -> class model. Self-contained so the query paths stay untouched.
+//! DEX bytes -> class model: a class is read from its source's file with every reference kept
+//! as the id the file gives it. Self-contained so the query paths stay untouched.
 
 use super::model::*;
 use crate::bytecode::{self, Fmt};
@@ -20,15 +21,9 @@ fn u16_at(d: &[u8], o: usize) -> R<u16> {
         .ok_or_else(|| Error::dex(format!("read past end at {o:#x}")))
 }
 
-/// A DEX file's id tables in model form, read once, and its classes read from its bytes one at
-/// a time. `D` holds the bytes: a slice, or a `Vec` for a reader that owns its file.
-pub struct Reader<D> {
-    d: D,
-    strings: Vec<S>,
-    types: Vec<S>,
-    protos: Vec<Proto>,
-    fields: Vec<FieldRef>,
-    methods: Vec<MethodRef>,
+/// What reading a class needs of its file beyond the source's tables, read once: where the
+/// class_defs are, and the method handles and call sites, which are few.
+pub struct Reader {
     handles: Vec<Handle>,
     call_sites: Vec<Arc<Vec<Value>>>,
     class_defs: usize,
@@ -37,136 +32,72 @@ pub struct Reader<D> {
     hidden: usize,
 }
 
-/// Every class of a DEX file, in class_def order.
-pub fn read(d: &[u8]) -> R<Vec<Class>> {
-    let r = Reader::new(d)?;
-    (0..r.class_count).map(|i| r.class(i)).collect()
+/// Every class of a source's file, in class_def order.
+pub fn read(s: &Source) -> R<Vec<Class>> {
+    let r = Reader::new(s)?;
+    (0..r.class_count).map(|i| r.class(s, i)).collect()
 }
 
-impl Reader<Vec<u8>> {
-    /// A reader that owns the file it reads.
-    pub fn owned(d: Vec<u8>) -> R<Self> {
-        let Reader {
-            d: _,
-            strings,
-            types,
-            protos,
-            fields,
-            methods,
-            handles,
-            call_sites,
-            class_defs,
-            class_count,
-            hidden,
-        } = Reader::new(&d[..])?;
-        Ok(Reader {
-            d,
-            strings,
-            types,
-            protos,
-            fields,
-            methods,
-            handles,
-            call_sites,
-            class_defs,
-            class_count,
-            hidden,
-        })
+impl Reader {
+    pub fn new(s: &Source) -> R<Self> {
+        if s.bytes().is_empty() {
+            return Ok(Reader {
+                handles: vec![],
+                call_sites: vec![],
+                class_defs: 0,
+                class_count: 0,
+                hidden: 0,
+            });
+        }
+        View {
+            s,
+            t: &Reader {
+                handles: vec![],
+                call_sites: vec![],
+                class_defs: 0,
+                class_count: 0,
+                hidden: 0,
+            },
+        }
+        .tables()
+    }
+
+    pub fn class_count(&self) -> usize {
+        self.class_count
+    }
+
+    /// The name of class `i`, in class_def order.
+    pub fn class_name(&self, s: &Source, i: usize) -> R<TypeId> {
+        View { s, t: self }.class_name(i)
+    }
+
+    /// Class `i` of the file, in class_def order.
+    pub fn class(&self, s: &Source, i: usize) -> R<Class> {
+        View { s, t: self }.class(i)
+    }
+
+    /// The file's method handles and call sites, in the order of their ids.
+    pub(super) fn handles(&self) -> (&[Handle], &[Arc<Vec<Value>>]) {
+        (&self.handles, &self.call_sites)
     }
 }
 
-impl<'a> Reader<&'a [u8]> {
-    pub fn new(d: &'a [u8]) -> R<Self> {
-        if d.len() < 0x70 || &d[..4] != b"dex\n" {
-            return Err(Error::dex("not a DEX file"));
-        }
-        let tab = |o: usize| -> R<(usize, usize)> {
-            Ok((u32_at(d, o)? as usize, u32_at(d, o + 4)? as usize))
-        };
-        let (ns, so) = tab(0x38)?;
-        let strings = (0..ns)
-            .map(|i| {
-                let mut o = u32_at(d, so + i * 4)? as usize;
-                uleb128(d, &mut o)?;
-                let end = d
-                    .get(o..)
-                    .and_then(|t| t.iter().position(|&b| b == 0))
-                    .ok_or_else(|| Error::dex("unterminated string"))?;
-                Ok(s(&d[o..o + end]))
-            })
-            .collect::<R<Vec<S>>>()?;
-        let st = |i: u32| {
-            strings
-                .get(i as usize)
-                .cloned()
-                .ok_or_else(|| Error::dex(format!("bad string id {i}")))
-        };
-        let (nt, to) = tab(0x40)?;
-        let types = (0..nt)
-            .map(|i| st(u32_at(d, to + i * 4)?))
-            .collect::<R<Vec<S>>>()?;
-        let ty = |i: u32| {
-            types
-                .get(i as usize)
-                .cloned()
-                .ok_or_else(|| Error::dex(format!("bad type id {i}")))
-        };
-        let (np, po) = tab(0x48)?;
-        let protos = (0..np)
-            .map(|i| {
-                let o = po + i * 12;
-                let list = u32_at(d, o + 8)? as usize;
-                let params = if list == 0 {
-                    vec![]
-                } else {
-                    (0..u32_at(d, list)? as usize)
-                        .map(|k| ty(u16_at(d, list + 4 + k * 2)? as u32))
-                        .collect::<R<_>>()?
-                };
-                Ok(Proto {
-                    ret: ty(u32_at(d, o + 4)?)?,
-                    params,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (nf, fo) = tab(0x50)?;
-        let fields = (0..nf)
-            .map(|i| {
-                let o = fo + i * 8;
-                Ok(FieldRef {
-                    class: ty(u16_at(d, o)? as u32)?,
-                    ty: ty(u16_at(d, o + 2)? as u32)?,
-                    name: st(u32_at(d, o + 4)?)?,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (nm, mo) = tab(0x58)?;
-        let methods = (0..nm)
-            .map(|i| {
-                let o = mo + i * 8;
-                let proto = protos
-                    .get(u16_at(d, o + 2)? as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad proto id"))?;
-                Ok(MethodRef {
-                    class: ty(u16_at(d, o)? as u32)?,
-                    proto,
-                    name: st(u32_at(d, o + 4)?)?,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (class_count, class_defs) = tab(0x60)?;
+/// A reader with the source it reads.
+struct View<'a> {
+    s: &'a Source,
+    t: &'a Reader,
+}
+
+impl View<'_> {
+    /// The reader of this file: its class_defs, method handles and call sites.
+    fn tables(&self) -> R<Reader> {
+        let s = self.s;
+        let d = s.bytes();
         let mut r = Reader {
-            d,
-            strings,
-            types,
-            protos,
-            fields,
-            methods,
             handles: vec![],
             call_sites: vec![],
-            class_defs,
-            class_count,
+            class_count: u32_at(d, 0x60)? as usize,
+            class_defs: u32_at(d, 0x64)? as usize,
             hidden: 0,
         };
         // call sites and method handles are only listed in the map
@@ -197,59 +128,47 @@ impl<'a> Reader<&'a [u8]> {
             let kind = u16_at(d, o)?;
             let id = u16_at(d, o + 4)? as usize;
             let member = if kind <= 3 {
-                Member::Field(
-                    r.fields
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad field in method handle"))?,
-                )
+                Member::Field(View { s, t: &r }.fl(id as u32)?)
             } else {
-                Member::Method(
-                    r.methods
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad method in method handle"))?,
-                )
+                Member::Method(View { s, t: &r }.me(id as u32)?)
             };
             r.handles.push(Handle { kind, member });
         }
         for i in 0..sections.0 {
             let mut o = u32_at(d, sections.1 + i * 4)? as usize;
-            let v = r.array(&mut o)?;
+            let v = View { s, t: &r }.array(&mut o)?;
             r.call_sites.push(Arc::new(v));
         }
         Ok(r)
     }
-}
 
-impl<D: AsRef<[u8]>> Reader<D> {
-    /// The file's bytes.
-    pub fn bytes(&self) -> &[u8] {
-        self.d.as_ref()
+    fn class_name(&self, i: usize) -> R<TypeId> {
+        self.ty(u32_at(self.s.bytes(), self.t.class_defs + i * 32)?)
     }
 
-    pub fn class_count(&self) -> usize {
-        self.class_count
+    /// An id read from the file, if the file's table has it.
+    fn id<I: Id>(&self, table: usize, i: u32, what: &str) -> R<I> {
+        match (i as usize) < self.s.file_counts()[table] {
+            true => Ok(I::new(i)),
+            false => Err(Error::dex(format!("bad {what} id {i}"))),
+        }
     }
-
-    /// The descriptor of class `i`, in class_def order.
-    pub fn class_name(&self, i: usize) -> R<S> {
-        self.ty(u32_at(self.d.as_ref(), self.class_defs + i * 32)?)
+    fn st(&self, i: u32) -> R<StrId> {
+        self.id(0, i, "string")
     }
-
-    fn st(&self, i: u32) -> R<S> {
-        self.strings
-            .get(i as usize)
-            .cloned()
-            .ok_or_else(|| Error::dex(format!("bad string id {i}")))
+    fn ty(&self, i: u32) -> R<TypeId> {
+        self.id(1, i, "type")
     }
-    fn ty(&self, i: u32) -> R<S> {
-        self.types
-            .get(i as usize)
-            .cloned()
-            .ok_or_else(|| Error::dex(format!("bad type id {i}")))
+    fn pr(&self, i: u32) -> R<ProtoId> {
+        self.id(2, i, "proto")
     }
-    fn opt_st(&self, i: u32) -> R<Option<S>> {
+    fn fl(&self, i: u32) -> R<FieldId> {
+        self.id(3, i, "field")
+    }
+    fn me(&self, i: u32) -> R<MethodId> {
+        self.id(4, i, "method")
+    }
+    fn opt_st(&self, i: u32) -> R<Option<StrId>> {
         if i == u32::MAX {
             Ok(None)
         } else {
@@ -257,15 +176,15 @@ impl<D: AsRef<[u8]>> Reader<D> {
         }
     }
     /// uleb128p1 string index
-    fn p1(&self, o: &mut usize) -> R<Option<S>> {
-        match uleb128(self.d.as_ref(), o)? {
+    fn p1(&self, o: &mut usize) -> R<Option<StrId>> {
+        match uleb128(self.s.bytes(), o)? {
             0 => Ok(None),
             v => self.st(v - 1).map(Some),
         }
     }
 
     fn array(&self, o: &mut usize) -> R<Vec<Value>> {
-        let n = uleb128(self.d.as_ref(), o)?;
+        let n = uleb128(self.s.bytes(), o)?;
         (0..n).map(|_| self.value(o, 0)).collect()
     }
 
@@ -273,7 +192,7 @@ impl<D: AsRef<[u8]>> Reader<D> {
         if depth > 64 {
             return Err(Error::dex("encoded value nesting too deep"));
         }
-        let d = self.d.as_ref();
+        let d = self.s.bytes();
         let h = *d.get(*o).ok_or_else(|| Error::dex("value past end"))?;
         *o += 1;
         let (t, arg) = (h & 0x1f, (h >> 5) as usize);
@@ -294,38 +213,19 @@ impl<D: AsRef<[u8]>> Reader<D> {
             0x06 => Value::Long(sx(raw(arg + 1)?, arg + 1)),
             0x10 => Value::Float((raw(arg + 1)? << (8 * (3 - arg.min(3)))) as u32),
             0x11 => Value::Double(raw(arg + 1)? << (8 * (7 - arg.min(7)))),
-            0x15 => Value::MethodType(
-                self.protos
+            0x15 => Value::MethodType(self.pr(idx(raw(arg + 1)?))?),
+            0x16 => Value::MethodHandle(
+                self.t
+                    .handles
                     .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad proto"))?,
-            ),
-            0x16 => Value::MethodHandle(Box::new(
-                self.handles
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
+                    .copied()
                     .ok_or_else(|| Error::dex("bad method handle"))?,
-            )),
+            ),
             0x17 => Value::Str(self.st(idx(raw(arg + 1)?))?),
             0x18 => Value::Type(self.ty(idx(raw(arg + 1)?))?),
-            0x19 => Value::Field(
-                self.fields
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad field"))?,
-            ),
-            0x1a => Value::Method(
-                self.methods
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad method"))?,
-            ),
-            0x1b => Value::Enum(
-                self.fields
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad field"))?,
-            ),
+            0x19 => Value::Field(self.fl(idx(raw(arg + 1)?))?),
+            0x1a => Value::Method(self.me(idx(raw(arg + 1)?))?),
+            0x1b => Value::Enum(self.fl(idx(raw(arg + 1)?))?),
             0x1c => {
                 let n = uleb128(d, o)?;
                 Value::Array((0..n).map(|_| self.value(o, depth + 1)).collect::<R<_>>()?)
@@ -338,11 +238,11 @@ impl<D: AsRef<[u8]>> Reader<D> {
     }
 
     fn anno(&self, o: &mut usize, vis: u8, depth: u32) -> R<Anno> {
-        let ty = self.ty(uleb128(self.d.as_ref(), o)?)?;
-        let n = uleb128(self.d.as_ref(), o)?;
+        let ty = self.ty(uleb128(self.s.bytes(), o)?)?;
+        let n = uleb128(self.s.bytes(), o)?;
         let mut elems = Vec::with_capacity(n.min(64) as usize);
         for _ in 0..n {
-            let name = self.st(uleb128(self.d.as_ref(), o)?)?;
+            let name = self.st(uleb128(self.s.bytes(), o)?)?;
             elems.push((name, self.value(o, depth)?));
         }
         Ok(Anno { vis, ty, elems })
@@ -352,10 +252,11 @@ impl<D: AsRef<[u8]>> Reader<D> {
         if off == 0 {
             return Ok(vec![]);
         }
-        (0..u32_at(self.d.as_ref(), off)? as usize)
+        (0..u32_at(self.s.bytes(), off)? as usize)
             .map(|k| {
-                let mut o = u32_at(self.d.as_ref(), off + 4 + k * 4)? as usize;
+                let mut o = u32_at(self.s.bytes(), off + 4 + k * 4)? as usize;
                 let vis = *self
+                    .s
                     .bytes()
                     .get(o)
                     .ok_or_else(|| Error::dex("annotation past end"))?;
@@ -365,33 +266,9 @@ impl<D: AsRef<[u8]>> Reader<D> {
             .collect()
     }
 
-    /// The DEX's id tables, already in model form and sorted order, for reusing as write pools.
-    #[allow(clippy::type_complexity)]
-    pub(super) fn pool_tables(
-        &self,
-    ) -> (
-        &[S],
-        &[S],
-        &[Proto],
-        &[FieldRef],
-        &[MethodRef],
-        &[Handle],
-        &[Arc<Vec<Value>>],
-    ) {
-        (
-            &self.strings,
-            &self.types,
-            &self.protos,
-            &self.fields,
-            &self.methods,
-            &self.handles,
-            &self.call_sites,
-        )
-    }
-
     pub fn class(&self, i: usize) -> R<Class> {
-        let d = self.d.as_ref();
-        let o = self.class_defs + i * 32;
+        let d = self.s.bytes();
+        let o = self.t.class_defs + i * 32;
         let name = self.ty(u32_at(d, o)?)?;
         let sup = match u32_at(d, o + 8)? {
             u32::MAX => None,
@@ -460,7 +337,7 @@ impl<D: AsRef<[u8]>> Reader<D> {
         .into_iter();
 
         // hiddenapi flags: one uleb128 per member, in class_data order
-        let mut hid = match self.hidden {
+        let mut hid = match self.t.hidden {
             0 => 0,
             h => match u32_at(d, h + 4 + i * 4)? as usize {
                 0 => 0,
@@ -488,14 +365,9 @@ impl<D: AsRef<[u8]>> Reader<D> {
                 for _ in 0..count {
                     idx += uleb128(d, &mut off)?;
                     let access = uleb128(d, &mut off)?;
-                    let f = self
-                        .fields
-                        .get(idx as usize)
-                        .ok_or_else(|| Error::dex("bad field id"))?;
                     let init = if k == 0 { statics.next() } else { None };
                     c.fields.push(Field {
-                        name: f.name.clone(),
-                        ty: f.ty.clone(),
+                        id: self.fl(idx)?,
                         access,
                         hidden: hidden()?,
                         init,
@@ -509,13 +381,10 @@ impl<D: AsRef<[u8]>> Reader<D> {
                     idx += uleb128(d, &mut off)?;
                     let access = uleb128(d, &mut off)?;
                     let code_off = uleb128(d, &mut off)? as usize;
-                    let m = self
-                        .methods
-                        .get(idx as usize)
-                        .ok_or_else(|| Error::dex("bad method id"))?;
+                    let id = self.me(idx)?;
+                    let nparams = self.s.proto(self.s.method(id).proto).params.len();
                     let mut method = Method {
-                        name: m.name.clone(),
-                        proto: m.proto.clone(),
+                        id,
                         access,
                         hidden: hidden()?,
                         code: None,
@@ -524,21 +393,15 @@ impl<D: AsRef<[u8]>> Reader<D> {
                     };
                     if let Some(sets) = pa.remove(&idx) {
                         let mut sets = sets;
-                        sets.resize(method.proto.params.len().max(sets.len()), vec![]);
+                        sets.resize(nparams.max(sets.len()), vec![]);
                         if sets.iter().any(|s| !s.is_empty()) {
                             method.param_annos = Some(sets);
                         }
                     }
                     if code_off != 0 {
                         method.code = Some(
-                            self.code(code_off, method.proto.params.len())
-                                .map_err(|e| {
-                                    e.at(format!(
-                                        "{}->{}",
-                                        String::from_utf8_lossy(&c.name),
-                                        String::from_utf8_lossy(&method.name)
-                                    ))
-                                })?,
+                            self.code(code_off, nparams)
+                                .map_err(|e| e.at(format!("method {idx}")))?,
                         );
                     }
                     c.methods.push(method);
@@ -549,7 +412,7 @@ impl<D: AsRef<[u8]>> Reader<D> {
     }
 
     fn code(&self, co: usize, nparams: usize) -> R<Code> {
-        let d = self.d.as_ref();
+        let d = self.s.bytes();
         let registers = u16_at(d, co)?;
         let ntries = u16_at(d, co + 6)? as usize;
         let debug_off = u32_at(d, co + 8)? as usize;
@@ -596,44 +459,26 @@ impl<D: AsRef<[u8]>> Reader<D> {
                 bytecode::Ref::None => Ref::None,
                 bytecode::Ref::String => Ref::Str(self.st(i.idx)?),
                 bytecode::Ref::Type => Ref::Type(self.ty(i.idx)?),
-                bytecode::Ref::Field => Ref::Field(
-                    self.fields
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad field id"))?,
-                ),
-                bytecode::Ref::Method => Ref::Method(
-                    self.methods
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad method id"))?,
-                ),
-                bytecode::Ref::Proto => Ref::Proto(
-                    self.protos
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad proto id"))?,
-                ),
+                bytecode::Ref::Field => Ref::Field(self.fl(i.idx)?),
+                bytecode::Ref::Method => Ref::Method(self.me(i.idx)?),
+                bytecode::Ref::Proto => Ref::Proto(self.pr(i.idx)?),
                 bytecode::Ref::CallSite => Ref::CallSite(
-                    self.call_sites
+                    self.t
+                        .call_sites
                         .get(i.idx as usize)
                         .cloned()
                         .ok_or_else(|| Error::dex("bad call site id"))?,
                 ),
                 bytecode::Ref::MethodHandle => Ref::Handle(
-                    self.handles
+                    self.t
+                        .handles
                         .get(i.idx as usize)
                         .cloned()
                         .ok_or_else(|| Error::dex("bad method handle id"))?,
                 ),
             };
             if matches!(f, Fmt::F45cc | Fmt::F4rcc) {
-                ins.proto = Some(
-                    self.protos
-                        .get(i.idx2 as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad proto id"))?,
-                );
+                ins.proto = Some(self.pr(i.idx2)?);
             }
             at.entry(i.off).or_default().push(Item::Ins(ins));
         }

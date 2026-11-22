@@ -1,8 +1,10 @@
-//! Class model -> DEX bytes: fresh, sorted id tables; each data section written once, in the
-//! order later sections need its offsets.
+//! Class model -> DEX bytes. The id tables are the source's entries the classes refer to: the
+//! file's own are sorted already, so they are sorted again only with the entries an edit added.
+//! Each data section is written once, in the order later sections need its offsets.
 
 use super::model::*;
 use super::read;
+use super::source::{FieldRef, MethodRef, Proto, cmp_str};
 use crate::bytecode::{self, Fmt};
 use crate::{Error, Result};
 use std::collections::{HashMap, HashSet};
@@ -35,80 +37,64 @@ fn sleb(out: &mut Vec<u8>, mut v: i32) {
     }
 }
 
-fn index_map<T: Clone + Eq + std::hash::Hash>(v: &[T]) -> HashMap<T, u32> {
-    v.iter()
-        .enumerate()
-        .map(|(i, x)| (x.clone(), i as u32))
-        .collect()
-}
-
-fn shorty(p: &Proto) -> S {
-    let c = |t: &[u8]| {
-        if matches!(t[0], b'L' | b'[') {
-            b'L'
-        } else {
-            t[0]
-        }
-    };
-    let v: Vec<u8> = std::iter::once(c(&p.ret))
-        .chain(p.params.iter().map(|t| c(t)))
-        .collect();
-    s(&v)
-}
-
-/// DEX sorts strings by UTF-16 code units; ASCII compares the same as bytes.
-fn cmp16(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-    if a.is_ascii() && b.is_ascii() {
-        a.cmp(b)
-    } else {
-        utf16(a).cmp(&utf16(b))
-    }
-}
-
-#[derive(Default)]
-struct Collect {
-    strings: HashSet<S>,
-    types: HashSet<S>,
-    protos: HashSet<Proto>,
-    fields: HashSet<FieldRef>,
-    methods: HashSet<MethodRef>,
+/// What of the source the classes written refer to, and the method handles and call sites, in
+/// the order they are first met.
+struct Collect<'s> {
+    src: &'s Source,
+    strings: Vec<bool>,
+    types: Vec<bool>,
+    protos: Vec<bool>,
+    fields: Vec<bool>,
+    methods: Vec<bool>,
     handles: Vec<Handle>,
     handle_set: HashSet<Handle>,
     sites: Vec<Arc<Vec<Value>>>,
     site_set: HashSet<Arc<Vec<Value>>>,
 }
 
-impl Collect {
-    fn str(&mut self, x: &S) {
-        if !self.strings.contains(x) {
-            self.strings.insert(x.clone());
+impl<'s> Collect<'s> {
+    fn new(src: &'s Source) -> Self {
+        let [s, t, p, f, m] = src.counts();
+        Self {
+            src,
+            strings: vec![false; s],
+            types: vec![false; t],
+            protos: vec![false; p],
+            fields: vec![false; f],
+            methods: vec![false; m],
+            handles: vec![],
+            handle_set: HashSet::new(),
+            sites: vec![],
+            site_set: HashSet::new(),
         }
     }
-    fn ty(&mut self, t: &S) {
-        if !self.types.contains(t) {
-            self.types.insert(t.clone());
-            self.str(t);
+    fn str(&mut self, x: &StrId) {
+        self.strings[x.ix()] = true;
+    }
+    fn ty(&mut self, t: &TypeId) {
+        if !std::mem::replace(&mut self.types[t.ix()], true) {
+            self.str(&self.src.type_str(*t));
         }
     }
-    fn proto(&mut self, p: &Proto) {
-        if !self.protos.contains(p) {
-            self.protos.insert(p.clone());
-            self.str(&shorty(p));
+    fn proto(&mut self, p: &ProtoId) {
+        if !std::mem::replace(&mut self.protos[p.ix()], true) {
+            let p = self.src.proto(*p);
+            self.str(&p.shorty);
             self.ty(&p.ret);
             p.params.iter().for_each(|t| self.ty(t));
         }
     }
-    fn field(&mut self, f: &FieldRef) {
-        if !self.fields.contains(f) {
-            self.fields.insert(f.clone());
+    fn field(&mut self, f: &FieldId) {
+        if !std::mem::replace(&mut self.fields[f.ix()], true) {
+            let f = self.src.field(*f);
             self.ty(&f.class);
             self.str(&f.name);
             self.ty(&f.ty);
         }
     }
-    fn method(&mut self, m: &MethodRef) {
-        if !self.methods.contains(m) {
-            self.methods.insert(m.clone());
+    fn method(&mut self, m: &MethodId) {
+        if !std::mem::replace(&mut self.methods[m.ix()], true) {
+            let m = self.src.method(*m);
             self.ty(&m.class);
             self.str(&m.name);
             self.proto(&m.proto);
@@ -119,8 +105,8 @@ impl Collect {
             Member::Field(f) => self.field(f),
             Member::Method(m) => self.method(m),
         }
-        if self.handle_set.insert(h.clone()) {
-            self.handles.push(h.clone());
+        if self.handle_set.insert(*h) {
+            self.handles.push(*h);
         }
     }
     fn value(&mut self, v: &Value) {
@@ -150,20 +136,12 @@ impl Collect {
         c.source.iter().for_each(|x| self.str(x));
         c.annos.iter().for_each(|a| self.anno(a));
         for f in &c.fields {
-            self.field(&FieldRef {
-                class: c.name.clone(),
-                name: f.name.clone(),
-                ty: f.ty.clone(),
-            });
+            self.field(&f.id);
             f.init.iter().for_each(|v| self.value(v));
             f.annos.iter().for_each(|a| self.anno(a));
         }
         for m in &c.methods {
-            self.method(&MethodRef {
-                class: c.name.clone(),
-                name: m.name.clone(),
-                proto: m.proto.clone(),
-            });
+            self.method(&m.id);
             m.annos.iter().for_each(|a| self.anno(a));
             m.param_annos
                 .iter()
@@ -224,66 +202,83 @@ pub fn default_value(t: &[u8]) -> Value {
     }
 }
 
+/// Where each id of the source is in the file written: its index there.
+struct Map<I>(Vec<u32>, std::marker::PhantomData<I>);
+
+impl<I: Id> std::ops::Index<&I> for Map<I> {
+    type Output = u32;
+    fn index(&self, id: &I) -> &u32 {
+        &self.0[id.ix()]
+    }
+}
+
+/// The ids `used`, in the order `sorted` puts them when the source has entries the file lacks:
+/// the file's own are in order already. With them, where each is.
+fn order<I: Id>(used: &[bool], grown: bool, sort: impl FnOnce(&mut Vec<I>)) -> (Vec<I>, Map<I>) {
+    let mut ids: Vec<I> = (0..used.len())
+        .filter(|i| used[*i])
+        .map(|i| I::new(i as u32))
+        .collect();
+    if grown {
+        sort(&mut ids);
+    }
+    let mut map = vec![NO_INDEX; used.len()];
+    for (at, id) in ids.iter().enumerate() {
+        map[id.ix()] = at as u32;
+    }
+    (ids, Map(map, std::marker::PhantomData))
+}
+
 /// Final indices of everything a DEX refers to.
 struct Pools {
-    strings: Vec<S>,
-    types: Vec<S>,
+    strings: Vec<StrId>,
+    types: Vec<TypeId>,
     protos: Vec<Proto>,
     fields: Vec<FieldRef>,
     methods: Vec<MethodRef>,
     handles: Vec<Handle>,
     sites: Vec<Arc<Vec<Value>>>,
-    si: HashMap<S, u32>,
-    ti: HashMap<S, u32>,
-    pi: HashMap<Proto, u32>,
-    fi: HashMap<FieldRef, u32>,
-    mi: HashMap<MethodRef, u32>,
+    si: Map<StrId>,
+    ti: Map<TypeId>,
+    pi: Map<ProtoId>,
+    fi: Map<FieldId>,
+    mi: Map<MethodId>,
     hi: HashMap<Handle, u32>,
     ci: HashMap<Arc<Vec<Value>>, u32>,
 }
 
 impl Pools {
+    /// The file's tables are sorted, so the entries of them still used are in order as they
+    /// are; only a source with added entries is sorted, each table by the one before it.
     fn new(c: Collect) -> R<Self> {
-        let mut strings: Vec<S> = c.strings.into_iter().collect();
-        strings.sort_unstable_by(|a, b| cmp16(a, b));
-        let si: HashMap<S, u32> = strings
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut types: Vec<S> = c.types.into_iter().collect();
-        types.sort_unstable_by_key(|t| si[t]);
-        let ti: HashMap<S, u32> = types
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut protos: Vec<Proto> = c.protos.into_iter().collect();
-        protos.sort_unstable_by_key(|p| {
-            (
-                ti[&p.ret],
-                p.params.iter().map(|t| ti[t]).collect::<Vec<_>>(),
-            )
+        let (src, grown) = (c.src, c.src.grown());
+        let (strings, si) = order::<StrId>(&c.strings, grown, |v| {
+            v.sort_by(|a, b| cmp_str(src.str(*a), src.str(*b)))
         });
-        let pi: HashMap<Proto, u32> = protos
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut fields: Vec<FieldRef> = c.fields.into_iter().collect();
-        fields.sort_unstable_by_key(|f| (ti[&f.class], si[&f.name], ti[&f.ty]));
-        let fi: HashMap<FieldRef, u32> = fields
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut methods: Vec<MethodRef> = c.methods.into_iter().collect();
-        methods.sort_unstable_by_key(|m| (ti[&m.class], si[&m.name], pi[&m.proto]));
-        let mi: HashMap<MethodRef, u32> = methods
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
+        let (types, ti) = order::<TypeId>(&c.types, grown, |v| {
+            v.sort_by_key(|t| si[&src.type_str(*t)])
+        });
+        let (protos, pi) = order::<ProtoId>(&c.protos, grown, |v| {
+            v.sort_by_cached_key(|p| {
+                let p = src.proto(*p);
+                (
+                    ti[&p.ret],
+                    p.params.iter().map(|t| ti[t]).collect::<Vec<_>>(),
+                )
+            })
+        });
+        let (fields, fi) = order::<FieldId>(&c.fields, grown, |v| {
+            v.sort_by_key(|f| {
+                let f = src.field(*f);
+                (ti[&f.class], si[&f.name], ti[&f.ty])
+            })
+        });
+        let (methods, mi) = order::<MethodId>(&c.methods, grown, |v| {
+            v.sort_by_key(|m| {
+                let m = src.method(*m);
+                (ti[&m.class], si[&m.name], pi[&m.proto])
+            })
+        });
         for (what, n) in [
             ("types", types.len()),
             ("protos", protos.len()),
@@ -296,24 +291,18 @@ impl Pools {
                 )));
             }
         }
-        let hi = c
-            .handles
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
+        let hi = (c.handles.iter().enumerate())
+            .map(|(i, x)| (*x, i as u32))
             .collect();
-        let ci = c
-            .sites
-            .iter()
-            .enumerate()
+        let ci = (c.sites.iter().enumerate())
             .map(|(i, x)| (x.clone(), i as u32))
             .collect();
         Ok(Pools {
             strings,
             types,
-            protos,
-            fields,
-            methods,
+            protos: protos.iter().map(|p| src.proto(*p)).collect(),
+            fields: fields.iter().map(|f| src.field(*f)).collect(),
+            methods: methods.iter().map(|m| src.method(*m)).collect(),
             handles: c.handles,
             sites: c.sites,
             si,
@@ -326,25 +315,34 @@ impl Pools {
         })
     }
 
-    /// Reuse a DEX's own id tables, in their existing (sorted) order, as the write pools. Lets an
-    /// edit be assembled against the indices already in the file, so untouched classes stay valid.
-    fn from_reader<D: AsRef<[u8]>>(r: &read::Reader<D>) -> Self {
-        let (strings, types, protos, fields, methods, handles, sites) = r.pool_tables();
+    /// The file's own tables as they are: each of its ids is where it is already, so an edit
+    /// can be assembled against the file. An added entry is nowhere in it.
+    fn of_file(src: &Source, r: &read::Reader) -> Self {
+        fn same<I>(file: usize, all: usize) -> Map<I> {
+            let at = (0..all).map(|i| if i < file { i as u32 } else { NO_INDEX });
+            Map(at.collect(), std::marker::PhantomData)
+        }
+        let (file, all) = (src.file_counts(), src.counts());
+        let (handles, sites) = r.handles();
         Pools {
-            si: index_map(strings),
-            ti: index_map(types),
-            pi: index_map(protos),
-            fi: index_map(fields),
-            mi: index_map(methods),
-            hi: index_map(handles),
-            ci: index_map(sites),
-            strings: strings.to_vec(),
-            types: types.to_vec(),
-            protos: protos.to_vec(),
-            fields: fields.to_vec(),
-            methods: methods.to_vec(),
+            strings: vec![],
+            types: vec![],
+            protos: vec![],
+            fields: vec![],
+            methods: vec![],
+            hi: (handles.iter().enumerate())
+                .map(|(i, x)| (*x, i as u32))
+                .collect(),
+            ci: (sites.iter().enumerate())
+                .map(|(i, x)| (x.clone(), i as u32))
+                .collect(),
             handles: handles.to_vec(),
             sites: sites.to_vec(),
+            si: same(file[0], all[0]),
+            ti: same(file[1], all[1]),
+            pi: same(file[2], all[2]),
+            fi: same(file[3], all[3]),
+            mi: same(file[4], all[4]),
         }
     }
 
@@ -377,7 +375,7 @@ impl Pools {
             Value::Float(x) => right(out, 0x10, *x as u64, 4),
             Value::Double(x) => right(out, 0x11, *x, 8),
             Value::MethodType(p) => unsigned(out, 0x15, self.pi[p] as u64),
-            Value::MethodHandle(h) => unsigned(out, 0x16, self.hi[&**h] as u64),
+            Value::MethodHandle(h) => unsigned(out, 0x16, self.hi[h] as u64),
             Value::Str(x) => unsigned(out, 0x17, self.si[x] as u64),
             Value::Type(t) => unsigned(out, 0x18, self.ti[t] as u64),
             Value::Field(f) => unsigned(out, 0x19, self.fi[f] as u64),
@@ -408,10 +406,10 @@ impl Pools {
         }
     }
 
-    fn opt(&self, x: &Option<S>) -> u32 {
+    fn opt(&self, x: &Option<StrId>) -> u32 {
         x.as_ref().map_or(NO_INDEX, |x| self.si[x])
     }
-    fn p1(&self, x: &Option<S>) -> u32 {
+    fn p1(&self, x: &Option<StrId>) -> u32 {
         x.as_ref().map_or(0, |x| self.si[x] + 1)
     }
 }
@@ -865,7 +863,7 @@ fn intern(
     o
 }
 
-fn type_list(p: &Pools, l: &[S]) -> Vec<u8> {
+fn type_list(p: &Pools, l: &[TypeId]) -> Vec<u8> {
     let mut b = Vec::with_capacity(4 + l.len() * 2);
     b.extend((l.len() as u32).to_le_bytes());
     for t in l {
@@ -917,8 +915,9 @@ fn write_code(out: &mut Out, a: &Assembled) {
 }
 
 /// `version` is the 3-digit DEX version to write (raised to 038 when the code needs it).
-pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
+pub fn write(src: &Source, classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
     write_each(
+        src,
         classes.len(),
         &|i| Ok(std::borrow::Cow::Borrowed(&classes[i])),
         version,
@@ -949,28 +948,26 @@ struct Written {
 /// DEX file never holds more than one as a model. It is called twice for each: once to collect
 /// what the id tables hold, once to write the class.
 pub fn write_each<'c>(
+    src: &Source,
     n: usize,
     class: &dyn Fn(usize) -> R<std::borrow::Cow<'c, Class>>,
     version: [u8; 3],
 ) -> R<Vec<u8>> {
-    let mut col = Collect::default();
+    let mut col = Collect::new(src);
     // name, then superclass and interfaces, of each class
-    let mut shells: Vec<Vec<S>> = Vec::with_capacity(n);
+    let mut shells: Vec<Vec<TypeId>> = Vec::with_capacity(n);
     for i in 0..n {
         let c = class(i)?;
         col.class(&c);
-        let mut shell = vec![c.name.clone()];
+        let mut shell = vec![c.name];
         shell.extend(c.sup.iter().chain(&c.ifaces).cloned());
         shells.push(shell);
     }
     let p = Pools::new(col)?;
 
     // superclasses and interfaces defined here must come first
-    let by_name: HashMap<&[u8], usize> = shells
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (&*c[0], i))
-        .collect();
+    let by_name: HashMap<TypeId, usize> =
+        shells.iter().enumerate().map(|(i, c)| (c[0], i)).collect();
     if by_name.len() != n {
         return Err(Error::assemble("a class is defined twice"));
     }
@@ -978,8 +975,8 @@ pub fn write_each<'c>(
     let mut state = vec![0u8; n];
     fn visit(
         i: usize,
-        cs: &[Vec<S>],
-        by: &HashMap<&[u8], usize>,
+        cs: &[Vec<TypeId>],
+        by: &HashMap<TypeId, usize>,
         st: &mut [u8],
         order: &mut Vec<usize>,
     ) -> R<()> {
@@ -987,15 +984,15 @@ pub fn write_each<'c>(
             2 => return Ok(()),
             1 => {
                 return Err(Error::assemble(format!(
-                    "class {} inherits from itself",
-                    String::from_utf8_lossy(&cs[i][0])
+                    "class {:?} inherits from itself",
+                    cs[i][0]
                 )));
             }
             _ => {}
         }
         st[i] = 1;
         for t in &cs[i][1..] {
-            if let Some(&j) = by.get(&**t) {
+            if let Some(&j) = by.get(t) {
                 visit(j, cs, by, st, order)?;
             }
         }
@@ -1052,6 +1049,7 @@ pub fn write_each<'c>(
     let start = out.pos();
     let mut string_off = Vec::with_capacity(ns);
     for x in &p.strings {
+        let x = src.str(*x);
         string_off.push(out.pos());
         let units = x.iter().filter(|&&b| b & 0xc0 != 0x80).count() as u32;
         uleb(&mut out.buf, units);
@@ -1120,20 +1118,8 @@ pub fn write_each<'c>(
     for &i in &order {
         let c = class(i)?;
         let c: &Class = &c;
-        let fid = |f: &Field| {
-            p.fi[&FieldRef {
-                class: c.name.clone(),
-                name: f.name.clone(),
-                ty: f.ty.clone(),
-            }]
-        };
-        let mid = |m: &Method| {
-            p.mi[&MethodRef {
-                class: c.name.clone(),
-                name: m.name.clone(),
-                proto: m.proto.clone(),
-            }]
-        };
+        let fid = |f: &Field| p.fi[&f.id];
+        let mid = |m: &Method| p.mi[&m.id];
         let ifaces = (!c.ifaces.is_empty()).then(|| {
             intern(
                 &mut lists,
@@ -1201,33 +1187,38 @@ pub fn write_each<'c>(
             .map(|f| (fid(f), f))
             .collect();
         st.sort_by_key(|x| x.0);
-        let statics = st.iter().rposition(|x| x.1.init.is_some()).map(|last| {
-            let mut b = vec![];
-            uleb(&mut b, last as u32 + 1);
-            for (_, f) in &st[..=last] {
-                p.value(f.init.as_ref().unwrap_or(&default_value(&f.ty)), &mut b);
+        let statics = match st.iter().rposition(|x| x.1.init.is_some()) {
+            None => None,
+            Some(last) => {
+                let mut b = vec![];
+                uleb(&mut b, last as u32 + 1);
+                for (_, f) in &st[..=last] {
+                    let ty = src.descriptor(src.field(f.id).ty);
+                    p.value(f.init.as_ref().unwrap_or(&default_value(ty)), &mut b);
+                }
+                Some(intern(
+                    &mut arrays,
+                    &mut array_seen,
+                    b,
+                    false,
+                    &mut array_count,
+                ))
             }
-            intern(&mut arrays, &mut array_seen, b, false, &mut array_count)
-        });
+        };
 
         // each method body, with its debug info before its code item
         let mut methods: [Vec<MethodDef>; 2] = [vec![], vec![]];
         for m in &c.methods {
             let mut at = None;
             if let Some(body) = &m.code {
-                let what = || {
-                    format!(
-                        "{}->{}",
-                        String::from_utf8_lossy(&c.name),
-                        String::from_utf8_lossy(&m.name)
-                    )
-                };
-                if m.ins() > body.registers {
+                let m_ins = m.ins(src);
+                let what = || method_name(src, m);
+                if m_ins > body.registers {
                     return Err(Error::assemble(format!(
                         "{}: .registers {} is less than the {} the parameters need",
                         what(),
                         body.registers,
-                        m.ins()
+                        m_ins
                     )));
                 }
                 let a = assemble(body, &p, &what)?;
@@ -1310,7 +1301,7 @@ pub fn write_each<'c>(
                 at = Some(out.pos());
                 code_count += 1;
                 out.u16(body.registers);
-                out.u16(m.ins());
+                out.u16(m_ins);
                 out.u16(a.outs);
                 out.u16(a.tries.len() as u16);
                 if dbg.is_some() {
@@ -1332,7 +1323,7 @@ pub fn write_each<'c>(
             if list.windows(2).any(|w| w[0].0 == w[1].0) {
                 return Err(Error::assemble(format!(
                     "{}: method defined twice",
-                    String::from_utf8_lossy(&c.name)
+                    String::from_utf8_lossy(src.descriptor(c.name))
                 )));
             }
         }
@@ -1549,10 +1540,10 @@ pub fn write_each<'c>(
         put(&mut f, *o);
     }
     for t in &p.types {
-        put(&mut f, p.si[t]);
+        put(&mut f, p.si[&src.type_str(*t)]);
     }
     for (x, &params) in p.protos.iter().zip(&proto_params) {
-        put(&mut f, p.si[&shorty(x)]);
+        put(&mut f, p.si[&x.shorty]);
         put(&mut f, p.ti[&x.ret]);
         put(&mut f, params);
     }
@@ -1595,34 +1586,37 @@ pub fn write_each<'c>(
     Ok(f)
 }
 
-/// Patch edited classes into `dex` in place, without rebuilding the whole file. Only works when
-/// every edit just changes instruction bytes of existing methods (same code layout, no new pool
-/// entries, no field/annotation/signature changes); returns `None` to fall back to [`write`]
-/// otherwise. Keeps peak memory near the DEX size instead of modelling every class.
-pub fn patch(dex: &[u8], edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
-    patch_read(&read::Reader::new(dex)?, edits)
-}
-
-/// [`patch`] the file of a reader that has its tables already.
-pub fn patch_read<D: AsRef<[u8]>>(
-    r: &read::Reader<D>,
-    edits: &[(usize, &Class)],
-) -> R<Option<Vec<u8>>> {
-    let dex = r.bytes();
-    let p = Pools::from_reader(r);
+/// Patch edited classes into the source's file in place, without rebuilding it. Only works when
+/// every edit just changes instruction bytes of existing methods (same code layout, nothing the
+/// file's tables lack, no field/annotation/signature changes); returns `None` to fall back to
+/// [`write`] otherwise.
+pub fn patch(src: &Source, r: &read::Reader, edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
+    let dex = src.bytes();
+    let file = src.file_counts();
+    let p = Pools::of_file(src, r);
     let dx = crate::dex::Dex::parse(dex)?;
     let mut out = dex.to_vec();
     for &(ci, new) in edits {
-        let Ok(orig) = r.class(ci) else {
+        let Ok(orig) = r.class(src, ci) else {
             return Ok(None);
         };
         if !shell_eq(&orig, new) {
             return Ok(None); // fields/annotations/signatures changed: needs a full rebuild
         }
-        let mut col = Collect::default();
+        let mut col = Collect::new(src);
         col.class(new);
-        if !refs_present(&col, &p) {
-            return Ok(None); // edit introduces a new pool entry: needs a full rebuild
+        let tables = [
+            &col.strings,
+            &col.types,
+            &col.protos,
+            &col.fields,
+            &col.methods,
+        ];
+        let added = (tables.iter().zip(file)).any(|(used, n)| used[n..].contains(&true));
+        let known = col.handles.iter().all(|h| p.hi.contains_key(h))
+            && col.sites.iter().all(|c| p.ci.contains_key(c));
+        if added || !known {
+            return Ok(None); // edit refers to what the file's tables lack: needs a full rebuild
         }
         let cd = dx.class_data(ci)?;
         if cd.methods.len() != orig.methods.len() || new.methods.len() != orig.methods.len() {
@@ -1634,13 +1628,7 @@ pub fn patch_read<D: AsRef<[u8]>>(
                 (Some(_), Some(_)) | (None, None) => continue,
                 _ => return Ok(None), // a method gained or lost its body
             };
-            let what = || {
-                format!(
-                    "{}->{}",
-                    String::from_utf8_lossy(&new.name),
-                    String::from_utf8_lossy(&nm.name)
-                )
-            };
+            let what = || method_name(src, nm);
             let ao = assemble(oc, &p, &what)?;
             let an = assemble(nc, &p, &what)?;
             // only the instruction bytes may differ; registers/outs/tries/handlers/debug and the
@@ -1678,8 +1666,7 @@ fn shell_eq(a: &Class, b: &Class) -> bool {
         && a.fields == b.fields
         && a.methods.len() == b.methods.len()
         && a.methods.iter().zip(&b.methods).all(|(x, y)| {
-            x.name == y.name
-                && x.proto == y.proto
+            x.id == y.id
                 && x.access == y.access
                 && x.hidden == y.hidden
                 && x.annos == y.annos
@@ -1687,15 +1674,14 @@ fn shell_eq(a: &Class, b: &Class) -> bool {
         })
 }
 
-/// Every reference an edited class makes is already present in the DEX's pools.
-fn refs_present(c: &Collect, p: &Pools) -> bool {
-    c.strings.iter().all(|x| p.si.contains_key(x))
-        && c.types.iter().all(|x| p.ti.contains_key(x))
-        && c.protos.iter().all(|x| p.pi.contains_key(x))
-        && c.fields.iter().all(|x| p.fi.contains_key(x))
-        && c.methods.iter().all(|x| p.mi.contains_key(x))
-        && c.handles.iter().all(|x| p.hi.contains_key(x))
-        && c.sites.iter().all(|x| p.ci.contains_key(x))
+/// `Lclass;->name`, for an error about a method.
+fn method_name(src: &Source, m: &Method) -> String {
+    let r = src.method(m.id);
+    format!(
+        "{}->{}",
+        String::from_utf8_lossy(src.descriptor(r.class)),
+        String::from_utf8_lossy(src.str(r.name))
+    )
 }
 
 /// Recompute the header's SHA-1 signature and Adler-32 checksum.

@@ -1,45 +1,24 @@
-//! Symbolic class model: every reference is by name, not by DEX index, so a class can move
-//! between DEX files or be edited as Smali and written back with fresh, sorted tables.
+//! The class model. Every string, type, prototype, field and method a class refers to is an id
+//! into its [`Source`]: the file's own entry, or one an edit added. A model is only meaningful
+//! with the source it was read from or parsed into, as text is with the file it is in.
 
+pub use super::source::{FieldId, Id, MethodId, ProtoId, Source, StrId, TypeId};
+use crate::bytecode;
 use std::sync::Arc;
 
-/// MUTF-8 bytes as stored in the DEX (keeps lone surrogates exactly).
-pub type S = Arc<[u8]>;
-
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct Proto {
-    pub ret: S,
-    pub params: Vec<S>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct FieldRef {
-    pub class: S,
-    pub name: S,
-    pub ty: S,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct MethodRef {
-    pub class: S,
-    pub name: S,
-    pub proto: Proto,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Member {
-    Field(FieldRef),
-    Method(MethodRef),
+    Field(FieldId),
+    Method(MethodId),
 }
 
 /// `method_handle_item`: kinds 0-3 are field accessors, 4-8 invokes.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Handle {
     pub kind: u16,
     pub member: Member,
 }
 
-/// `encoded_value`; floats are kept as bits so values can be hashed and compared exactly.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Value {
     Byte(i8),
@@ -49,13 +28,13 @@ pub enum Value {
     Long(i64),
     Float(u32),
     Double(u64),
-    MethodType(Proto),
-    MethodHandle(Box<Handle>),
-    Str(S),
-    Type(S),
-    Field(FieldRef),
-    Method(MethodRef),
-    Enum(FieldRef),
+    MethodType(ProtoId),
+    MethodHandle(Handle),
+    Str(StrId),
+    Type(TypeId),
+    Field(FieldId),
+    Method(MethodId),
+    Enum(FieldId),
     Array(Vec<Value>),
     Anno(Anno),
     Null,
@@ -64,21 +43,19 @@ pub enum Value {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Anno {
-    /// 0 build, 1 runtime, 2 system (unused inside a sub-annotation)
     pub vis: u8,
-    pub ty: S,
-    pub elems: Vec<(S, Value)>,
+    pub ty: TypeId,
+    pub elems: Vec<(StrId, Value)>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ref {
     None,
-    Str(S),
-    Type(S),
-    Field(FieldRef),
-    Method(MethodRef),
-    Proto(Proto),
-    /// bootstrap handle, name, method type, extra arguments
+    Str(StrId),
+    Type(TypeId),
+    Field(FieldId),
+    Method(MethodId),
+    Proto(ProtoId),
     CallSite(Arc<Vec<Value>>),
     Handle(Handle),
 }
@@ -86,60 +63,18 @@ pub enum Ref {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Ins {
     pub op: u8,
-    /// for /range forms regs[0] is the first register and n the count
     pub regs: [u16; 5],
     pub n: u8,
     pub lit: i64,
-    /// label id of a branch or payload
     pub target: u32,
     pub r: Ref,
-    /// proto of invoke-polymorphic
-    pub proto: Option<Proto>,
-}
-
-/// What an instruction acts on besides its registers and its branch target: the literal number
-/// it holds, or what it refers to (a string, a type, a field, a method).
-#[derive(Clone, PartialEq, Debug)]
-pub enum Operand {
-    Lit(i64),
-    Ref(Ref),
-}
-
-impl Ins {
-    /// The literal this instruction holds, if its format has one. `lit` is 0 in every other
-    /// instruction, so it cannot be told from a literal 0 by itself.
-    pub fn literal(&self) -> Option<i64> {
-        let (_, f, _) = crate::bytecode::info(self.op)?;
-        f.has_literal().then_some(self.lit)
-    }
-
-    /// Whether this instruction has the operand `o`. A literal is compared by value, however
-    /// wide the instruction that holds it.
-    pub fn has(&self, o: &Operand) -> bool {
-        match o {
-            Operand::Lit(v) => self.literal() == Some(*v),
-            Operand::Ref(r) => self.r == *r,
-        }
-    }
-
-    /// Give this instruction the operand `to` where it has `from`; whether it had it.
-    pub fn replace(&mut self, from: &Operand, to: &Operand) -> bool {
-        if !self.has(from) {
-            return false;
-        }
-        match to {
-            Operand::Lit(v) => self.lit = *v,
-            Operand::Ref(r) => self.r = r.clone(),
-        }
-        true
-    }
+    pub proto: Option<ProtoId>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Item {
     Label(u32),
     Ins(Ins),
-    /// targets are label ids, relative to the switch that uses this payload
     Packed {
         first: i32,
         targets: Vec<u32>,
@@ -152,23 +87,22 @@ pub enum Item {
     Line(u32),
     Local {
         reg: u16,
-        name: Option<S>,
-        ty: Option<S>,
-        sig: Option<S>,
+        name: Option<StrId>,
+        ty: Option<TypeId>,
+        sig: Option<StrId>,
     },
     EndLocal(u16),
     Restart(u16),
     Prologue,
     Epilogue,
-    SetFile(Option<S>),
+    SetFile(Option<StrId>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Try {
     pub start: u32,
     pub end: u32,
-    /// (exception type or None for catch-all, handler label)
-    pub handlers: Vec<(Option<S>, u32)>,
+    pub handlers: Vec<(Option<TypeId>, u32)>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -176,44 +110,38 @@ pub struct Code {
     pub registers: u16,
     pub items: Vec<Item>,
     pub tries: Vec<Try>,
-    /// debug_info present (even with no events)
     pub debug: bool,
-    /// debug parameter names, one per parameter
-    pub param_names: Vec<Option<S>>,
+    pub param_names: Vec<Option<StrId>>,
 }
 
+/// A field a class defines: its name and type are those of `id`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Field {
-    pub name: S,
-    pub ty: S,
+    pub id: FieldId,
     pub access: u32,
-    /// hiddenapi flags, when the DEX carries them for this class
     pub hidden: Option<u32>,
-    /// static initial value from static_values
     pub init: Option<Value>,
     pub annos: Vec<Anno>,
 }
 
+/// A method a class defines: its name and prototype are those of `id`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Method {
-    pub name: S,
-    pub proto: Proto,
+    pub id: MethodId,
     pub access: u32,
-    /// hiddenapi flags, when the DEX carries them for this class
     pub hidden: Option<u32>,
     pub code: Option<Code>,
     pub annos: Vec<Anno>,
-    /// one list per parameter; None when no parameter has any
     pub param_annos: Option<Vec<Vec<Anno>>>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Class {
-    pub name: S,
+    pub name: TypeId,
     pub access: u32,
-    pub sup: Option<S>,
-    pub ifaces: Vec<S>,
-    pub source: Option<S>,
+    pub sup: Option<TypeId>,
+    pub ifaces: Vec<TypeId>,
+    pub source: Option<StrId>,
     pub annos: Vec<Anno>,
     pub fields: Vec<Field>,
     pub methods: Vec<Method>,
@@ -229,19 +157,76 @@ impl Method {
         self.access & (ACC_STATIC | ACC_PRIVATE | ACC_CONSTRUCTOR) != 0
     }
     /// registers taken by the arguments, `this` included
-    pub fn ins(&self) -> u16 {
-        let words: u16 = self.proto.params.iter().map(|p| width(p)).sum();
+    pub fn ins(&self, src: &Source) -> u16 {
+        let params = src.proto(src.method(self.id).proto).params;
+        let words: u16 = params.iter().map(|p| width(src.descriptor(*p))).sum();
         words + u16::from(self.access & ACC_STATIC == 0)
+    }
+}
+
+/// What an instruction acts on besides its registers and its branch target: the literal number
+/// it holds, or what it refers to (a string, a type, a field, a method).
+#[derive(Clone, PartialEq, Debug)]
+pub enum Operand {
+    Lit(i64),
+    Ref(Ref),
+}
+
+impl Ref {
+    /// The kind of reference an instruction's opcode says it holds.
+    fn kind(&self) -> bytecode::Ref {
+        match self {
+            Ref::None => bytecode::Ref::None,
+            Ref::Str(_) => bytecode::Ref::String,
+            Ref::Type(_) => bytecode::Ref::Type,
+            Ref::Field(_) => bytecode::Ref::Field,
+            Ref::Method(_) => bytecode::Ref::Method,
+            Ref::Proto(_) => bytecode::Ref::Proto,
+            Ref::CallSite(_) => bytecode::Ref::CallSite,
+            Ref::Handle(_) => bytecode::Ref::MethodHandle,
+        }
+    }
+}
+
+impl Ins {
+    /// The literal this instruction holds, if its format has one. `lit` is 0 in every other
+    /// instruction, so it cannot be told from a literal 0 by itself.
+    pub fn literal(&self) -> Option<i64> {
+        let (_, f, _) = bytecode::info(self.op)?;
+        f.has_literal().then_some(self.lit)
+    }
+
+    /// Whether this instruction has the operand `o`. A literal is compared by value, however
+    /// wide the instruction that holds it.
+    pub fn has(&self, o: &Operand) -> bool {
+        match o {
+            Operand::Lit(v) => self.literal() == Some(*v),
+            Operand::Ref(r) => self.r == *r,
+        }
+    }
+
+    /// Give this instruction the operand `to` where it has `from`; whether it did. One that
+    /// holds another kind of operand than `to` is left as it is: a string is no type.
+    pub fn replace(&mut self, from: &Operand, to: &Operand) -> bool {
+        let kind = bytecode::info(self.op).map(|(_, _, kind)| kind);
+        let fits = match to {
+            Operand::Lit(_) => self.literal().is_some(),
+            Operand::Ref(r) => kind == Some(r.kind()),
+        };
+        if !fits || !self.has(from) {
+            return false;
+        }
+        match to {
+            Operand::Lit(v) => self.lit = *v,
+            Operand::Ref(r) => self.r = r.clone(),
+        }
+        true
     }
 }
 
 /// registers a value of type `t` takes
 pub fn width(t: &[u8]) -> u16 {
     if matches!(t, b"J" | b"D") { 2 } else { 1 }
-}
-
-pub fn s(b: &[u8]) -> S {
-    Arc::from(b)
 }
 
 /// MUTF-8 bytes to UTF-16 units.

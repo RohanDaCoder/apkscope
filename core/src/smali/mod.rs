@@ -20,7 +20,18 @@ pub use document::{Classes, Document};
 use crate::apk::Apk;
 use crate::{Error, Result};
 use model::Class;
+pub use source::Source;
 use std::io::{Read, Seek};
+
+/// A DEX file of the classes the Smali `sources` are, and nothing else.
+pub fn assemble<T: AsRef<str>>(sources: &[T], version: [u8; 3]) -> Result<Vec<u8>> {
+    let mut src = Source::default();
+    let classes = sources
+        .iter()
+        .map(|s| text::parse(&mut src, s.as_ref()))
+        .collect::<Result<Vec<Class>>>()?;
+    write::write(&src, &classes, version)
+}
 
 /// Round-trippable Smali of one class (dotted or `L..;` name), for editing then re-assembling.
 pub fn export_class(path: &str, class: &str) -> Result<String> {
@@ -32,10 +43,9 @@ pub fn export_class_from<R: Read + Seek>(apk: &mut Apk<R>, class: &str) -> Resul
     let desc = crate::dex::descriptor(class);
     for (name, bytes) in &apk.dex {
         if let Ok(Some(i)) = crate::dex::Dex::parse(bytes).map(|dx| dx.find_class(&desc)) {
-            let c = read::Reader::new(bytes)
-                .and_then(|r| r.class(i))
-                .map_err(|e| e.at(name))?;
-            return Ok(text::print(&c));
+            let class = Source::new(bytes.clone())
+                .and_then(|src| Ok(text::print(&src, &read::Reader::new(&src)?.class(&src, i)?)));
+            return class.map_err(|e| e.at(name));
         }
     }
     Err(Error::ClassNotFound(class.to_owned()))
@@ -58,13 +68,9 @@ pub fn inject_into<R: Read + Seek>(
     sources: &[String],
     edits: &mut crate::rebuild::Edits,
 ) -> Result<Vec<String>> {
-    let parsed: Vec<Class> = sources
-        .iter()
-        .map(|s| text::parse(s))
-        .collect::<Result<_, _>>()?;
     let mut classes = Classes::new(apk.dex.clone());
-    for class in parsed {
-        classes.set(class)?;
+    for source in sources {
+        classes.set_text(source)?;
     }
     classes.write(edits)
 }

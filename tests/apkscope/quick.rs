@@ -128,11 +128,7 @@ fn diff_reports_rotated_constants_and_near_pairs() {
              .method public constructor <init>()V\n    .locals 0\n    \
              invoke-direct {{p0}}, Ljava/lang/Object;-><init>()V\n    return-void\n.end method\n"
         );
-        let dex = apkscope_core::smali::write::write(
-            &[apkscope_core::smali::text::parse(&src).unwrap()],
-            *b"035",
-        )
-        .unwrap();
+        let dex = apkscope_core::smali::assemble(&[&src], *b"035").unwrap();
         let dir = std::env::temp_dir().join(format!(
             "apkscope-diff-{}-{}",
             std::process::id(),

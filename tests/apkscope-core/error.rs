@@ -14,9 +14,9 @@ fn kinds_and_reports() {
     assert!(matches!(&e, Error::In { source, .. } if matches!(**source, Error::Zip(_))));
     assert!(e.report().starts_with(&format!("{}: ", not_zip.display())));
 
-    let e =
-        crate::smali::text::parse(".class LA;\n.method static f()V\n    bogus v0\n.end method\n")
-            .unwrap_err();
+    let mut src = crate::smali::Source::default();
+    let bogus = ".class LA;\n.method static f()V\n    bogus v0\n.end method\n";
+    let e = crate::smali::text::parse(&mut src, bogus).unwrap_err();
     assert!(matches!(e, Error::Smali { line: 3, .. }), "{e}");
     let text: String = e.into();
     assert!(text.starts_with("line 3: "), "{text}");
@@ -26,9 +26,9 @@ fn kinds_and_reports() {
         Err(Error::Dex(_))
     ));
     let wide = ".class LA;\n.super Ljava/lang/Object;\n.method static f()V\n    .locals 1\n    const/4 v20, 0x1\n    return-void\n.end method\n";
-    let class = crate::smali::text::parse(wide).unwrap();
+    let class = crate::smali::text::parse(&mut src, wide).unwrap();
     assert!(matches!(
-        crate::smali::write::write(&[class], *b"035"),
+        crate::smali::write::write(&src, &[class], *b"035"),
         Err(Error::Assemble(_))
     ));
 }

@@ -2,14 +2,16 @@ use super::*;
 use crate::smali::{text, write};
 
 fn dex() -> Vec<u8> {
+    let mut src = Source::default();
     let class = text::parse(
+        &mut src,
         ".class public La/A;\n.super Ljava/lang/Object;\n.field public n:I\n\
          .method public static f(IJ)Ljava/lang/String;\n    .registers 4\n\
          \x20   const-string v0, \"caf\u{e9}\"\n    const-string v0, \"zebra\"\n\
          \x20   return-object v0\n.end method\n",
     )
     .unwrap();
-    write::write(&[class], *b"035").unwrap()
+    write::write(&src, &[class], *b"035").unwrap()
 }
 
 #[test]
