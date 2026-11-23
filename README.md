@@ -439,7 +439,24 @@ smali::inject_into(&mut apk, &[class.replace("const/4 v0, 0x0", "const/4 v0, 0x1
 let (unsigned, _) = rebuild::rebuild_from(Cursor::new(&bytes), &edits)?;
 ```
 
-Resources are files you edit as text, the same as `apkscope res` writes them:
+An open APK is also where its edits are kept. Opening one reads the list of its entries; a file,
+the DEX files and the resource table are read when an edit asks for them, and `rebuild` writes
+again only what changed. A value is set in the resource table, a file is read and put as
+`apkscope res` lays it out (binary XML as text), and classes are edited through `classes()`:
+
+```rust
+use apkscope_core::{apk::Apk, values::Body};
+
+let mut apk = Apk::new(std::fs::File::open("app.apk")?)?;
+apk.set_value("bool", "dark_mode", "", Body::Text("true"))?;   // one value, in the table
+let layout = String::from_utf8(apk.file("res/layout/main.xml")?.unwrap())?;
+apk.put("res/layout/main.xml", layout.replace("Old", "New").into_bytes())?;
+apk.remove("assets/unused.bin")?;
+apk.classes()?.set_text(&smali)?;                              // a class, from its Smali
+let (unsigned, central_dir) = apk.rebuild()?;
+```
+
+A whole tree of resources, as `apkscope res` writes it, goes back the same way:
 
 ```rust
 use apkscope_core::{apk::Apk, rebuild, resources};
