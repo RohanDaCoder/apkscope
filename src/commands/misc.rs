@@ -92,7 +92,7 @@ fn export_run(path: &str, out: &str, deobf: bool) -> Result<(), String> {
     let mut apk = export::open(&session::prepare(path)?)?;
     let root = std::path::Path::new(out);
     let main_dir = root.join("app/src/main");
-    let (n, failed) = export::sources(&apk, &main_dir.join("java"), deobf);
+    let (n, failed) = export::sources(&apk.dex()?, &main_dir.join("java"), deobf);
     crate::note!(
         "sources: {n} classes ({failed} failed) in {:.1}s",
         start.elapsed().as_secs_f64()

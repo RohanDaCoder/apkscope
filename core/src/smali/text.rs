@@ -2,6 +2,7 @@
 //! `.locals`. The printer's output parses back to the same model.
 
 use super::model::*;
+use super::source::{FieldRef, MethodRef};
 use crate::bytecode::{self, Fmt};
 use crate::{Error, Result};
 use std::collections::{BTreeSet, HashMap};
@@ -109,14 +110,14 @@ fn flags(out: &mut String, a: u32, table: &[(u32, &str)]) {
 
 /// A name or descriptor as text. shortcut: a name holding a lone surrogate prints as U+FFFD;
 /// no real app uses one in a class or member name.
-fn name(b: &[u8]) -> std::borrow::Cow<'_, str> {
+fn text(b: &[u8]) -> std::borrow::Cow<'_, str> {
     if b.is_ascii() {
         return std::borrow::Cow::Borrowed(std::str::from_utf8(b).unwrap());
     }
     std::borrow::Cow::Owned(String::from_utf16_lossy(&utf16(b)))
 }
 
-fn quote(b: &[u8]) -> String {
+fn quoted(b: &[u8]) -> String {
     let mut o = String::with_capacity(b.len() + 2);
     o.push('"');
     let units = utf16(b);
@@ -164,26 +165,60 @@ fn hex(v: i64) -> String {
     }
 }
 
-fn proto(p: &Proto) -> String {
+/// What an id names, as the bytes its source has for it.
+trait Named {
+    fn bytes<'s>(&self, src: &'s Source) -> &'s [u8];
+}
+impl Named for StrId {
+    fn bytes<'s>(&self, src: &'s Source) -> &'s [u8] {
+        src.str(*self)
+    }
+}
+impl Named for TypeId {
+    fn bytes<'s>(&self, src: &'s Source) -> &'s [u8] {
+        src.descriptor(*self)
+    }
+}
+fn name<'s>(src: &'s Source, x: &impl Named) -> std::borrow::Cow<'s, str> {
+    text(x.bytes(src))
+}
+fn quote(src: &Source, x: &StrId) -> String {
+    quoted(src.str(*x))
+}
+
+fn proto(src: &Source, p: &ProtoId) -> String {
+    let p = src.proto(*p);
     let mut o = String::from("(");
-    p.params.iter().for_each(|t| o.push_str(&name(t)));
+    p.params.iter().for_each(|t| o.push_str(&name(src, t)));
     o.push(')');
-    o.push_str(&name(&p.ret));
+    o.push_str(&name(src, &p.ret));
     o
 }
-fn field_ref(f: &FieldRef) -> String {
-    format!("{}->{}:{}", name(&f.class), name(&f.name), name(&f.ty))
+fn field_ref(src: &Source, f: &FieldId) -> String {
+    let f = src.field(*f);
+    format!(
+        "{}->{}:{}",
+        name(src, &f.class),
+        name(src, &f.name),
+        name(src, &f.ty)
+    )
 }
-fn method_ref(m: &MethodRef) -> String {
-    format!("{}->{}{}", name(&m.class), name(&m.name), proto(&m.proto))
+fn method_ref(src: &Source, m: &MethodId) -> String {
+    let m = src.method(*m);
+    format!(
+        "{}->{}{}",
+        name(src, &m.class),
+        name(src, &m.name),
+        proto(src, &m.proto)
+    )
 }
-fn handle(h: &Handle) -> String {
+fn handle(src: &Source, h: &Handle) -> String {
     let k = HANDLE_KINDS
         .get(h.kind as usize)
         .map_or_else(|| format!("{:#x}", h.kind), |s| s.to_string());
     match &h.member {
-        Member::Field(f) => format!("{k}@{}", field_ref(f)),
-        Member::Method(m) => format!("{k}@{}", method_ref(m)),
+        Member::Field(f) => format!("{k}@{}", field_ref(src, f)),
+        Member::Method(m) => format!("{k}@{}", method_ref(src, m)),
     }
 }
 
@@ -209,13 +244,13 @@ fn double(bits: u64) -> String {
     }
 }
 
-fn value(o: &mut String, v: &Value, ind: usize) {
+fn value(src: &Source, o: &mut String, v: &Value, ind: usize) {
     let pad = "    ".repeat(ind);
     match v {
         Value::Byte(x) => *o += &format!("{}t", hex(*x as i64)),
         Value::Short(x) => *o += &format!("{}s", hex(*x as i64)),
         Value::Char(x) => {
-            let q = quote(&mutf8(&[*x]));
+            let q = quoted(&mutf8(&[*x]));
             let inner = &q[1..q.len() - 1];
             *o += &format!(
                 "'{}'",
@@ -232,28 +267,28 @@ fn value(o: &mut String, v: &Value, ind: usize) {
         Value::Long(x) => *o += &format!("{}L", hex(*x)),
         Value::Float(x) => *o += &float(*x),
         Value::Double(x) => *o += &double(*x),
-        Value::MethodType(p) => *o += &proto(p),
-        Value::MethodHandle(h) => *o += &handle(h),
-        Value::Str(x) => *o += &quote(x),
-        Value::Type(t) => *o += &name(t),
-        Value::Field(f) => *o += &field_ref(f),
-        Value::Method(m) => *o += &method_ref(m),
-        Value::Enum(f) => *o += &format!(".enum {}", field_ref(f)),
+        Value::MethodType(p) => *o += &proto(src, p),
+        Value::MethodHandle(h) => *o += &handle(src, h),
+        Value::Str(x) => *o += &quote(src, x),
+        Value::Type(t) => *o += &name(src, t),
+        Value::Field(f) => *o += &field_ref(src, f),
+        Value::Method(m) => *o += &method_ref(src, m),
+        Value::Enum(f) => *o += &format!(".enum {}", field_ref(src, f)),
         Value::Array(a) if a.is_empty() => *o += "{}",
         Value::Array(a) => {
             *o += "{\n";
             for (k, x) in a.iter().enumerate() {
                 *o += &pad;
                 *o += "    ";
-                value(o, x, ind + 1);
+                value(src, o, x, ind + 1);
                 *o += if k + 1 < a.len() { ",\n" } else { "\n" };
             }
             *o += &pad;
             *o += "}";
         }
         Value::Anno(a) => {
-            *o += &format!(".subannotation {}\n", name(&a.ty));
-            elems(o, a, ind + 1);
+            *o += &format!(".subannotation {}\n", name(src, &a.ty));
+            elems(src, o, a, ind + 1);
             *o += &pad;
             *o += ".end subannotation";
         }
@@ -262,65 +297,66 @@ fn value(o: &mut String, v: &Value, ind: usize) {
     }
 }
 
-fn elems(o: &mut String, a: &Anno, ind: usize) {
+fn elems(src: &Source, o: &mut String, a: &Anno, ind: usize) {
     for (n, v) in &a.elems {
         *o += &"    ".repeat(ind);
-        *o += &format!("{} = ", name(n));
-        value(o, v, ind);
+        *o += &format!("{} = ", name(src, n));
+        value(src, o, v, ind);
         o.push('\n');
     }
 }
 
-fn annos(o: &mut String, list: &[Anno], ind: usize) {
+fn annos(src: &Source, o: &mut String, list: &[Anno], ind: usize) {
     let pad = "    ".repeat(ind);
     for a in list {
         let vis = VIS
             .get(a.vis as usize)
             .map_or_else(|| a.vis.to_string(), |s| s.to_string());
-        *o += &format!("{pad}.annotation {vis} {}\n", name(&a.ty));
-        elems(o, a, ind + 1);
+        *o += &format!("{pad}.annotation {vis} {}\n", name(src, &a.ty));
+        elems(src, o, a, ind + 1);
         *o += &format!("{pad}.end annotation\n");
     }
 }
 
 /// Smali of one class.
-pub fn print(c: &Class) -> String {
+pub fn print(src: &Source, c: &Class) -> String {
     let mut o = String::with_capacity(4096);
     o += ".class ";
     flags(&mut o, c.access, CLASS_FLAGS);
-    o += &name(&c.name);
+    o += &name(src, &c.name);
     o += "\n";
     if let Some(s) = &c.sup {
-        o += &format!(".super {}\n", name(s));
+        o += &format!(".super {}\n", name(src, s));
     }
     if let Some(s) = &c.source {
-        o += &format!(".source {}\n", quote(s));
+        o += &format!(".source {}\n", quote(src, s));
     }
     for i in &c.ifaces {
-        o += &format!(".implements {}\n", name(i));
+        o += &format!(".implements {}\n", name(src, i));
     }
     if !c.annos.is_empty() {
         o += "\n";
-        annos(&mut o, &c.annos, 0);
+        annos(src, &mut o, &c.annos, 0);
     }
     for f in &c.fields {
         o += "\n.field ";
         flags(&mut o, f.access, FIELD_FLAGS);
         hidden(&mut o, f.hidden);
-        o += &format!("{}:{}", name(&f.name), name(&f.ty));
+        let named = src.field(f.id);
+        o += &format!("{}:{}", name(src, &named.name), name(src, &named.ty));
         if let Some(v) = &f.init {
             o += " = ";
-            value(&mut o, v, 0);
+            value(src, &mut o, v, 0);
         }
         o += "\n";
         if !f.annos.is_empty() {
-            annos(&mut o, &f.annos, 1);
+            annos(src, &mut o, &f.annos, 1);
             o += ".end field\n";
         }
     }
     for m in &c.methods {
         o += "\n";
-        method(&mut o, m);
+        method(src, &mut o, m);
     }
     o
 }
@@ -329,12 +365,13 @@ fn label_name(kind: &str, id: u32) -> String {
     format!(":{kind}_{id:x}")
 }
 
-fn method(o: &mut String, m: &Method) {
+fn method(src: &Source, o: &mut String, m: &Method) {
     o.push_str(".method ");
     flags(o, m.access, METHOD_FLAGS);
     hidden(o, m.hidden);
-    *o += &format!("{}{}\n", name(&m.name), proto(&m.proto));
-    let ins = m.ins();
+    let named = src.method(m.id);
+    *o += &format!("{}{}\n", name(src, &named.name), proto(src, &named.proto));
+    let ins = m.ins(src);
     let base = m.code.as_ref().map_or(0, |c| c.registers - ins);
     let reg = |r: u16| {
         if r >= base {
@@ -348,7 +385,7 @@ fn method(o: &mut String, m: &Method) {
     }
     // parameters: debug names and annotations, by p-register
     let mut p = u16::from(m.access & ACC_STATIC == 0);
-    for (i, t) in m.proto.params.iter().enumerate() {
+    for (i, t) in src.proto(named.proto).params.iter().enumerate() {
         let nm = m
             .code
             .as_ref()
@@ -361,17 +398,17 @@ fn method(o: &mut String, m: &Method) {
         if nm.is_some() || an.is_some() {
             *o += &format!("    .param p{p}");
             if let Some(n) = &nm {
-                *o += &format!(", {}", quote(n));
+                *o += &format!(", {}", quote(src, n));
             }
-            *o += &format!("    # {}\n", name(t));
+            *o += &format!("    # {}\n", name(src, t));
             if let Some(an) = an {
-                annos(o, an, 2);
+                annos(src, o, an, 2);
                 *o += "    .end param\n";
             }
         }
-        p += width(t);
+        p += width(src.descriptor(*t));
     }
-    annos(o, &m.annos, 1);
+    annos(src, o, &m.annos, 1);
     let Some(c) = &m.code else {
         *o += ".end method\n";
         return;
@@ -384,14 +421,19 @@ fn method(o: &mut String, m: &Method) {
     };
     for it in &c.items {
         match it {
-            Item::Ins(i) => match i.op {
-                0x28..=0x2a => add(i.target, "goto"),
-                0x32..=0x3d => add(i.target, "cond"),
-                0x26 => add(i.target, "array"),
-                0x2b => add(i.target, "pswitch_data"),
-                0x2c => add(i.target, "sswitch_data"),
+            Item::Ins(Ins {
+                op,
+                operand: Operand::Label(target),
+                ..
+            }) => match op {
+                0x28..=0x2a => add(*target, "goto"),
+                0x32..=0x3d => add(*target, "cond"),
+                0x26 => add(*target, "array"),
+                0x2b => add(*target, "pswitch_data"),
+                0x2c => add(*target, "sswitch_data"),
                 _ => {}
             },
+            Item::Ins(_) => {}
             Item::Packed { targets, .. } => targets.iter().for_each(|t| add(*t, "pswitch")),
             Item::Sparse(v) => v.iter().for_each(|t| add(t.1, "sswitch")),
             _ => {}
@@ -418,7 +460,7 @@ fn method(o: &mut String, m: &Method) {
             }
             Item::Ins(i) => {
                 *o += "    ";
-                print_ins(o, i, &reg, &lbl);
+                print_ins(src, o, i, &reg, &lbl);
                 o.push('\n');
             }
             Item::Packed { first, targets } => {
@@ -467,11 +509,12 @@ fn method(o: &mut String, m: &Method) {
                 *o += &format!(
                     "    .local {}, {}:{}",
                     reg(*r),
-                    n.as_ref().map_or("null".into(), |x| quote(x)),
-                    ty.as_ref().map_or("null".into(), |x| name(x).into_owned())
+                    n.as_ref().map_or("null".into(), |x| quote(src, x)),
+                    ty.as_ref()
+                        .map_or("null".into(), |x| name(src, x).into_owned())
                 );
                 if let Some(s) = sig {
-                    *o += &format!(", {}", quote(s));
+                    *o += &format!(", {}", quote(src, s));
                 }
                 o.push('\n');
             }
@@ -482,7 +525,7 @@ fn method(o: &mut String, m: &Method) {
             Item::SetFile(f) => {
                 *o += &format!(
                     "    .source {}\n",
-                    f.as_ref().map_or("null".into(), |x| quote(x))
+                    f.as_ref().map_or("null".into(), |x| quote(src, x))
                 )
             }
         }
@@ -496,7 +539,7 @@ fn method(o: &mut String, m: &Method) {
                 Some(ty) => {
                     *o += &format!(
                         "    .catch {} {{{} .. {}}} {}\n",
-                        name(ty),
+                        name(src, ty),
                         lbl("try_start", t.start),
                         lbl("try_end", t.end),
                         lbl("catch", *h)
@@ -517,6 +560,7 @@ fn method(o: &mut String, m: &Method) {
 }
 
 fn print_ins(
+    src: &Source,
     o: &mut String,
     i: &Ins,
     reg: &dyn Fn(u16) -> String,
@@ -535,33 +579,41 @@ fn print_ins(
             0x2c => "sswitch_data",
             _ => "cond",
         };
-        lbl(kind, i.target)
+        match i.operand {
+            Operand::Label(t) => lbl(kind, t),
+            _ => String::new(),
+        }
+    };
+    let literal = match i.operand {
+        Operand::Lit(v) => v,
+        _ => 0,
     };
     let rf = || -> String {
-        match &i.r {
-            Ref::None => String::new(),
-            Ref::Str(x) => quote(x),
-            Ref::Type(t) => name(t).into_owned(),
-            Ref::Field(x) => field_ref(x),
-            Ref::Method(m) => method_ref(m),
-            Ref::Proto(p) => proto(p),
-            Ref::Handle(h) => handle(h),
-            Ref::CallSite(cs) => {
+        match &i.operand {
+            Operand::None | Operand::Lit(_) | Operand::Label(_) => String::new(),
+            Operand::Str(x) => quote(src, x),
+            Operand::Type(t) => name(src, t).into_owned(),
+            Operand::Field(x) => field_ref(src, x),
+            Operand::Method(m) => method_ref(src, m),
+            Operand::Polymorphic(m, p) => format!("{}, {}", method_ref(src, m), proto(src, p)),
+            Operand::Proto(p) => proto(src, p),
+            Operand::Handle(h) => handle(src, h),
+            Operand::CallSite(cs) => {
                 let mut s = String::from("call_site(");
                 for (k, v) in cs.iter().skip(1).enumerate() {
                     if k > 0 {
                         s += ", ";
                     }
-                    value(&mut s, v, 0);
+                    value(src, &mut s, v, 0);
                 }
                 s += ")@";
                 match cs.first() {
                     Some(Value::MethodHandle(h)) if h.kind == 4 => {
                         if let Member::Method(m) = &h.member {
-                            s += &method_ref(m);
+                            s += &method_ref(src, m);
                         }
                     }
-                    Some(Value::MethodHandle(h)) => s += &handle(h),
+                    Some(Value::MethodHandle(h)) => s += &handle(src, h),
                     _ => s += "?",
                 }
                 s
@@ -590,23 +642,17 @@ fn print_ins(
         Fmt::F10x => String::new(),
         Fmt::F12x | Fmt::F22x | Fmt::F32x => format!(" {}, {}", r(0), r(1)),
         Fmt::F11n | Fmt::F21s | Fmt::F31i | Fmt::F21h | Fmt::F51l => {
-            format!(" {}, {}", r(0), lit(i.lit))
+            format!(" {}, {}", r(0), lit(literal))
         }
         Fmt::F11x => format!(" {}", r(0)),
         Fmt::F10t | Fmt::F20t | Fmt::F30t => format!(" {}", target()),
         Fmt::F21t | Fmt::F31t => format!(" {}, {}", r(0), target()),
         Fmt::F21c | Fmt::F31c => format!(" {}, {}", r(0), rf()),
         Fmt::F23x => format!(" {}, {}, {}", r(0), r(1), r(2)),
-        Fmt::F22b | Fmt::F22s => format!(" {}, {}, {}", r(0), r(1), hex(i.lit)),
+        Fmt::F22b | Fmt::F22s => format!(" {}, {}, {}", r(0), r(1), hex(literal)),
         Fmt::F22t => format!(" {}, {}, {}", r(0), r(1), target()),
         Fmt::F22c => format!(" {}, {}, {}", r(0), r(1), rf()),
-        Fmt::F35c | Fmt::F3rc => format!(" {}, {}", list(), rf()),
-        Fmt::F45cc | Fmt::F4rcc => format!(
-            " {}, {}, {}",
-            list(),
-            rf(),
-            i.proto.as_ref().map_or(String::new(), proto)
-        ),
+        Fmt::F35c | Fmt::F3rc | Fmt::F45cc | Fmt::F4rcc => format!(" {}, {}", list(), rf()),
     };
     o.push_str(&s);
 }
@@ -622,20 +668,99 @@ fn opcodes() -> &'static HashMap<&'static str, u8> {
     })
 }
 
-struct P<'a> {
+/// The bytes of a name or a string as text writes it, before a source gives it an id.
+type S = Arc<[u8]>;
+
+/// A prototype and a field or method reference as text writes them.
+struct ProtoText {
+    ret: S,
+    params: Vec<S>,
+}
+enum MemberText {
+    Field { class: S, name: S, ty: S },
+    Method { class: S, name: S, proto: ProtoText },
+}
+
+/// The ids a source has for a prototype or a member as written; `None` if it lacks a part.
+fn find_proto(src: &Source, p: &ProtoText) -> Option<ProtoId> {
+    let params: Option<Vec<TypeId>> = p.params.iter().map(|t| src.find_descriptor(t)).collect();
+    src.find_proto(src.find_descriptor(&p.ret)?, &params?)
+}
+fn find_member(src: &Source, m: &MemberText) -> Option<Member> {
+    Some(match m {
+        MemberText::Field { class, name, ty } => Member::Field(src.find_field(FieldRef {
+            class: src.find_descriptor(class)?,
+            name: src.find_str(name)?,
+            ty: src.find_descriptor(ty)?,
+        })?),
+        MemberText::Method { class, name, proto } => {
+            Member::Method(src.find_method(MethodRef {
+                class: src.find_descriptor(class)?,
+                name: src.find_str(name)?,
+                proto: find_proto(src, proto)?,
+            })?)
+        }
+    })
+}
+/// The same, each part added to the source if it is new to it.
+fn intern_proto(src: &mut Source, p: &ProtoText) -> ProtoId {
+    let params: Vec<TypeId> = p.params.iter().map(|t| src.intern_descriptor(t)).collect();
+    let ret = src.intern_descriptor(&p.ret);
+    src.intern_proto(ret, &params)
+}
+fn intern_member(src: &mut Source, m: &MemberText) -> Member {
+    match m {
+        MemberText::Field { class, name, ty } => {
+            let f = FieldRef {
+                class: src.intern_descriptor(class),
+                name: src.intern_str(name),
+                ty: src.intern_descriptor(ty),
+            };
+            Member::Field(src.intern_field(f))
+        }
+        MemberText::Method { class, name, proto } => {
+            let m = MethodRef {
+                class: src.intern_descriptor(class),
+                name: src.intern_str(name),
+                proto: intern_proto(src, proto),
+            };
+            Member::Method(src.intern_method(m))
+        }
+    }
+}
+
+/// Smali text being read, with what it says as text: names and references by their bytes.
+struct Lex<'a> {
     s: &'a [u8],
     i: usize,
 }
 
+/// A parser: the text, and the source whose ids the model it builds refers to.
+struct P<'a, 's> {
+    lex: Lex<'a>,
+    src: &'s mut Source,
+}
+impl<'a> std::ops::Deref for P<'a, '_> {
+    type Target = Lex<'a>;
+    fn deref(&self) -> &Lex<'a> {
+        &self.lex
+    }
+}
+impl std::ops::DerefMut for P<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.lex
+    }
+}
+
 fn text_bytes(t: &str) -> S {
     if t.is_ascii() {
-        s(t.as_bytes())
+        Arc::from(t.as_bytes())
     } else {
         Arc::from(mutf8(&t.encode_utf16().collect::<Vec<_>>()))
     }
 }
 
-impl<'a> P<'a> {
+impl<'a> Lex<'a> {
     fn err<T>(&self, m: impl std::fmt::Display) -> R<T> {
         Err(self.error(m))
     }
@@ -725,7 +850,7 @@ impl<'a> P<'a> {
         }
         std::str::from_utf8(&self.s[st..self.i]).unwrap_or("")
     }
-    fn ty(&mut self) -> R<S> {
+    fn ty_text(&mut self) -> R<S> {
         self.ws();
         let st = self.i;
         while self.peek() == Some(b'[') {
@@ -749,19 +874,19 @@ impl<'a> P<'a> {
             std::str::from_utf8(&self.s[st..self.i]).map_err(|e| self.error(e))?,
         ))
     }
-    fn proto(&mut self) -> R<Proto> {
+    fn proto_text(&mut self) -> R<ProtoText> {
         self.expect("(")?;
         let mut params = vec![];
         while !self.eat(")") {
-            params.push(self.ty()?);
+            params.push(self.ty_text()?);
         }
-        Ok(Proto {
+        Ok(ProtoText {
             params,
-            ret: self.ty()?,
+            ret: self.ty_text()?,
         })
     }
-    fn member(&mut self) -> R<Member> {
-        let class = self.ty()?;
+    fn member_text(&mut self) -> R<MemberText> {
+        let class = self.ty_text()?;
         self.expect("->")?;
         let st = self.i;
         while let Some(c) = self.peek() {
@@ -772,33 +897,21 @@ impl<'a> P<'a> {
         }
         let nm = text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| self.error(e))?);
         if self.peek() == Some(b'(') {
-            Ok(Member::Method(MethodRef {
+            Ok(MemberText::Method {
                 class,
                 name: nm,
-                proto: self.proto()?,
-            }))
+                proto: self.proto_text()?,
+            })
         } else {
             self.expect(":")?;
-            Ok(Member::Field(FieldRef {
+            Ok(MemberText::Field {
                 class,
                 name: nm,
-                ty: self.ty()?,
-            }))
+                ty: self.ty_text()?,
+            })
         }
     }
-    fn field_ref(&mut self) -> R<FieldRef> {
-        match self.member()? {
-            Member::Field(f) => Ok(f),
-            _ => self.err("expected a field reference"),
-        }
-    }
-    fn method_ref(&mut self) -> R<MethodRef> {
-        match self.member()? {
-            Member::Method(m) => Ok(m),
-            _ => self.err("expected a method reference"),
-        }
-    }
-    fn string(&mut self) -> R<S> {
+    fn string_text(&mut self) -> R<S> {
         self.ws();
         let q = self.peek();
         if q != Some(b'"') && q != Some(b'\'') {
@@ -897,6 +1010,93 @@ impl<'a> P<'a> {
         Ok(labels.id(w, self.i))
     }
 
+    /// hiddenapi words after the access flags: a list, then its domains
+    fn hidden(&mut self) -> Option<u32> {
+        let mut h = None;
+        loop {
+            let save = self.i;
+            let w = self.word();
+            if let Some(list) = HIDDEN_LISTS.iter().position(|&x| x == w) {
+                h = Some(h.unwrap_or(0) | list as u32);
+            } else if let Some(&(bit, _)) = HIDDEN_DOMAINS.iter().find(|x| x.1 == w) {
+                h = Some(h.unwrap_or(0) | bit);
+            } else if let Some(v) = w
+                .strip_prefix(HIDDEN_RAW)
+                .and_then(|v| v.strip_prefix("0x"))
+                .and_then(|v| u32::from_str_radix(v, 16).ok())
+            {
+                h = Some(v);
+            } else {
+                self.i = save;
+                return h;
+            }
+        }
+    }
+
+    /// flags words, then the rest of the line's first token (member spec)
+    fn flags(&mut self, table: &[(u32, &str)]) -> R<u32> {
+        let mut a = 0;
+        loop {
+            self.ws();
+            let save = self.i;
+            let w = self.word();
+            if w.is_empty() {
+                return self.err("missing name");
+            }
+            if let Some(&(bit, _)) = table.iter().find(|x| x.1 == w) {
+                a |= bit;
+            } else if let Some(v) = w
+                .strip_prefix("0x")
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+            {
+                a |= v;
+            } else {
+                self.i = save;
+                return Ok(a);
+            }
+        }
+    }
+}
+
+impl<'a, 's> P<'a, 's> {
+    fn new(src: &'s mut Source, text: &'a str) -> Self {
+        P {
+            lex: Lex {
+                s: text.as_bytes(),
+                i: 0,
+            },
+            src,
+        }
+    }
+    fn ty(&mut self) -> R<TypeId> {
+        let t = self.ty_text()?;
+        Ok(self.src.intern_descriptor(&t))
+    }
+    fn proto(&mut self) -> R<ProtoId> {
+        let p = self.proto_text()?;
+        Ok(intern_proto(self.src, &p))
+    }
+    fn member(&mut self) -> R<Member> {
+        let m = self.member_text()?;
+        Ok(intern_member(self.src, &m))
+    }
+    fn field_ref(&mut self) -> R<FieldId> {
+        match self.member()? {
+            Member::Field(f) => Ok(f),
+            _ => self.err("expected a field reference"),
+        }
+    }
+    fn method_ref(&mut self) -> R<MethodId> {
+        match self.member()? {
+            Member::Method(m) => Ok(m),
+            _ => self.err("expected a method reference"),
+        }
+    }
+    fn string(&mut self) -> R<StrId> {
+        let s = self.string_text()?;
+        Ok(self.src.intern_str(&s))
+    }
+
     fn value(&mut self, depth: u32) -> R<Value> {
         if depth > 64 {
             return self.err("value nesting too deep");
@@ -905,7 +1105,7 @@ impl<'a> P<'a> {
         match self.peek() {
             Some(b'"') => return Ok(Value::Str(self.string()?)),
             Some(b'\'') => {
-                let s = self.string()?;
+                let s = self.string_text()?;
                 let u = utf16(&s);
                 if u.len() != 1 {
                     return self.err("a char literal holds one character");
@@ -960,16 +1160,18 @@ impl<'a> P<'a> {
             && let Some(kind) = HANDLE_KINDS.iter().position(|x| *x == k)
         {
             self.i = save + k.len() + 1;
-            return Ok(Value::MethodHandle(Box::new(Handle {
+            return Ok(Value::MethodHandle(Handle {
                 kind: kind as u16,
                 member: self.member()?,
-            })));
+            }));
         }
         Ok(match w {
             "null" => Value::Null,
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
-            "V" | "Z" | "B" | "S" | "C" | "I" | "J" | "F" | "D" => Value::Type(s(w.as_bytes())),
+            "V" | "Z" | "B" | "S" | "C" | "I" | "J" | "F" | "D" => {
+                Value::Type(self.src.intern_descriptor(w.as_bytes()))
+            }
             _ => match literal(w) {
                 Some(v) => v,
                 None => return self.err(format!("bad value `{w}`")),
@@ -977,7 +1179,7 @@ impl<'a> P<'a> {
         })
     }
 
-    fn elems(&mut self, end: &str, depth: u32) -> R<Vec<(S, Value)>> {
+    fn elems(&mut self, end: &str, depth: u32) -> R<Vec<(StrId, Value)>> {
         let mut out = vec![];
         loop {
             self.wsn();
@@ -998,7 +1200,8 @@ impl<'a> P<'a> {
             let n =
                 text_bytes(std::str::from_utf8(&self.s[st..self.i]).map_err(|e| self.error(e))?);
             self.expect("=")?;
-            out.push((n, self.value(depth + 1)?));
+            let v = self.value(depth + 1)?;
+            out.push((self.src.intern_str(&n), v));
         }
     }
 
@@ -1012,53 +1215,6 @@ impl<'a> P<'a> {
         let ty = self.ty()?;
         let elems = self.elems(".end annotation", 0)?;
         Ok(Anno { vis, ty, elems })
-    }
-
-    /// hiddenapi words after the access flags: a list, then its domains
-    fn hidden(&mut self) -> Option<u32> {
-        let mut h = None;
-        loop {
-            let save = self.i;
-            let w = self.word();
-            if let Some(list) = HIDDEN_LISTS.iter().position(|&x| x == w) {
-                h = Some(h.unwrap_or(0) | list as u32);
-            } else if let Some(&(bit, _)) = HIDDEN_DOMAINS.iter().find(|x| x.1 == w) {
-                h = Some(h.unwrap_or(0) | bit);
-            } else if let Some(v) = w
-                .strip_prefix(HIDDEN_RAW)
-                .and_then(|v| v.strip_prefix("0x"))
-                .and_then(|v| u32::from_str_radix(v, 16).ok())
-            {
-                h = Some(v);
-            } else {
-                self.i = save;
-                return h;
-            }
-        }
-    }
-
-    /// flags words, then the rest of the line's first token (member spec)
-    fn flags(&mut self, table: &[(u32, &str)]) -> R<u32> {
-        let mut a = 0;
-        loop {
-            self.ws();
-            let save = self.i;
-            let w = self.word();
-            if w.is_empty() {
-                return self.err("missing name");
-            }
-            if let Some(&(bit, _)) = table.iter().find(|x| x.1 == w) {
-                a |= bit;
-            } else if let Some(v) = w
-                .strip_prefix("0x")
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-            {
-                a |= v;
-            } else {
-                self.i = save;
-                return Ok(a);
-            }
-        }
     }
 }
 
@@ -1132,12 +1288,115 @@ fn literal(w: &str) -> Option<Value> {
     })
 }
 
-/// Parse one class from Smali.
-pub fn parse(text: &str) -> R<Class> {
-    let mut p = P {
+/// The literal of an instruction, as `lit` holds it: a float or a double as its bits.
+fn ins_literal(w: &str) -> Option<i64> {
+    match literal(w) {
+        Some(Value::Float(b)) => Some(b as i32 as i64),
+        Some(Value::Double(b)) => Some(b as i64),
+        _ => parse_int(w),
+    }
+}
+
+/// Parse one method of the class `class`, `.method` to `.end method`, as it is written inside
+/// a class. What it refers to that is new to `src` is added to it.
+pub fn parse_method(src: &mut Source, class: TypeId, text: &str) -> R<Method> {
+    let mut p = P::new(src, text);
+    p.wsn();
+    p.expect(".method")?;
+    let m = method_p(&mut p, class)?;
+    p.wsn();
+    match p.peek() {
+        None => Ok(m),
+        Some(_) => p.err(format!("unexpected `{}`", p.rest_of_line())),
+    }
+}
+
+/// The method of `class` with the name and prototype `signature` writes, `name(params)return`,
+/// as a `.method` line and a method reference write them; `None` if `src` has no such method.
+pub fn find_method(src: &Source, class: TypeId, signature: &str) -> R<Option<MethodId>> {
+    let mut lex = Lex {
+        s: signature.as_bytes(),
+        i: 0,
+    };
+    let name = spec_name(&mut lex, b"(")?;
+    let proto = lex.proto_text()?;
+    let method = |name, proto| src.find_method(MethodRef { class, name, proto });
+    Ok(src
+        .find_str(&name)
+        .zip(find_proto(src, &proto))
+        .and_then(|(name, proto)| method(name, proto)))
+}
+
+/// An instruction operand as text writes it.
+enum OperandText {
+    Lit(i64),
+    Str(S),
+    Type(S),
+    Member(MemberText),
+}
+
+fn operand_text(text: &str) -> R<OperandText> {
+    let mut lex = Lex {
         s: text.as_bytes(),
         i: 0,
     };
+    lex.ws();
+    Ok(match lex.peek() {
+        Some(b'"') => OperandText::Str(lex.string_text()?),
+        Some(b'L' | b'[') if text.contains("->") => OperandText::Member(lex.member_text()?),
+        Some(b'L' | b'[') => OperandText::Type(lex.ty_text()?),
+        _ => match ins_literal(text.trim()) {
+            Some(v) => OperandText::Lit(v),
+            None => return lex.err(format!("bad operand `{}`", text.trim())),
+        },
+    })
+}
+
+fn member_operand(m: Member) -> Operand {
+    match m {
+        Member::Field(f) => Operand::Field(f),
+        Member::Method(m) => Operand::Method(m),
+    }
+}
+
+/// Parse one instruction operand: a string in its quotes, a type, a field or method reference,
+/// or a number. What it names that is new to `src` is added to it.
+pub fn parse_operand(src: &mut Source, text: &str) -> R<Operand> {
+    Ok(match operand_text(text)? {
+        OperandText::Lit(v) => Operand::Lit(v),
+        OperandText::Str(s) => Operand::Str(src.intern_str(&s)),
+        OperandText::Type(t) => Operand::Type(src.intern_descriptor(&t)),
+        OperandText::Member(m) => member_operand(intern_member(src, &m)),
+    })
+}
+
+/// The operand `text` writes, if `src` has what it names: one it lacks is in none of its
+/// classes. Nothing is added to `src`.
+pub fn find_operand(src: &Source, text: &str) -> R<Option<Operand>> {
+    Ok(match operand_text(text)? {
+        OperandText::Lit(v) => Some(Operand::Lit(v)),
+        OperandText::Str(s) => src.find_str(&s).map(Operand::Str),
+        OperandText::Type(t) => src.find_descriptor(&t).map(Operand::Type),
+        OperandText::Member(m) => find_member(src, &m).map(member_operand),
+    })
+}
+
+/// The descriptor of the class the Smali `text` is of, from its `.class` line.
+pub fn class_name(text: &str) -> R<String> {
+    let mut lex = Lex {
+        s: text.as_bytes(),
+        i: 0,
+    };
+    lex.wsn();
+    lex.expect(".class")?;
+    lex.flags(CLASS_FLAGS)?;
+    let name = lex.ty_text()?;
+    Ok(self::text(&name).into_owned())
+}
+
+/// Parse one class from Smali. What it refers to that is new to `src` is added to it.
+pub fn parse(src: &mut Source, text: &str) -> R<Class> {
+    let mut p = P::new(src, text);
     p.wsn();
     p.expect(".class")?;
     let access = p.flags(CLASS_FLAGS)?;
@@ -1167,9 +1426,9 @@ pub fn parse(text: &str) -> R<Class> {
         } else if p.eat(".annotation") {
             c.annos.push(p.annotation()?);
         } else if p.eat(".field") {
-            c.fields.push(field(&mut p)?);
+            c.fields.push(field(&mut p, name)?);
         } else if p.eat(".method") {
-            c.methods.push(method_p(&mut p)?);
+            c.methods.push(method_p(&mut p, name)?);
         } else {
             return p.err(format!("unexpected `{}`", p.rest_of_line()));
         }
@@ -1178,7 +1437,7 @@ pub fn parse(text: &str) -> R<Class> {
     Ok(c)
 }
 
-fn spec_name(p: &mut P, stop: &[u8]) -> R<S> {
+fn spec_name(p: &mut Lex, stop: &[u8]) -> R<S> {
     p.ws();
     let st = p.i;
     while p
@@ -1195,7 +1454,7 @@ fn spec_name(p: &mut P, stop: &[u8]) -> R<S> {
     ))
 }
 
-fn field(p: &mut P) -> R<Field> {
+fn field(p: &mut P, class: TypeId) -> R<Field> {
     let access = p.flags(FIELD_FLAGS)?;
     let hidden = p.hidden();
     let name = spec_name(p, b":")?;
@@ -1203,9 +1462,9 @@ fn field(p: &mut P) -> R<Field> {
     let ty = p.ty()?;
     let init = if p.eat("=") { Some(p.value(0)?) } else { None };
     p.eol()?;
+    let name = p.src.intern_str(&name);
     let mut f = Field {
-        name,
-        ty,
+        id: p.src.intern_field(FieldRef { class, name, ty }),
         access,
         hidden,
         init,
@@ -1229,34 +1488,35 @@ fn field(p: &mut P) -> R<Field> {
     Ok(f)
 }
 
-fn method_p(p: &mut P) -> R<Method> {
+fn method_p(p: &mut P, class: TypeId) -> R<Method> {
     let access = p.flags(METHOD_FLAGS)?;
     let hidden = p.hidden();
     let name = spec_name(p, b"(")?;
     let proto = p.proto()?;
     p.eol()?;
+    let name = p.src.intern_str(&name);
+    let params = p.src.proto(proto).params;
     let mut m = Method {
-        name,
-        proto,
+        id: p.src.intern_method(MethodRef { class, name, proto }),
         access,
         hidden,
         code: None,
         annos: vec![],
         param_annos: None,
     };
-    let ins = m.ins();
-    let nparams = m.proto.params.len();
+    let ins = m.ins(p.src);
+    let nparams = params.len();
     // p-number -> parameter index
     let mut pidx = HashMap::new();
     let mut k = u16::from(access & ACC_STATIC == 0);
-    for (i, t) in m.proto.params.iter().enumerate() {
+    for (i, t) in params.iter().enumerate() {
         pidx.insert(k, i);
-        k += width(t);
+        k += width(p.src.descriptor(*t));
     }
     let mut registers: Option<u16> = None;
     let mut items: Vec<Item> = vec![];
     let mut tries: Vec<Try> = vec![];
-    let mut names: Vec<Option<S>> = vec![None; nparams];
+    let mut names: Vec<Option<StrId>> = vec![None; nparams];
     let mut pannos: Vec<Vec<Anno>> = vec![vec![]; nparams];
     let mut labels = Labels {
         ids: HashMap::new(),
@@ -1485,10 +1745,7 @@ fn method_p(p: &mut P) -> R<Method> {
             op,
             regs: [0; 5],
             n: 0,
-            lit: 0,
-            target: 0,
-            r: Ref::None,
-            proto: None,
+            operand: Operand::None,
         };
         let regs = |p: &mut P, k: usize, i: &mut Ins| -> R<()> {
             for (j, slot) in i.regs[..k].iter_mut().enumerate() {
@@ -1502,14 +1759,14 @@ fn method_p(p: &mut P) -> R<Method> {
         };
         let rf = |p: &mut P, i: &mut Ins| -> R<()> {
             p.expect(",")?;
-            i.r = match kind {
-                bytecode::Ref::String => Ref::Str(p.string()?),
-                bytecode::Ref::Type => Ref::Type(p.ty()?),
-                bytecode::Ref::Field => Ref::Field(p.field_ref()?),
-                bytecode::Ref::Method => Ref::Method(p.method_ref()?),
-                bytecode::Ref::Proto => Ref::Proto(p.proto()?),
+            i.operand = match kind {
+                bytecode::Ref::String => Operand::Str(p.string()?),
+                bytecode::Ref::Type => Operand::Type(p.ty()?),
+                bytecode::Ref::Field => Operand::Field(p.field_ref()?),
+                bytecode::Ref::Method => Operand::Method(p.method_ref()?),
+                bytecode::Ref::Proto => Operand::Proto(p.proto()?),
                 bytecode::Ref::MethodHandle => match p.value(0)? {
-                    Value::MethodHandle(h) => Ref::Handle(*h),
+                    Value::MethodHandle(h) => Operand::Handle(h),
                     _ => return p.err("expected a method handle like invoke-static@Lx;->m()V"),
                 },
                 bytecode::Ref::CallSite => {
@@ -1533,30 +1790,26 @@ fn method_p(p: &mut P) -> R<Method> {
                     p.expect("@")?;
                     p.ws();
                     let h = if matches!(p.peek(), Some(b'L' | b'[')) {
-                        Value::MethodHandle(Box::new(Handle {
+                        Value::MethodHandle(Handle {
                             kind: 4,
                             member: Member::Method(p.method_ref()?),
-                        }))
+                        })
                     } else {
                         p.value(0)?
                     };
                     v.insert(0, h);
-                    Ref::CallSite(Arc::new(v))
+                    Operand::CallSite(Arc::new(v))
                 }
-                bytecode::Ref::None => Ref::None,
+                bytecode::Ref::None => Operand::None,
             };
             Ok(())
         };
         let lit = |p: &mut P, i: &mut Ins| -> R<()> {
             p.expect(",")?;
             let w = p.word();
-            i.lit = match literal(w) {
-                Some(Value::Float(b)) => b as i32 as i64,
-                Some(Value::Double(b)) => b as i64,
-                _ => match parse_int(w) {
-                    Some(v) => v,
-                    None => return p.err(format!("bad literal `{w}`")),
-                },
+            i.operand = match ins_literal(w) {
+                Some(v) => Operand::Lit(v),
+                None => return p.err(format!("bad literal `{w}`")),
             };
             Ok(())
         };
@@ -1564,7 +1817,7 @@ fn method_p(p: &mut P) -> R<Method> {
             if comma {
                 p.expect(",")?;
             }
-            i.target = p.label(labels)?;
+            i.operand = Operand::Label(p.label(labels)?);
             Ok(())
         };
         let list = |p: &mut P, i: &mut Ins, range: bool| -> R<()> {
@@ -1637,7 +1890,10 @@ fn method_p(p: &mut P) -> R<Method> {
                 list(p, &mut i, f == Fmt::F4rcc)?;
                 rf(p, &mut i)?;
                 p.expect(",")?;
-                i.proto = Some(p.proto()?);
+                let proto = p.proto()?;
+                if let Operand::Method(m) = i.operand {
+                    i.operand = Operand::Polymorphic(m, proto);
+                }
             }
         }
         items.push(Item::Ins(i));
@@ -1647,7 +1903,7 @@ fn method_p(p: &mut P) -> R<Method> {
         if !labels.defined.contains_key(id) {
             return Err(p.error(format!(
                 "{}: label {name} is used but never defined",
-                String::from_utf8_lossy(&m.name)
+                String::from_utf8_lossy(p.src.str(p.src.method(m.id).name))
             )));
         }
     }
@@ -1678,7 +1934,7 @@ fn method_p(p: &mut P) -> R<Method> {
     } else if names.iter().any(|n| n.is_some()) {
         return Err(p.error(format!(
             "{}: .param names need a method body",
-            String::from_utf8_lossy(&m.name)
+            String::from_utf8_lossy(p.src.str(p.src.method(m.id).name))
         )));
     }
     Ok(m)

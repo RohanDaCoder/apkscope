@@ -64,11 +64,7 @@ fn fixture() -> Vec<u8> {
     return v0
 .end method
 "#;
-    let classes = [codes, proto, join, leave, other]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    apkscope_core::smali::write::write(&classes, *b"035").unwrap()
+    apkscope_core::smali::assemble(&[codes, proto, join, leave, other], *b"035").unwrap()
 }
 
 #[test]

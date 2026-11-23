@@ -2751,15 +2751,12 @@ impl App {
                         if !smali_srcs.is_empty() {
                             smali::inject(&file, &smali_srcs, &mut edits)?;
                         }
-                        let (apk, cd) = rebuild::rebuild(&file, &edits)?;
-                        let signed = apksign::sign(apk, cd, &key)?;
-                        std::fs::write(&out, &signed)
-                            .map_err(|e| format!("{}: {e}", out.display()))?;
+                        let size = crate::export::write_apk(&file, &edits, &out, Some(&key))?;
                         let check = apksign::verify(&out.display().to_string())?;
                         Ok(format!(
                             "Built {} ({}). {}",
                             out.display(),
-                            mb(signed.len() as u64),
+                            mb(size),
                             check.join(", ")
                         ))
                     })();

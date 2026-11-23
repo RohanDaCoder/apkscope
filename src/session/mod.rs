@@ -78,7 +78,8 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let real = prepare(path)?;
     let mut apk = crate::export::open(&real)?;
     // a session lives until the process exits, so the DEX bytes can be 'static
-    let raw: Vec<&'static [u8]> = std::mem::take(&mut apk.dex)
+    let raw: Vec<&'static [u8]> = apk
+        .dex()?
         .into_iter()
         .map(|(_, b)| &*Box::leak(b.into_boxed_slice()))
         .collect();

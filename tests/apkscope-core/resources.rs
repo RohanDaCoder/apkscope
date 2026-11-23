@@ -76,8 +76,9 @@ fn apk() -> Vec<u8> {
 #[test]
 fn decodes_and_edits_a_tree() {
     let bytes = apk();
-    let mut a = Apk::new(Cursor::new(&bytes)).unwrap();
-    let files = decode(&mut a).unwrap();
+    // an open APK keeps its edits, so each set of them is made to its own
+    let open = || Apk::new(Cursor::new(&bytes)).unwrap();
+    let files = decode(&mut open()).unwrap();
     let text = |p: &str| String::from_utf8(files[p].clone()).unwrap();
     assert!(text("AndroidManifest.xml").contains(r#"android:label="@string/hello""#));
     assert!(text("res/values/strings.xml").contains(r#"<string name="hello">Hello</string>"#));
@@ -85,7 +86,7 @@ fn decodes_and_edits_a_tree() {
     assert!(text("res/values/public.xml").contains(r#"id="0x7f010000""#));
 
     // what decode gives changes nothing
-    assert!(edits(&mut a, &files, true).unwrap().is_empty());
+    assert!(edits(&mut open(), &files, true).unwrap().is_empty());
 
     // an edited string, and a configuration that is gone
     let mut edited = files.clone();
@@ -96,7 +97,7 @@ fn decodes_and_edits_a_tree() {
             .into_bytes(),
     );
     edited.remove("res/values-night/strings.xml");
-    let e = edits(&mut a, &edited, true).unwrap();
+    let e = edits(&mut open(), &edited, true).unwrap();
     let t = table::read(e["resources.arsc"].as_ref().unwrap()).unwrap();
     let p = t.app().unwrap();
     let Some(EntryValue::Simple(v)) = p.get(0x7f01_0000, &config::default()).map(|e| &e.value)
@@ -114,7 +115,7 @@ fn decodes_and_edits_a_tree() {
         1
     );
     // without `complete`, a file that isn't given is left as it is
-    let e = edits(&mut a, &edited, false).unwrap();
+    let e = edits(&mut open(), &edited, false).unwrap();
     let t = table::read(e["resources.arsc"].as_ref().unwrap()).unwrap();
     assert_eq!(t.app().unwrap().values(0x7f01_0000).count(), 2);
 
@@ -134,7 +135,7 @@ fn decodes_and_edits_a_tree() {
             )
             .into_bytes(),
     );
-    let e = edits(&mut a, &added, true).unwrap();
+    let e = edits(&mut open(), &added, true).unwrap();
     // the image's directory is named as aapt2 compiles it, with the version density needs
     assert_eq!(
         e["res/drawable-xxhdpi-v4/icon.png"].as_deref(),
@@ -159,7 +160,8 @@ fn decodes_and_edits_a_tree() {
     );
 
     // a decoded tree of that APK, with the image gone, removes it
-    let rebuilt = rebuild::rebuild_from(Cursor::new(&bytes), &e).unwrap().0;
+    let mut rebuilt = Vec::new();
+    rebuild::rebuild_from(Cursor::new(&bytes), &e, &mut rebuilt).unwrap();
     let mut b = Apk::new(Cursor::new(&rebuilt)).unwrap();
     let mut tree = decode(&mut b).unwrap();
     assert!(tree.contains_key("res/drawable-xxhdpi-v4/icon.png"));
@@ -174,10 +176,79 @@ fn decodes_and_edits_a_tree() {
             .is_none_or(|id| p.get(id, &xxhdpi).is_none())
     );
 
-    // anything else is not a resource
+    // anything else is a file put as it is
     edited.insert("assets/x".into(), vec![0]);
-    assert!(matches!(
-        edits(&mut a, &edited, true),
-        Err(Error::EntryNotFound(_))
-    ));
+    let e = edits(&mut open(), &edited, true).unwrap();
+    assert_eq!(e["assets/x"].as_deref(), Some(&[0][..]));
+}
+
+#[test]
+fn an_open_apk_reads_and_changes_one_file_at_a_time() {
+    let bytes = apk();
+    let mut a = Apk::new(Cursor::new(&bytes)).unwrap();
+    assert_eq!(
+        a.files().unwrap(),
+        [
+            "AndroidManifest.xml",
+            "res/values-night/strings.xml",
+            "res/values/public.xml",
+            "res/values/strings.xml",
+        ]
+    );
+    let text = |a: &mut Apk<_>, p: &str| String::from_utf8(a.file(p).unwrap().unwrap()).unwrap();
+
+    // a value set in the table, where it had one and where it had none
+    assert!(
+        a.set_value("string", "hello", "", values::Body::Text("Hi"))
+            .unwrap()
+    );
+    assert!(
+        !a.set_value("string", "hello", "land", values::Body::Text("Wide"))
+            .unwrap()
+    );
+    let items = ["1".to_owned(), "2".to_owned()];
+    assert!(
+        !a.set_value("integer-array", "modes", "", values::Body::Items(&items))
+            .unwrap()
+    );
+    // the files say what the table has now
+    assert!(text(&mut a, "res/values/strings.xml").contains(r#"<string name="hello">Hi</string>"#));
+    assert!(text(&mut a, "res/values-land/strings.xml").contains("Wide"));
+    assert!(text(&mut a, "res/values/arrays.xml").contains("<integer-array name=\"modes\">"));
+    assert!(
+        a.files()
+            .unwrap()
+            .contains(&"res/values/arrays.xml".to_owned())
+    );
+
+    // a file put is read back as it was put, and listed; one removed is gone
+    a.put("res/raw/note.txt", b"note".to_vec()).unwrap();
+    a.put("assets/x", vec![0]).unwrap();
+    a.remove("res/values-night/strings.xml").unwrap();
+    assert_eq!(
+        a.file("res/raw/note.txt").unwrap().as_deref(),
+        Some(&b"note"[..])
+    );
+    let files = a.files().unwrap();
+    assert!(
+        files.contains(&"res/raw/note.txt".to_owned()) && files.contains(&"assets/x".to_owned())
+    );
+    assert!(!files.contains(&"res/values-night/strings.xml".to_owned()));
+    // the manifest's text, in place of its binary XML, is compiled when the APK is written
+    let manifest = text(&mut a, "AndroidManifest.xml").replace("com.example", "com.other");
+    a.put("AndroidManifest.xml", manifest.clone().into_bytes())
+        .unwrap();
+    assert_eq!(text(&mut a, "AndroidManifest.xml"), manifest);
+
+    let mut rebuilt = Vec::new();
+    a.rebuild(&mut rebuilt).unwrap();
+    let mut b = Apk::new(Cursor::new(&rebuilt)).unwrap();
+    assert!(text(&mut b, "AndroidManifest.xml").contains(r#"package="com.other""#));
+    assert!(text(&mut b, "res/values/strings.xml").contains(">Hi<"));
+    assert_eq!(
+        b.file("res/raw/note.txt").unwrap().as_deref(),
+        Some(&b"note"[..])
+    );
+    assert_eq!(b.read("assets/x"), Some(vec![0]));
+    assert!(b.file("res/values-night/strings.xml").unwrap().is_none());
 }

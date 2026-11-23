@@ -1,10 +1,13 @@
-//! Class model -> DEX bytes: fresh, sorted id tables; each data section written once, in the
-//! order later sections need its offsets.
+//! Class model -> DEX bytes. The id tables are the source's entries the classes refer to: the
+//! file's own are sorted already, so they are sorted again only with the entries an edit added.
+//! Each data section is written once, in the order later sections need its offsets.
 
 use super::model::*;
 use super::read;
+use super::source::{FieldRef, MethodRef, Proto, cmp_str};
 use crate::bytecode::{self, Fmt};
 use crate::{Error, Result};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -35,80 +38,64 @@ fn sleb(out: &mut Vec<u8>, mut v: i32) {
     }
 }
 
-fn index_map<T: Clone + Eq + std::hash::Hash>(v: &[T]) -> HashMap<T, u32> {
-    v.iter()
-        .enumerate()
-        .map(|(i, x)| (x.clone(), i as u32))
-        .collect()
-}
-
-fn shorty(p: &Proto) -> S {
-    let c = |t: &[u8]| {
-        if matches!(t[0], b'L' | b'[') {
-            b'L'
-        } else {
-            t[0]
-        }
-    };
-    let v: Vec<u8> = std::iter::once(c(&p.ret))
-        .chain(p.params.iter().map(|t| c(t)))
-        .collect();
-    s(&v)
-}
-
-/// DEX sorts strings by UTF-16 code units; ASCII compares the same as bytes.
-fn cmp16(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-    if a.is_ascii() && b.is_ascii() {
-        a.cmp(b)
-    } else {
-        utf16(a).cmp(&utf16(b))
-    }
-}
-
-#[derive(Default)]
-struct Collect {
-    strings: HashSet<S>,
-    types: HashSet<S>,
-    protos: HashSet<Proto>,
-    fields: HashSet<FieldRef>,
-    methods: HashSet<MethodRef>,
+/// What of the source the classes written refer to, and the method handles and call sites, in
+/// the order they are first met.
+struct Collect<'s> {
+    src: &'s Source,
+    strings: Vec<bool>,
+    types: Vec<bool>,
+    protos: Vec<bool>,
+    fields: Vec<bool>,
+    methods: Vec<bool>,
     handles: Vec<Handle>,
     handle_set: HashSet<Handle>,
     sites: Vec<Arc<Vec<Value>>>,
     site_set: HashSet<Arc<Vec<Value>>>,
 }
 
-impl Collect {
-    fn str(&mut self, x: &S) {
-        if !self.strings.contains(x) {
-            self.strings.insert(x.clone());
+impl<'s> Collect<'s> {
+    fn new(src: &'s Source) -> Self {
+        let [s, t, p, f, m] = src.counts();
+        Self {
+            src,
+            strings: vec![false; s],
+            types: vec![false; t],
+            protos: vec![false; p],
+            fields: vec![false; f],
+            methods: vec![false; m],
+            handles: vec![],
+            handle_set: HashSet::new(),
+            sites: vec![],
+            site_set: HashSet::new(),
         }
     }
-    fn ty(&mut self, t: &S) {
-        if !self.types.contains(t) {
-            self.types.insert(t.clone());
-            self.str(t);
+    fn str(&mut self, x: &StrId) {
+        self.strings[x.ix()] = true;
+    }
+    fn ty(&mut self, t: &TypeId) {
+        if !std::mem::replace(&mut self.types[t.ix()], true) {
+            self.str(&self.src.type_str(*t));
         }
     }
-    fn proto(&mut self, p: &Proto) {
-        if !self.protos.contains(p) {
-            self.protos.insert(p.clone());
-            self.str(&shorty(p));
+    fn proto(&mut self, p: &ProtoId) {
+        if !std::mem::replace(&mut self.protos[p.ix()], true) {
+            let p = self.src.proto(*p);
+            self.str(&p.shorty);
             self.ty(&p.ret);
             p.params.iter().for_each(|t| self.ty(t));
         }
     }
-    fn field(&mut self, f: &FieldRef) {
-        if !self.fields.contains(f) {
-            self.fields.insert(f.clone());
+    fn field(&mut self, f: &FieldId) {
+        if !std::mem::replace(&mut self.fields[f.ix()], true) {
+            let f = self.src.field(*f);
             self.ty(&f.class);
             self.str(&f.name);
             self.ty(&f.ty);
         }
     }
-    fn method(&mut self, m: &MethodRef) {
-        if !self.methods.contains(m) {
-            self.methods.insert(m.clone());
+    fn method(&mut self, m: &MethodId) {
+        if !std::mem::replace(&mut self.methods[m.ix()], true) {
+            let m = self.src.method(*m);
             self.ty(&m.class);
             self.str(&m.name);
             self.proto(&m.proto);
@@ -119,8 +106,8 @@ impl Collect {
             Member::Field(f) => self.field(f),
             Member::Method(m) => self.method(m),
         }
-        if self.handle_set.insert(h.clone()) {
-            self.handles.push(h.clone());
+        if self.handle_set.insert(*h) {
+            self.handles.push(*h);
         }
     }
     fn value(&mut self, v: &Value) {
@@ -150,20 +137,12 @@ impl Collect {
         c.source.iter().for_each(|x| self.str(x));
         c.annos.iter().for_each(|a| self.anno(a));
         for f in &c.fields {
-            self.field(&FieldRef {
-                class: c.name.clone(),
-                name: f.name.clone(),
-                ty: f.ty.clone(),
-            });
+            self.field(&f.id);
             f.init.iter().for_each(|v| self.value(v));
             f.annos.iter().for_each(|a| self.anno(a));
         }
         for m in &c.methods {
-            self.method(&MethodRef {
-                class: c.name.clone(),
-                name: m.name.clone(),
-                proto: m.proto.clone(),
-            });
+            self.method(&m.id);
             m.annos.iter().for_each(|a| self.anno(a));
             m.param_annos
                 .iter()
@@ -178,34 +157,45 @@ impl Collect {
                     .filter_map(|h| h.0.as_ref())
                     .for_each(|x| self.ty(x));
             }
-            for it in &code.items {
-                match it {
-                    Item::Ins(i) => {
-                        match &i.r {
-                            Ref::None => {}
-                            Ref::Str(x) => self.str(x),
-                            Ref::Type(t) => self.ty(t),
-                            Ref::Field(f) => self.field(f),
-                            Ref::Method(m) => self.method(m),
-                            Ref::Proto(p) => self.proto(p),
-                            Ref::CallSite(cs) => {
-                                cs.iter().for_each(|v| self.value(v));
-                                if self.site_set.insert(cs.clone()) {
-                                    self.sites.push(cs.clone());
-                                }
-                            }
-                            Ref::Handle(h) => self.handle(h),
-                        }
-                        i.proto.iter().for_each(|p| self.proto(p));
+            code.items.iter().for_each(|it| self.item(it));
+        }
+    }
+    /// What an instruction or a debug entry refers to.
+    fn item(&mut self, it: &Item) {
+        match it {
+            Item::Ins(i) => match &i.operand {
+                Operand::None | Operand::Lit(_) | Operand::Label(_) => {}
+                Operand::Str(x) => self.str(x),
+                Operand::Type(t) => self.ty(t),
+                Operand::Field(f) => self.field(f),
+                Operand::Method(m) => self.method(m),
+                Operand::Proto(p) => self.proto(p),
+                Operand::CallSite(cs) => {
+                    cs.iter().for_each(|v| self.value(v));
+                    if self.site_set.insert(cs.clone()) {
+                        self.sites.push(cs.clone());
                     }
-                    Item::Local { name, ty, sig, .. } => {
-                        [name, sig].into_iter().flatten().for_each(|x| self.str(x));
-                        ty.iter().for_each(|t| self.ty(t));
-                    }
-                    Item::SetFile(Some(x)) => self.str(x),
-                    _ => {}
                 }
+                Operand::Handle(h) => self.handle(h),
+                Operand::Polymorphic(m, p) => {
+                    self.method(m);
+                    self.proto(p);
+                }
+            },
+            Item::Local { name, ty, sig, .. } => {
+                [name, sig].into_iter().flatten().for_each(|x| self.str(x));
+                ty.iter().for_each(|t| self.ty(t));
             }
+            Item::SetFile(Some(x)) => self.str(x),
+            _ => {}
+        }
+    }
+    /// Something a method's code refers to, from a class read without its code.
+    fn part(&mut self, part: read::Part<'_>) {
+        match part {
+            read::Part::Str(x) => self.str(&x),
+            read::Part::Type(t) => self.ty(&t),
+            read::Part::Item(it) => self.item(it),
         }
     }
 }
@@ -224,66 +214,83 @@ pub fn default_value(t: &[u8]) -> Value {
     }
 }
 
+/// Where each id of the source is in the file written: its index there.
+struct Map<I>(Vec<u32>, std::marker::PhantomData<I>);
+
+impl<I: Id> std::ops::Index<&I> for Map<I> {
+    type Output = u32;
+    fn index(&self, id: &I) -> &u32 {
+        &self.0[id.ix()]
+    }
+}
+
+/// The ids `used`, in the order `sorted` puts them when the source has entries the file lacks:
+/// the file's own are in order already. With them, where each is.
+fn order<I: Id>(used: &[bool], grown: bool, sort: impl FnOnce(&mut Vec<I>)) -> (Vec<I>, Map<I>) {
+    let mut ids: Vec<I> = (0..used.len())
+        .filter(|i| used[*i])
+        .map(|i| I::new(i as u32))
+        .collect();
+    if grown {
+        sort(&mut ids);
+    }
+    let mut map = vec![NO_INDEX; used.len()];
+    for (at, id) in ids.iter().enumerate() {
+        map[id.ix()] = at as u32;
+    }
+    (ids, Map(map, std::marker::PhantomData))
+}
+
 /// Final indices of everything a DEX refers to.
 struct Pools {
-    strings: Vec<S>,
-    types: Vec<S>,
+    strings: Vec<StrId>,
+    types: Vec<TypeId>,
     protos: Vec<Proto>,
     fields: Vec<FieldRef>,
     methods: Vec<MethodRef>,
     handles: Vec<Handle>,
     sites: Vec<Arc<Vec<Value>>>,
-    si: HashMap<S, u32>,
-    ti: HashMap<S, u32>,
-    pi: HashMap<Proto, u32>,
-    fi: HashMap<FieldRef, u32>,
-    mi: HashMap<MethodRef, u32>,
+    si: Map<StrId>,
+    ti: Map<TypeId>,
+    pi: Map<ProtoId>,
+    fi: Map<FieldId>,
+    mi: Map<MethodId>,
     hi: HashMap<Handle, u32>,
     ci: HashMap<Arc<Vec<Value>>, u32>,
 }
 
 impl Pools {
+    /// The file's tables are sorted, so the entries of them still used are in order as they
+    /// are; only a source with added entries is sorted, each table by the one before it.
     fn new(c: Collect) -> R<Self> {
-        let mut strings: Vec<S> = c.strings.into_iter().collect();
-        strings.sort_unstable_by(|a, b| cmp16(a, b));
-        let si: HashMap<S, u32> = strings
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut types: Vec<S> = c.types.into_iter().collect();
-        types.sort_unstable_by_key(|t| si[t]);
-        let ti: HashMap<S, u32> = types
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut protos: Vec<Proto> = c.protos.into_iter().collect();
-        protos.sort_unstable_by_key(|p| {
-            (
-                ti[&p.ret],
-                p.params.iter().map(|t| ti[t]).collect::<Vec<_>>(),
-            )
+        let (src, grown) = (c.src, c.src.grown());
+        let (strings, si) = order::<StrId>(&c.strings, grown, |v| {
+            v.sort_by(|a, b| cmp_str(src.str(*a), src.str(*b)))
         });
-        let pi: HashMap<Proto, u32> = protos
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut fields: Vec<FieldRef> = c.fields.into_iter().collect();
-        fields.sort_unstable_by_key(|f| (ti[&f.class], si[&f.name], ti[&f.ty]));
-        let fi: HashMap<FieldRef, u32> = fields
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
-        let mut methods: Vec<MethodRef> = c.methods.into_iter().collect();
-        methods.sort_unstable_by_key(|m| (ti[&m.class], si[&m.name], pi[&m.proto]));
-        let mi: HashMap<MethodRef, u32> = methods
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
-            .collect();
+        let (types, ti) = order::<TypeId>(&c.types, grown, |v| {
+            v.sort_by_key(|t| si[&src.type_str(*t)])
+        });
+        let (protos, pi) = order::<ProtoId>(&c.protos, grown, |v| {
+            v.sort_by_cached_key(|p| {
+                let p = src.proto(*p);
+                (
+                    ti[&p.ret],
+                    p.params.iter().map(|t| ti[t]).collect::<Vec<_>>(),
+                )
+            })
+        });
+        let (fields, fi) = order::<FieldId>(&c.fields, grown, |v| {
+            v.sort_by_key(|f| {
+                let f = src.field(*f);
+                (ti[&f.class], si[&f.name], ti[&f.ty])
+            })
+        });
+        let (methods, mi) = order::<MethodId>(&c.methods, grown, |v| {
+            v.sort_by_key(|m| {
+                let m = src.method(*m);
+                (ti[&m.class], si[&m.name], pi[&m.proto])
+            })
+        });
         for (what, n) in [
             ("types", types.len()),
             ("protos", protos.len()),
@@ -296,24 +303,18 @@ impl Pools {
                 )));
             }
         }
-        let hi = c
-            .handles
-            .iter()
-            .enumerate()
-            .map(|(i, x)| (x.clone(), i as u32))
+        let hi = (c.handles.iter().enumerate())
+            .map(|(i, x)| (*x, i as u32))
             .collect();
-        let ci = c
-            .sites
-            .iter()
-            .enumerate()
+        let ci = (c.sites.iter().enumerate())
             .map(|(i, x)| (x.clone(), i as u32))
             .collect();
         Ok(Pools {
             strings,
             types,
-            protos,
-            fields,
-            methods,
+            protos: protos.iter().map(|p| src.proto(*p)).collect(),
+            fields: fields.iter().map(|f| src.field(*f)).collect(),
+            methods: methods.iter().map(|m| src.method(*m)).collect(),
             handles: c.handles,
             sites: c.sites,
             si,
@@ -326,25 +327,34 @@ impl Pools {
         })
     }
 
-    /// Reuse a DEX's own id tables, in their existing (sorted) order, as the write pools. Lets an
-    /// edit be assembled against the indices already in the file, so untouched classes stay valid.
-    fn from_reader(r: &read::Reader<'_>) -> Self {
-        let (strings, types, protos, fields, methods, handles, sites) = r.pool_tables();
+    /// The file's own tables as they are: each of its ids is where it is already, so an edit
+    /// can be assembled against the file. An added entry is nowhere in it.
+    fn of_file(src: &Source, r: &read::Reader) -> Self {
+        fn same<I>(file: usize, all: usize) -> Map<I> {
+            let at = (0..all).map(|i| if i < file { i as u32 } else { NO_INDEX });
+            Map(at.collect(), std::marker::PhantomData)
+        }
+        let (file, all) = (src.file_counts(), src.counts());
+        let (handles, sites) = r.handles();
         Pools {
-            si: index_map(strings),
-            ti: index_map(types),
-            pi: index_map(protos),
-            fi: index_map(fields),
-            mi: index_map(methods),
-            hi: index_map(handles),
-            ci: index_map(sites),
-            strings: strings.to_vec(),
-            types: types.to_vec(),
-            protos: protos.to_vec(),
-            fields: fields.to_vec(),
-            methods: methods.to_vec(),
+            strings: vec![],
+            types: vec![],
+            protos: vec![],
+            fields: vec![],
+            methods: vec![],
+            hi: (handles.iter().enumerate())
+                .map(|(i, x)| (*x, i as u32))
+                .collect(),
+            ci: (sites.iter().enumerate())
+                .map(|(i, x)| (x.clone(), i as u32))
+                .collect(),
             handles: handles.to_vec(),
             sites: sites.to_vec(),
+            si: same(file[0], all[0]),
+            ti: same(file[1], all[1]),
+            pi: same(file[2], all[2]),
+            fi: same(file[3], all[3]),
+            mi: same(file[4], all[4]),
         }
     }
 
@@ -377,7 +387,7 @@ impl Pools {
             Value::Float(x) => right(out, 0x10, *x as u64, 4),
             Value::Double(x) => right(out, 0x11, *x, 8),
             Value::MethodType(p) => unsigned(out, 0x15, self.pi[p] as u64),
-            Value::MethodHandle(h) => unsigned(out, 0x16, self.hi[&**h] as u64),
+            Value::MethodHandle(h) => unsigned(out, 0x16, self.hi[h] as u64),
             Value::Str(x) => unsigned(out, 0x17, self.si[x] as u64),
             Value::Type(t) => unsigned(out, 0x18, self.ti[t] as u64),
             Value::Field(f) => unsigned(out, 0x19, self.fi[f] as u64),
@@ -408,10 +418,10 @@ impl Pools {
         }
     }
 
-    fn opt(&self, x: &Option<S>) -> u32 {
+    fn opt(&self, x: &Option<StrId>) -> u32 {
         x.as_ref().map_or(NO_INDEX, |x| self.si[x])
     }
-    fn p1(&self, x: &Option<S>) -> u32 {
+    fn p1(&self, x: &Option<StrId>) -> u32 {
         x.as_ref().map_or(0, |x| self.si[x] + 1)
     }
 }
@@ -433,6 +443,22 @@ fn fits(v: i64, bits: u32) -> bool {
 
 fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
     let err = |m: String| Error::assemble(format!("{}: {m}", what()));
+    // each instruction has the kind of operand its opcode takes, so the label of one that
+    // branches and the literal of one that holds one are there
+    for it in &code.items {
+        if let Item::Ins(i) = it
+            && !i.operand.fits(i.op)
+        {
+            let name = bytecode::info(i.op).map_or("unknown opcode", |x| x.0);
+            return Err(err(format!(
+                "{name}: its operand is of another kind than it takes"
+            )));
+        }
+    }
+    let target = |i: &Ins| match i.operand {
+        Operand::Label(t) => t,
+        _ => unreachable!("an instruction that branches has a label"),
+    };
     // choose final opcodes: const-string widens past 65535 strings, gotos widen to reach
     let mut ops: Vec<u8> = code
         .items
@@ -442,7 +468,7 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
     for (k, it) in code.items.iter().enumerate() {
         if let Item::Ins(i) = it
             && i.op == 0x1a
-            && let Ref::Str(x) = &i.r
+            && let Operand::Str(x) = &i.operand
             && p.si[x] > 0xffff
         {
             ops[k] = 0x1b;
@@ -494,8 +520,8 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                 && matches!(ops[k], 0x28 | 0x29)
             {
                 let to = *labels
-                    .get(&i.target)
-                    .ok_or_else(|| err(format!("undefined label {}", i.target)))?;
+                    .get(&target(i))
+                    .ok_or_else(|| err(format!("undefined label {}", target(i))))?;
                 let rel = to as i64 - offs[k] as i64;
                 let need = if rel != 0 && fits(rel, 8) {
                     0x28
@@ -527,7 +553,7 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
         if let Item::Ins(i) = it
             && matches!(ops[k], 0x2b | 0x2c)
         {
-            users.insert(label(i.target)?, offs[k]);
+            users.insert(label(target(i))?, offs[k]);
         }
     }
 
@@ -590,27 +616,34 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                         )))
                     }
                 };
+                let lit = match i.operand {
+                    Operand::Lit(v) => v,
+                    _ => 0,
+                };
                 let lit_fit = |bits: u32| {
-                    if fits(i.lit, bits) {
-                        Ok(i.lit)
+                    if fits(lit, bits) {
+                        Ok(lit)
                     } else {
                         Err(bad(&format!(
-                            "literal {:#x} does not fit in {bits} bits",
-                            i.lit
+                            "literal {lit:#x} does not fit in {bits} bits"
                         )))
                     }
                 };
-                let rel = || -> R<i64> { Ok(label(i.target)? as i64 - at as i64) };
+                let rel = || -> R<i64> { Ok(label(target(i))? as i64 - at as i64) };
+                let called_as = || match &i.operand {
+                    Operand::Polymorphic(_, proto) => p.pi[proto] as u16,
+                    _ => unreachable!("an invoke-polymorphic has its prototype"),
+                };
                 let idx = || -> R<u32> {
-                    Ok(match &i.r {
-                        Ref::None => 0,
-                        Ref::Str(x) => p.si[x],
-                        Ref::Type(t) => p.ti[t],
-                        Ref::Field(x) => p.fi[x],
-                        Ref::Method(m) => p.mi[m],
-                        Ref::Proto(x) => p.pi[x],
-                        Ref::CallSite(c) => p.ci[c],
-                        Ref::Handle(h) => p.hi[h],
+                    Ok(match &i.operand {
+                        Operand::None | Operand::Lit(_) | Operand::Label(_) => 0,
+                        Operand::Str(x) => p.si[x],
+                        Operand::Type(t) => p.ti[t],
+                        Operand::Field(x) => p.fi[x],
+                        Operand::Method(m) | Operand::Polymorphic(m, _) => p.mi[m],
+                        Operand::Proto(x) => p.pi[x],
+                        Operand::CallSite(c) => p.ci[c],
+                        Operand::Handle(h) => p.hi[h],
                     })
                 };
                 let op = op as u16;
@@ -632,14 +665,14 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                     Fmt::F21s => w.extend([op | reg8(0)? << 8, lit_fit(16)? as u16]),
                     Fmt::F21h => {
                         let sh = if op == 0x19 { 48 } else { 16 };
-                        let v = if sh == 16 { i.lit as i32 as i64 } else { i.lit };
-                        if v != i.lit || v & ((1i64 << sh) - 1) != 0 {
+                        let v = if sh == 16 { lit as i32 as i64 } else { lit };
+                        if v != lit || v & ((1i64 << sh) - 1) != 0 {
                             return Err(bad(&format!(
                                 "literal {:#x} must have only its top 16 bits set",
-                                i.lit
+                                lit
                             )));
                         }
-                        w.extend([op | reg8(0)? << 8, (i.lit >> sh) as u16])
+                        w.extend([op | reg8(0)? << 8, (lit >> sh) as u16])
                     }
                     Fmt::F21c => {
                         let x = idx()?;
@@ -700,22 +733,18 @@ fn assemble(code: &Code, p: &Pools, what: &dyn Fn() -> String) -> R<Assembled> {
                             g[0] | g[1] << 4 | g[2] << 8 | g[3] << 12,
                         ]);
                         if f == Fmt::F45cc {
-                            w.push(
-                                p.pi[i.proto.as_ref().ok_or_else(|| bad("missing proto"))?] as u16,
-                            );
+                            w.push(called_as());
                         }
                     }
                     Fmt::F3rc | Fmt::F4rcc => {
                         let x = idx()?;
                         w.extend([op | (i.n as u16) << 8, x as u16, r(0)]);
                         if f == Fmt::F4rcc {
-                            w.push(
-                                p.pi[i.proto.as_ref().ok_or_else(|| bad("missing proto"))?] as u16,
-                            );
+                            w.push(called_as());
                         }
                     }
                     Fmt::F51l => {
-                        let v = i.lit as u64;
+                        let v = lit as u64;
                         w.extend([
                             op | reg8(0)? << 8,
                             v as u16,
@@ -865,7 +894,7 @@ fn intern(
     o
 }
 
-fn type_list(p: &Pools, l: &[S]) -> Vec<u8> {
+fn type_list(p: &Pools, l: &[TypeId]) -> Vec<u8> {
     let mut b = Vec::with_capacity(4 + l.len() * 2);
     b.extend((l.len() as u32).to_le_bytes());
     for t in l {
@@ -874,27 +903,127 @@ fn type_list(p: &Pools, l: &[S]) -> Vec<u8> {
     b
 }
 
+/// The instructions of a code item, then its tries and handlers.
+fn write_code(out: &mut Out, a: &Assembled) {
+    a.insns
+        .iter()
+        .for_each(|&u| out.buf.extend(u.to_le_bytes()));
+    if a.tries.is_empty() {
+        return;
+    }
+    if a.insns.len() % 2 == 1 {
+        out.u16(0);
+    }
+    let mut list = vec![];
+    uleb(&mut list, a.handlers.len() as u32);
+    let mut hoff = vec![];
+    for h in &a.handlers {
+        hoff.push(list.len() as u16);
+        let typed: Vec<_> = h.iter().filter(|x| x.0.is_some()).collect();
+        let all = h.iter().find(|x| x.0.is_none());
+        sleb(
+            &mut list,
+            if all.is_some() {
+                -(typed.len() as i32)
+            } else {
+                typed.len() as i32
+            },
+        );
+        for (t, addr) in typed {
+            uleb(&mut list, t.unwrap());
+            uleb(&mut list, *addr);
+        }
+        if let Some((_, addr)) = all {
+            uleb(&mut list, *addr);
+        }
+    }
+    for (s, n, k) in &a.tries {
+        out.u32(*s);
+        out.u16(*n);
+        out.u16(hoff[*k]);
+    }
+    out.buf.extend_from_slice(&list);
+}
+
+/// The classes a file is written from, given one at a time, so that a caller that reads them
+/// from a DEX file never holds more than one as a model. Each is asked for twice: once for what
+/// it refers to, which the id tables hold, and once to be written.
+pub trait Classes {
+    fn count(&self) -> usize;
+
+    /// Class `i`, to write.
+    fn class(&self, i: usize) -> R<Cow<'_, Class>>;
+
+    /// Class `i`, for what it refers to. A method of it may lack its code, if what that code
+    /// refers to is given to `used` instead: a class read from a file need not be built whole
+    /// for this.
+    fn outline(&self, i: usize, used: &mut dyn FnMut(read::Part<'_>)) -> R<Cow<'_, Class>> {
+        let _ = used;
+        self.class(i)
+    }
+}
+
+impl Classes for [Class] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn class(&self, i: usize) -> R<Cow<'_, Class>> {
+        Ok(Cow::Borrowed(&self[i]))
+    }
+}
+
 /// `version` is the 3-digit DEX version to write (raised to 038 when the code needs it).
-pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
-    let mut col = Collect::default();
-    classes.iter().for_each(|c| col.class(c));
+pub fn write(src: &Source, classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
+    write_each(src, classes, version)
+}
+
+/// (field_idx, access, hiddenapi flags)
+type FieldDef = (u32, u32, Option<u32>);
+/// (method_idx, access, code offset in its section, hiddenapi flags)
+type MethodDef = (u32, u32, Option<u32>, Option<u32>);
+
+/// What the later sections and the class_def need of a class once it is written.
+struct Written {
+    name: u32,
+    access: u32,
+    sup: u32,
+    source: u32,
+    /// offsets in their sections, when the class has the item
+    ifaces: Option<u32>,
+    statics: Option<u32>,
+    /// static, then instance
+    fields: [Vec<FieldDef>; 2],
+    /// direct, then virtual
+    methods: [Vec<MethodDef>; 2],
+}
+
+/// [`write`] classes given one at a time.
+pub fn write_each(src: &Source, classes: &(impl Classes + ?Sized), version: [u8; 3]) -> R<Vec<u8>> {
+    let n = classes.count();
+    let mut col = Collect::new(src);
+    // name, then superclass and interfaces, of each class
+    let mut shells: Vec<Vec<TypeId>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let c = classes.outline(i, &mut |part| col.part(part))?;
+        col.class(&c);
+        let mut shell = vec![c.name];
+        shell.extend(c.sup.iter().chain(&c.ifaces).cloned());
+        shells.push(shell);
+    }
     let p = Pools::new(col)?;
 
     // superclasses and interfaces defined here must come first
-    let by_name: HashMap<&[u8], usize> = classes
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (&*c.name, i))
-        .collect();
-    if by_name.len() != classes.len() {
+    let by_name: HashMap<TypeId, usize> =
+        shells.iter().enumerate().map(|(i, c)| (c[0], i)).collect();
+    if by_name.len() != n {
         return Err(Error::assemble("a class is defined twice"));
     }
-    let mut order = Vec::with_capacity(classes.len());
-    let mut state = vec![0u8; classes.len()];
+    let mut order = Vec::with_capacity(n);
+    let mut state = vec![0u8; n];
     fn visit(
         i: usize,
-        cs: &[Class],
-        by: &HashMap<&[u8], usize>,
+        cs: &[Vec<TypeId>],
+        by: &HashMap<TypeId, usize>,
         st: &mut [u8],
         order: &mut Vec<usize>,
     ) -> R<()> {
@@ -902,15 +1031,15 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
             2 => return Ok(()),
             1 => {
                 return Err(Error::assemble(format!(
-                    "class {} inherits from itself",
-                    String::from_utf8_lossy(&cs[i].name)
+                    "class {:?} inherits from itself",
+                    cs[i][0]
                 )));
             }
             _ => {}
         }
         st[i] = 1;
-        for t in cs[i].sup.iter().chain(&cs[i].ifaces) {
-            if let Some(&j) = by.get(&**t) {
+        for t in &cs[i][1..] {
+            if let Some(&j) = by.get(t) {
                 visit(j, cs, by, st, order)?;
             }
         }
@@ -918,11 +1047,11 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         order.push(i);
         Ok(())
     }
-    for i in 0..classes.len() {
-        visit(i, classes, &by_name, &mut state, &mut order)?;
+    for i in 0..n {
+        visit(i, &shells, &by_name, &mut state, &mut order)?;
     }
-    // everything below is laid out in class_def order, so a re-read file writes back identically
-    let classes: &[&Class] = &order.iter().map(|&i| &classes[i]).collect::<Vec<_>>();
+    drop(by_name);
+    drop(shells);
 
     let needs38 = !p.sites.is_empty() || !p.handles.is_empty();
     let version = if needs38 && version < *b"038" {
@@ -937,7 +1066,7 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         p.protos.len(),
         p.fields.len(),
         p.methods.len(),
-        classes.len(),
+        n,
         p.sites.len(),
         p.handles.len(),
     );
@@ -967,6 +1096,7 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
     let start = out.pos();
     let mut string_off = Vec::with_capacity(ns);
     for x in &p.strings {
+        let x = src.str(*x);
         string_off.push(out.pos());
         let units = x.iter().filter(|&&b| b & 0xc0 != 0x80).count() as u32;
         uleb(&mut out.buf, units);
@@ -975,61 +1105,34 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
     }
     out.section(0x2002, ns as u32, start);
 
-    // type lists: proto parameters and interfaces
-    out.align();
-    let (start, mut count, mut seen) = (out.pos(), 0, HashMap::new());
-    let proto_params: Vec<u32> = p
+    // The sections a class adds to are each written to a buffer of their own, in class_def
+    // order, with offsets from the section's start: where a section starts is known only once
+    // every class is written. Each one that aligns its items starts aligned itself.
+    let section = || Out {
+        buf: vec![],
+        base: 0,
+        map: vec![],
+    };
+    // type lists: proto parameters, then interfaces
+    let (mut lists, mut list_count, mut list_seen) = (section(), 0, HashMap::new());
+    let proto_params: Vec<Option<u32>> = p
         .protos
         .iter()
         .map(|x| {
-            if x.params.is_empty() {
-                0
-            } else {
+            (!x.params.is_empty()).then(|| {
                 intern(
-                    &mut out,
-                    &mut seen,
+                    &mut lists,
+                    &mut list_seen,
                     type_list(&p, &x.params),
                     true,
-                    &mut count,
+                    &mut list_count,
                 )
-            }
+            })
         })
         .collect();
-    let ifaces: Vec<u32> = classes
-        .iter()
-        .map(|c| {
-            if c.ifaces.is_empty() {
-                0
-            } else {
-                intern(
-                    &mut out,
-                    &mut seen,
-                    type_list(&p, &c.ifaces),
-                    true,
-                    &mut count,
-                )
-            }
-        })
-        .collect();
-    out.section(0x1001, count, start);
-
-    // annotations: items, then sets, then set-ref lists, then directories
-    let (start, mut count, mut seen) = (out.pos(), 0, HashMap::new());
+    // annotation items; the sets, set-ref lists and directories that point at them follow
+    let (mut items, mut item_count, mut item_seen) = (section(), 0, HashMap::new());
     let mut set_specs: Vec<Vec<(u32, u32)>> = vec![];
-    let mut spec =
-        |out: &mut Out, seen: &mut HashMap<Vec<u8>, u32>, count: &mut u32, set: &[Anno]| -> usize {
-            let mut v: Vec<(u32, u32)> = set
-                .iter()
-                .map(|a| {
-                    let mut b = vec![a.vis];
-                    p.anno(a, &mut b);
-                    (p.ti[&a.ty], intern(out, seen, b, false, count))
-                })
-                .collect();
-            v.sort_by_key(|x| x.0);
-            set_specs.push(v);
-            set_specs.len() - 1
-        };
     struct Dir {
         class: Option<usize>,
         fields: Vec<(u32, usize)>,
@@ -1037,7 +1140,59 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         params: Vec<(u32, Vec<Option<usize>>)>,
     }
     let mut dirs: Vec<Option<Dir>> = Vec::with_capacity(nc);
-    for c in classes {
+    // encoded arrays: call sites, then static values
+    let (mut arrays, mut array_count, mut array_seen) = (section(), 0, HashMap::new());
+    let site_rel: Vec<u32> = p
+        .sites
+        .iter()
+        .map(|cs| {
+            let mut b = vec![];
+            uleb(&mut b, cs.len() as u32);
+            cs.iter().for_each(|v| p.value(v, &mut b));
+            // call sites must not share an item: their ids are sorted by offset
+            let o = arrays.pos();
+            arrays.buf.extend_from_slice(&b);
+            array_count += 1;
+            o
+        })
+        .collect();
+    // debug info, and the code items, which hold its offsets: where in `code` each is
+    let (mut debug, mut debug_count) = (section(), 0);
+    let (mut code, mut code_count) = (section(), 0);
+    let mut debug_refs: Vec<usize> = vec![];
+    let mut written: Vec<Written> = Vec::with_capacity(nc);
+
+    for &i in &order {
+        let c = classes.class(i)?;
+        let c: &Class = &c;
+        let fid = |f: &Field| p.fi[&f.id];
+        let mid = |m: &Method| p.mi[&m.id];
+        let ifaces = (!c.ifaces.is_empty()).then(|| {
+            intern(
+                &mut lists,
+                &mut list_seen,
+                type_list(&p, &c.ifaces),
+                true,
+                &mut list_count,
+            )
+        });
+
+        let mut spec = |set: &[Anno]| -> usize {
+            let mut v: Vec<(u32, u32)> = set
+                .iter()
+                .map(|a| {
+                    let mut b = vec![a.vis];
+                    p.anno(a, &mut b);
+                    (
+                        p.ti[&a.ty],
+                        intern(&mut items, &mut item_seen, b, false, &mut item_count),
+                    )
+                })
+                .collect();
+            v.sort_by_key(|x| x.0);
+            set_specs.push(v);
+            set_specs.len() - 1
+        };
         let mut d = Dir {
             class: None,
             fields: vec![],
@@ -1045,39 +1200,22 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
             params: vec![],
         };
         if !c.annos.is_empty() {
-            d.class = Some(spec(&mut out, &mut seen, &mut count, &c.annos));
+            d.class = Some(spec(&c.annos));
         }
         for f in &c.fields {
             if !f.annos.is_empty() {
-                let idx = p.fi[&FieldRef {
-                    class: c.name.clone(),
-                    name: f.name.clone(),
-                    ty: f.ty.clone(),
-                }];
-                d.fields
-                    .push((idx, spec(&mut out, &mut seen, &mut count, &f.annos)));
+                d.fields.push((fid(f), spec(&f.annos)));
             }
         }
         for m in &c.methods {
-            let idx = p.mi[&MethodRef {
-                class: c.name.clone(),
-                name: m.name.clone(),
-                proto: m.proto.clone(),
-            }];
+            let idx = mid(m);
             if !m.annos.is_empty() {
-                d.methods
-                    .push((idx, spec(&mut out, &mut seen, &mut count, &m.annos)));
+                d.methods.push((idx, spec(&m.annos)));
             }
             if let Some(pa) = &m.param_annos {
                 let sets = pa
                     .iter()
-                    .map(|s| {
-                        if s.is_empty() {
-                            None
-                        } else {
-                            Some(spec(&mut out, &mut seen, &mut count, s))
-                        }
-                    })
+                    .map(|s| (!s.is_empty()).then(|| spec(s)))
                     .collect();
                 d.params.push((idx, sets));
             }
@@ -1088,8 +1226,183 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         let empty =
             d.class.is_none() && d.fields.is_empty() && d.methods.is_empty() && d.params.is_empty();
         dirs.push(if empty { None } else { Some(d) });
+
+        let mut st: Vec<(u32, &Field)> = c
+            .fields
+            .iter()
+            .filter(|f| f.access & ACC_STATIC != 0)
+            .map(|f| (fid(f), f))
+            .collect();
+        st.sort_by_key(|x| x.0);
+        let statics = match st.iter().rposition(|x| x.1.init.is_some()) {
+            None => None,
+            Some(last) => {
+                let mut b = vec![];
+                uleb(&mut b, last as u32 + 1);
+                for (_, f) in &st[..=last] {
+                    let ty = src.descriptor(src.field(f.id).ty);
+                    p.value(f.init.as_ref().unwrap_or(&default_value(ty)), &mut b);
+                }
+                Some(intern(
+                    &mut arrays,
+                    &mut array_seen,
+                    b,
+                    false,
+                    &mut array_count,
+                ))
+            }
+        };
+
+        // each method body, with its debug info before its code item
+        let mut methods: [Vec<MethodDef>; 2] = [vec![], vec![]];
+        for m in &c.methods {
+            let mut at = None;
+            if let Some(body) = &m.code {
+                let m_ins = m.ins(src);
+                let what = || method_name(src, m);
+                if m_ins > body.registers {
+                    return Err(Error::assemble(format!(
+                        "{}: .registers {} is less than the {} the parameters need",
+                        what(),
+                        body.registers,
+                        m_ins
+                    )));
+                }
+                let a = assemble(body, &p, &what)?;
+                let dbg = body.debug.then(|| {
+                    let at = debug.pos();
+                    debug_count += 1;
+                    let code = body;
+                    let out = &mut debug;
+                    let first_line = a
+                        .events
+                        .iter()
+                        .find_map(|(_, e)| {
+                            if let Item::Line(l) = e {
+                                Some(*l)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    let o = &mut out.buf;
+                    uleb(o, first_line);
+                    uleb(o, code.param_names.len() as u32);
+                    code.param_names.iter().for_each(|n| uleb(o, p.p1(n)));
+                    let (mut addr, mut line) = (0u32, first_line);
+                    for (at, ev) in &a.events {
+                        if let Item::Line(l) = ev {
+                            let mut dl = *l as i64 - line as i64;
+                            let mut da = *at - addr;
+                            if !(-4..=10).contains(&dl) {
+                                o.push(2);
+                                sleb(o, dl as i32);
+                                dl = 0;
+                            }
+                            if (dl + 4) as u32 + 15 * da + 0x0a > 0xff {
+                                o.push(1);
+                                uleb(o, da);
+                                da = 0;
+                            }
+                            o.push(((dl + 4) as u32 + 15 * da + 0x0a) as u8);
+                            (addr, line) = (*at, *l);
+                            continue;
+                        }
+                        if *at > addr {
+                            o.push(1);
+                            uleb(o, at - addr);
+                            addr = *at;
+                        }
+                        match ev {
+                            Item::Local { reg, name, ty, sig } => {
+                                o.push(if sig.is_some() { 4 } else { 3 });
+                                uleb(o, *reg as u32);
+                                uleb(o, p.p1(name));
+                                uleb(o, ty.as_ref().map_or(0, |t| p.ti[t] + 1));
+                                if sig.is_some() {
+                                    uleb(o, p.p1(sig));
+                                }
+                            }
+                            Item::EndLocal(r) => {
+                                o.push(5);
+                                uleb(o, *r as u32);
+                            }
+                            Item::Restart(r) => {
+                                o.push(6);
+                                uleb(o, *r as u32);
+                            }
+                            Item::Prologue => o.push(7),
+                            Item::Epilogue => o.push(8),
+                            Item::SetFile(f) => {
+                                o.push(9);
+                                uleb(o, p.p1(f));
+                            }
+                            _ => {}
+                        }
+                    }
+                    o.push(0);
+                    at
+                });
+                let out = &mut code;
+                out.align();
+                at = Some(out.pos());
+                code_count += 1;
+                out.u16(body.registers);
+                out.u16(m_ins);
+                out.u16(a.outs);
+                out.u16(a.tries.len() as u16);
+                if dbg.is_some() {
+                    debug_refs.push(out.buf.len());
+                }
+                out.u32(dbg.unwrap_or(0));
+                out.u32(a.insns.len() as u32);
+                write_code(out, &a);
+            }
+            methods[usize::from(!m.is_direct())].push((mid(m), m.access, at, m.hidden));
+        }
+        let mut fields: [Vec<FieldDef>; 2] = [vec![], vec![]];
+        for f in &c.fields {
+            fields[usize::from(f.access & ACC_STATIC == 0)].push((fid(f), f.access, f.hidden));
+        }
+        fields.iter_mut().for_each(|l| l.sort_unstable());
+        methods.iter_mut().for_each(|l| l.sort_unstable());
+        for list in &methods {
+            if list.windows(2).any(|w| w[0].0 == w[1].0) {
+                return Err(Error::assemble(format!(
+                    "{}: method defined twice",
+                    String::from_utf8_lossy(src.descriptor(c.name))
+                )));
+            }
+        }
+        written.push(Written {
+            name: p.ti[&c.name],
+            access: c.access,
+            sup: c.sup.as_ref().map_or(NO_INDEX, |t| p.ti[t]),
+            source: p.opt(&c.source),
+            ifaces,
+            statics,
+            fields,
+            methods,
+        });
     }
-    out.section(0x2004, count, start);
+
+    // lay the sections out, now that each one's size is known
+    out.align();
+    let lists_at = out.pos();
+    out.buf.extend_from_slice(&lists.buf);
+    out.section(0x1001, list_count, lists_at);
+    let proto_params: Vec<u32> = proto_params
+        .iter()
+        .map(|o| o.map_or(0, |o| lists_at + o))
+        .collect();
+
+    // annotations: items, then sets, then set-ref lists, then directories
+    let items_at = out.pos();
+    out.buf.extend_from_slice(&items.buf);
+    out.section(0x2004, item_count, items_at);
+    for item in set_specs.iter_mut().flatten() {
+        item.1 += items_at;
+    }
     out.align();
     let (start, mut count, mut seen) = (out.pos(), 0, HashMap::new());
     let set_off: Vec<u32> = set_specs
@@ -1147,286 +1460,45 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         .collect();
     out.section(0x2006, count, start);
 
-    // encoded arrays: call sites, then static values
-    let (start, mut count, mut seen) = (out.pos(), 0, HashMap::new());
-    let site_off: Vec<u32> = p
-        .sites
-        .iter()
-        .map(|cs| {
-            let mut b = vec![];
-            uleb(&mut b, cs.len() as u32);
-            cs.iter().for_each(|v| p.value(v, &mut b));
-            // call sites must not share an item: their ids are sorted by offset
-            let o = out.pos();
-            out.buf.extend_from_slice(&b);
-            count += 1;
-            o
-        })
-        .collect();
-    let static_off: Vec<u32> = classes
-        .iter()
-        .map(|c| {
-            let mut st: Vec<(u32, &Field)> = c
-                .fields
-                .iter()
-                .filter(|f| f.access & ACC_STATIC != 0)
-                .map(|f| {
-                    (
-                        p.fi[&FieldRef {
-                            class: c.name.clone(),
-                            name: f.name.clone(),
-                            ty: f.ty.clone(),
-                        }],
-                        f,
-                    )
-                })
-                .collect();
-            st.sort_by_key(|x| x.0);
-            let Some(last) = st.iter().rposition(|x| x.1.init.is_some()) else {
-                return 0;
-            };
-            let mut b = vec![];
-            uleb(&mut b, last as u32 + 1);
-            for (_, f) in &st[..=last] {
-                p.value(f.init.as_ref().unwrap_or(&default_value(&f.ty)), &mut b);
-            }
-            intern(&mut out, &mut seen, b, false, &mut count)
-        })
-        .collect();
-    out.section(0x2005, count, start);
+    let arrays_at = out.pos();
+    out.buf.extend_from_slice(&arrays.buf);
+    out.section(0x2005, array_count, arrays_at);
+    let site_off: Vec<u32> = site_rel.iter().map(|o| arrays_at + o).collect();
 
-    // lay out every method body, then debug info, then code items
-    let mut bodies: Vec<Vec<Option<(Assembled, u16)>>> = Vec::with_capacity(nc);
-    for c in classes {
-        let mut v = Vec::with_capacity(c.methods.len());
-        for m in &c.methods {
-            v.push(match &m.code {
-                None => None,
-                Some(code) => {
-                    let what = || {
-                        format!(
-                            "{}->{}",
-                            String::from_utf8_lossy(&c.name),
-                            String::from_utf8_lossy(&m.name)
-                        )
-                    };
-                    if m.ins() > code.registers {
-                        return Err(Error::assemble(format!(
-                            "{}: .registers {} is less than the {} the parameters need",
-                            what(),
-                            code.registers,
-                            m.ins()
-                        )));
-                    }
-                    Some((assemble(code, &p, &what)?, m.ins()))
-                }
-            });
-        }
-        bodies.push(v);
-    }
-    let (start, mut count) = (out.pos(), 0);
-    let mut debug_off: Vec<Vec<u32>> = Vec::with_capacity(nc);
-    for (c, body) in classes.iter().zip(&bodies) {
-        let mut v = Vec::with_capacity(c.methods.len());
-        for (m, b) in c.methods.iter().zip(body) {
-            let (Some(code), Some((a, _))) = (&m.code, b) else {
-                v.push(0);
-                continue;
-            };
-            if !code.debug {
-                v.push(0);
-                continue;
-            }
-            v.push(out.pos());
-            count += 1;
-            let first_line = a
-                .events
-                .iter()
-                .find_map(|(_, e)| {
-                    if let Item::Line(l) = e {
-                        Some(*l)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
-            let o = &mut out.buf;
-            uleb(o, first_line);
-            uleb(o, code.param_names.len() as u32);
-            code.param_names.iter().for_each(|n| uleb(o, p.p1(n)));
-            let (mut addr, mut line) = (0u32, first_line);
-            for (at, ev) in &a.events {
-                if let Item::Line(l) = ev {
-                    let mut dl = *l as i64 - line as i64;
-                    let mut da = *at - addr;
-                    if !(-4..=10).contains(&dl) {
-                        o.push(2);
-                        sleb(o, dl as i32);
-                        dl = 0;
-                    }
-                    if (dl + 4) as u32 + 15 * da + 0x0a > 0xff {
-                        o.push(1);
-                        uleb(o, da);
-                        da = 0;
-                    }
-                    o.push(((dl + 4) as u32 + 15 * da + 0x0a) as u8);
-                    (addr, line) = (*at, *l);
-                    continue;
-                }
-                if *at > addr {
-                    o.push(1);
-                    uleb(o, at - addr);
-                    addr = *at;
-                }
-                match ev {
-                    Item::Local { reg, name, ty, sig } => {
-                        o.push(if sig.is_some() { 4 } else { 3 });
-                        uleb(o, *reg as u32);
-                        uleb(o, p.p1(name));
-                        uleb(o, ty.as_ref().map_or(0, |t| p.ti[t] + 1));
-                        if sig.is_some() {
-                            uleb(o, p.p1(sig));
-                        }
-                    }
-                    Item::EndLocal(r) => {
-                        o.push(5);
-                        uleb(o, *r as u32);
-                    }
-                    Item::Restart(r) => {
-                        o.push(6);
-                        uleb(o, *r as u32);
-                    }
-                    Item::Prologue => o.push(7),
-                    Item::Epilogue => o.push(8),
-                    Item::SetFile(f) => {
-                        o.push(9);
-                        uleb(o, p.p1(f));
-                    }
-                    _ => {}
-                }
-            }
-            o.push(0);
-        }
-        debug_off.push(v);
-    }
-    out.section(0x2003, count, start);
+    let debug_at = out.pos();
+    out.buf.extend_from_slice(&debug.buf);
+    out.section(0x2003, debug_count, debug_at);
 
     out.align();
-    let (start, mut count) = (out.pos(), 0);
-    let mut code_off: Vec<Vec<u32>> = Vec::with_capacity(nc);
-    for ((c, body), dbg) in classes.iter().zip(&bodies).zip(&debug_off) {
-        let mut v = Vec::with_capacity(c.methods.len());
-        for ((m, b), &dbg) in c.methods.iter().zip(body).zip(dbg) {
-            let Some((a, ins)) = b else {
-                v.push(0);
-                continue;
-            };
-            out.align();
-            v.push(out.pos());
-            count += 1;
-            out.u16(m.code.as_ref().unwrap().registers);
-            out.u16(*ins);
-            out.u16(a.outs);
-            out.u16(a.tries.len() as u16);
-            out.u32(dbg);
-            out.u32(a.insns.len() as u32);
-            a.insns
-                .iter()
-                .for_each(|&u| out.buf.extend(u.to_le_bytes()));
-            if a.tries.is_empty() {
-                continue;
-            }
-            if a.insns.len() % 2 == 1 {
-                out.u16(0);
-            }
-            let mut list = vec![];
-            uleb(&mut list, a.handlers.len() as u32);
-            let mut hoff = vec![];
-            for h in &a.handlers {
-                hoff.push(list.len() as u16);
-                let typed: Vec<_> = h.iter().filter(|x| x.0.is_some()).collect();
-                let all = h.iter().find(|x| x.0.is_none());
-                sleb(
-                    &mut list,
-                    if all.is_some() {
-                        -(typed.len() as i32)
-                    } else {
-                        typed.len() as i32
-                    },
-                );
-                for (t, addr) in typed {
-                    uleb(&mut list, t.unwrap());
-                    uleb(&mut list, *addr);
-                }
-                if let Some((_, addr)) = all {
-                    uleb(&mut list, *addr);
-                }
-            }
-            for (s, n, k) in &a.tries {
-                out.u32(*s);
-                out.u16(*n);
-                out.u16(hoff[*k]);
-            }
-            out.buf.extend_from_slice(&list);
-        }
-        code_off.push(v);
+    let code_at = out.pos();
+    for at in debug_refs {
+        let rel = u32::from_le_bytes(code.buf[at..at + 4].try_into().unwrap());
+        code.buf[at..at + 4].copy_from_slice(&(debug_at + rel).to_le_bytes());
     }
-    out.section(0x2001, count, start);
+    out.buf.extend_from_slice(&code.buf);
+    out.section(0x2001, code_count, code_at);
 
     let (start, mut count) = (out.pos(), 0);
     let mut data_off = Vec::with_capacity(nc);
     let mut hidden: Vec<Vec<Option<u32>>> = Vec::with_capacity(nc);
-    for (c, codes) in classes.iter().zip(&code_off) {
-        if c.fields.is_empty() && c.methods.is_empty() {
+    for c in &written {
+        let [sf, inf] = &c.fields;
+        let [dm, vm] = &c.methods;
+        if sf.is_empty() && inf.is_empty() && dm.is_empty() && vm.is_empty() {
             data_off.push(0);
             hidden.push(vec![]);
             continue;
         }
-        let fid = |f: &Field| {
-            p.fi[&FieldRef {
-                class: c.name.clone(),
-                name: f.name.clone(),
-                ty: f.ty.clone(),
-            }]
-        };
-        let mid = |m: &Method| {
-            p.mi[&MethodRef {
-                class: c.name.clone(),
-                name: m.name.clone(),
-                proto: m.proto.clone(),
-            }]
-        };
-        let mut sf: Vec<(u32, u32, Option<u32>)> = c
-            .fields
-            .iter()
-            .filter(|f| f.access & ACC_STATIC != 0)
-            .map(|f| (fid(f), f.access, f.hidden))
-            .collect();
-        let mut inf: Vec<(u32, u32, Option<u32>)> = c
-            .fields
-            .iter()
-            .filter(|f| f.access & ACC_STATIC == 0)
-            .map(|f| (fid(f), f.access, f.hidden))
-            .collect();
-        let mut dm: Vec<(u32, u32, u32, Option<u32>)> = vec![];
-        let mut vm: Vec<(u32, u32, u32, Option<u32>)> = vec![];
-        for (m, &co) in c.methods.iter().zip(codes) {
-            (if m.is_direct() { &mut dm } else { &mut vm }).push((mid(m), m.access, co, m.hidden));
-        }
-        sf.sort_unstable();
-        inf.sort_unstable();
-        dm.sort_unstable();
-        vm.sort_unstable();
         data_off.push(out.pos());
         count += 1;
         // hiddenapi flags follow the members' order in class_data
-        let flags = (sf.iter().chain(&inf).map(|x| x.2)).chain(dm.iter().chain(&vm).map(|x| x.3));
+        let flags = (sf.iter().chain(inf).map(|x| x.2)).chain(dm.iter().chain(vm).map(|x| x.3));
         hidden.push(flags.collect());
         let o = &mut out.buf;
         for n in [sf.len(), inf.len(), dm.len(), vm.len()] {
             uleb(o, n as u32);
         }
-        for list in [&sf, &inf] {
+        for list in [sf, inf] {
             let mut prev = 0;
             for &(i, a, _) in list.iter() {
                 uleb(o, i - prev);
@@ -1434,18 +1506,12 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
                 prev = i;
             }
         }
-        for list in [&dm, &vm] {
+        for list in [dm, vm] {
             let mut prev = 0;
             for &(i, a, co, _) in list.iter() {
-                if i == prev && prev != 0 {
-                    return Err(Error::assemble(format!(
-                        "{}: method defined twice",
-                        String::from_utf8_lossy(&c.name)
-                    )));
-                }
                 uleb(o, i - prev);
                 uleb(o, a);
-                uleb(o, co);
+                uleb(o, co.map_or(0, |co| code_at + co));
                 prev = i;
             }
         }
@@ -1521,10 +1587,10 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         put(&mut f, *o);
     }
     for t in &p.types {
-        put(&mut f, p.si[t]);
+        put(&mut f, p.si[&src.type_str(*t)]);
     }
     for (x, &params) in p.protos.iter().zip(&proto_params) {
-        put(&mut f, p.si[&shorty(x)]);
+        put(&mut f, p.si[&x.shorty]);
         put(&mut f, p.ti[&x.ret]);
         put(&mut f, params);
     }
@@ -1538,15 +1604,15 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
         f.extend((p.pi[&x.proto] as u16).to_le_bytes());
         put(&mut f, p.si[&x.name]);
     }
-    for (i, c) in classes.iter().enumerate() {
-        put(&mut f, p.ti[&c.name]);
+    for (i, c) in written.iter().enumerate() {
+        put(&mut f, c.name);
         put(&mut f, c.access);
-        put(&mut f, c.sup.as_ref().map_or(NO_INDEX, |t| p.ti[t]));
-        put(&mut f, ifaces[i]);
-        put(&mut f, p.opt(&c.source));
+        put(&mut f, c.sup);
+        put(&mut f, c.ifaces.map_or(0, |o| lists_at + o));
+        put(&mut f, c.source);
         put(&mut f, dir_off[i]);
         put(&mut f, data_off[i]);
-        put(&mut f, static_off[i]);
+        put(&mut f, c.statics.map_or(0, |o| arrays_at + o));
     }
     for o in &site_off {
         put(&mut f, *o);
@@ -1567,26 +1633,37 @@ pub fn write(classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
     Ok(f)
 }
 
-/// Patch edited classes into `dex` in place, without rebuilding the whole file. Only works when
-/// every edit just changes instruction bytes of existing methods (same code layout, no new pool
-/// entries, no field/annotation/signature changes); returns `None` to fall back to [`write`]
-/// otherwise. Keeps peak memory near the DEX size instead of modelling every class.
-pub fn patch(dex: &[u8], edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
-    let r = read::Reader::new(dex)?;
-    let p = Pools::from_reader(&r);
+/// Patch edited classes into the source's file in place, without rebuilding it. Only works when
+/// every edit just changes instruction bytes of existing methods (same code layout, nothing the
+/// file's tables lack, no field/annotation/signature changes); returns `None` to fall back to
+/// [`write`] otherwise.
+pub fn patch(src: &Source, r: &read::Reader, edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
+    let dex = src.bytes();
+    let file = src.file_counts();
+    let p = Pools::of_file(src, r);
     let dx = crate::dex::Dex::parse(dex)?;
     let mut out = dex.to_vec();
     for &(ci, new) in edits {
-        let Ok(orig) = r.class(ci) else {
+        let Ok(orig) = r.class(src, ci) else {
             return Ok(None);
         };
         if !shell_eq(&orig, new) {
             return Ok(None); // fields/annotations/signatures changed: needs a full rebuild
         }
-        let mut col = Collect::default();
+        let mut col = Collect::new(src);
         col.class(new);
-        if !refs_present(&col, &p) {
-            return Ok(None); // edit introduces a new pool entry: needs a full rebuild
+        let tables = [
+            &col.strings,
+            &col.types,
+            &col.protos,
+            &col.fields,
+            &col.methods,
+        ];
+        let added = (tables.iter().zip(file)).any(|(used, n)| used[n..].contains(&true));
+        let known = col.handles.iter().all(|h| p.hi.contains_key(h))
+            && col.sites.iter().all(|c| p.ci.contains_key(c));
+        if added || !known {
+            return Ok(None); // edit refers to what the file's tables lack: needs a full rebuild
         }
         let cd = dx.class_data(ci)?;
         if cd.methods.len() != orig.methods.len() || new.methods.len() != orig.methods.len() {
@@ -1598,13 +1675,7 @@ pub fn patch(dex: &[u8], edits: &[(usize, &Class)]) -> R<Option<Vec<u8>>> {
                 (Some(_), Some(_)) | (None, None) => continue,
                 _ => return Ok(None), // a method gained or lost its body
             };
-            let what = || {
-                format!(
-                    "{}->{}",
-                    String::from_utf8_lossy(&new.name),
-                    String::from_utf8_lossy(&nm.name)
-                )
-            };
+            let what = || method_name(src, nm);
             let ao = assemble(oc, &p, &what)?;
             let an = assemble(nc, &p, &what)?;
             // only the instruction bytes may differ; registers/outs/tries/handlers/debug and the
@@ -1642,8 +1713,7 @@ fn shell_eq(a: &Class, b: &Class) -> bool {
         && a.fields == b.fields
         && a.methods.len() == b.methods.len()
         && a.methods.iter().zip(&b.methods).all(|(x, y)| {
-            x.name == y.name
-                && x.proto == y.proto
+            x.id == y.id
                 && x.access == y.access
                 && x.hidden == y.hidden
                 && x.annos == y.annos
@@ -1651,15 +1721,14 @@ fn shell_eq(a: &Class, b: &Class) -> bool {
         })
 }
 
-/// Every reference an edited class makes is already present in the DEX's pools.
-fn refs_present(c: &Collect, p: &Pools) -> bool {
-    c.strings.iter().all(|x| p.si.contains_key(x))
-        && c.types.iter().all(|x| p.ti.contains_key(x))
-        && c.protos.iter().all(|x| p.pi.contains_key(x))
-        && c.fields.iter().all(|x| p.fi.contains_key(x))
-        && c.methods.iter().all(|x| p.mi.contains_key(x))
-        && c.handles.iter().all(|x| p.hi.contains_key(x))
-        && c.sites.iter().all(|x| p.ci.contains_key(x))
+/// `Lclass;->name`, for an error about a method.
+fn method_name(src: &Source, m: &Method) -> String {
+    let r = src.method(m.id);
+    format!(
+        "{}->{}",
+        String::from_utf8_lossy(src.descriptor(r.class)),
+        String::from_utf8_lossy(src.str(r.name))
+    )
 }
 
 /// Recompute the header's SHA-1 signature and Adler-32 checksum.

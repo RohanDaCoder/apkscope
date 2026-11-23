@@ -1,10 +1,11 @@
-//! DEX bytes -> class model. Self-contained so the query paths stay untouched.
+//! DEX bytes -> class model: a class is read from its source's file with every reference kept
+//! as the id the file gives it. Self-contained so the query paths stay untouched.
 
 use super::model::*;
 use crate::bytecode::{self, Fmt};
 use crate::dex::{sleb128, uleb128};
 use crate::{Error, Result};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 type R<T> = Result<T>;
@@ -20,13 +21,9 @@ fn u16_at(d: &[u8], o: usize) -> R<u16> {
         .ok_or_else(|| Error::dex(format!("read past end at {o:#x}")))
 }
 
-pub struct Reader<'a> {
-    d: &'a [u8],
-    strings: Vec<S>,
-    types: Vec<S>,
-    protos: Vec<Proto>,
-    fields: Vec<FieldRef>,
-    methods: Vec<MethodRef>,
+/// What reading a class needs of its file beyond the source's tables, read once: where the
+/// class_defs are, and the method handles and call sites, which are few.
+pub struct Reader {
     handles: Vec<Handle>,
     call_sites: Vec<Arc<Vec<Value>>>,
     class_defs: usize,
@@ -35,104 +32,86 @@ pub struct Reader<'a> {
     hidden: usize,
 }
 
-/// Every class of a DEX file, in class_def order.
-pub fn read(d: &[u8]) -> R<Vec<Class>> {
-    let r = Reader::new(d)?;
-    (0..r.class_count).map(|i| r.class(i)).collect()
+/// Every class of a source's file, in class_def order.
+pub fn read(s: &Source) -> R<Vec<Class>> {
+    let r = Reader::new(s)?;
+    (0..r.class_count).map(|i| r.class(s, i)).collect()
 }
 
-impl<'a> Reader<'a> {
-    pub fn new(d: &'a [u8]) -> R<Self> {
-        if d.len() < 0x70 || &d[..4] != b"dex\n" {
-            return Err(Error::dex("not a DEX file"));
+impl Reader {
+    pub fn new(s: &Source) -> R<Self> {
+        if s.bytes().is_empty() {
+            return Ok(Reader {
+                handles: vec![],
+                call_sites: vec![],
+                class_defs: 0,
+                class_count: 0,
+                hidden: 0,
+            });
         }
-        let tab = |o: usize| -> R<(usize, usize)> {
-            Ok((u32_at(d, o)? as usize, u32_at(d, o + 4)? as usize))
-        };
-        let (ns, so) = tab(0x38)?;
-        let strings = (0..ns)
-            .map(|i| {
-                let mut o = u32_at(d, so + i * 4)? as usize;
-                uleb128(d, &mut o)?;
-                let end = d
-                    .get(o..)
-                    .and_then(|t| t.iter().position(|&b| b == 0))
-                    .ok_or_else(|| Error::dex("unterminated string"))?;
-                Ok(s(&d[o..o + end]))
-            })
-            .collect::<R<Vec<S>>>()?;
-        let st = |i: u32| {
-            strings
-                .get(i as usize)
-                .cloned()
-                .ok_or_else(|| Error::dex(format!("bad string id {i}")))
-        };
-        let (nt, to) = tab(0x40)?;
-        let types = (0..nt)
-            .map(|i| st(u32_at(d, to + i * 4)?))
-            .collect::<R<Vec<S>>>()?;
-        let ty = |i: u32| {
-            types
-                .get(i as usize)
-                .cloned()
-                .ok_or_else(|| Error::dex(format!("bad type id {i}")))
-        };
-        let (np, po) = tab(0x48)?;
-        let protos = (0..np)
-            .map(|i| {
-                let o = po + i * 12;
-                let list = u32_at(d, o + 8)? as usize;
-                let params = if list == 0 {
-                    vec![]
-                } else {
-                    (0..u32_at(d, list)? as usize)
-                        .map(|k| ty(u16_at(d, list + 4 + k * 2)? as u32))
-                        .collect::<R<_>>()?
-                };
-                Ok(Proto {
-                    ret: ty(u32_at(d, o + 4)?)?,
-                    params,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (nf, fo) = tab(0x50)?;
-        let fields = (0..nf)
-            .map(|i| {
-                let o = fo + i * 8;
-                Ok(FieldRef {
-                    class: ty(u16_at(d, o)? as u32)?,
-                    ty: ty(u16_at(d, o + 2)? as u32)?,
-                    name: st(u32_at(d, o + 4)?)?,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (nm, mo) = tab(0x58)?;
-        let methods = (0..nm)
-            .map(|i| {
-                let o = mo + i * 8;
-                let proto = protos
-                    .get(u16_at(d, o + 2)? as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad proto id"))?;
-                Ok(MethodRef {
-                    class: ty(u16_at(d, o)? as u32)?,
-                    proto,
-                    name: st(u32_at(d, o + 4)?)?,
-                })
-            })
-            .collect::<R<Vec<_>>>()?;
-        let (class_count, class_defs) = tab(0x60)?;
+        View {
+            s,
+            t: &Reader {
+                handles: vec![],
+                call_sites: vec![],
+                class_defs: 0,
+                class_count: 0,
+                hidden: 0,
+            },
+        }
+        .tables()
+    }
+
+    pub fn class_count(&self) -> usize {
+        self.class_count
+    }
+
+    /// The name of class `i`, in class_def order.
+    pub fn class_name(&self, s: &Source, i: usize) -> R<TypeId> {
+        View { s, t: self }.class_name(i)
+    }
+
+    /// Class `i` of the file, in class_def order.
+    pub fn class(&self, s: &Source, i: usize) -> R<Class> {
+        View { s, t: self }.class(i)
+    }
+
+    /// Class `i` of the file without its methods' code, for what it refers to: what the code
+    /// refers to is given to `used`, in no order, and the code is not built.
+    pub fn outline(&self, s: &Source, i: usize, used: &mut dyn FnMut(Part<'_>)) -> R<Class> {
+        View { s, t: self }.outline(i, used)
+    }
+
+    /// The file's method handles and call sites, in the order of their ids.
+    pub(super) fn handles(&self) -> (&[Handle], &[Arc<Vec<Value>>]) {
+        (&self.handles, &self.call_sites)
+    }
+}
+
+/// Something a method's code refers to.
+pub enum Part<'a> {
+    Str(StrId),
+    Type(TypeId),
+    /// An instruction, or a debug entry.
+    Item(&'a Item),
+}
+
+/// A reader with the source it reads.
+struct View<'a> {
+    s: &'a Source,
+    t: &'a Reader,
+}
+
+impl View<'_> {
+    /// The reader of this file: its class_defs, method handles and call sites.
+    fn tables(&self) -> R<Reader> {
+        let s = self.s;
+        let d = s.bytes();
         let mut r = Reader {
-            d,
-            strings,
-            types,
-            protos,
-            fields,
-            methods,
             handles: vec![],
             call_sites: vec![],
-            class_defs,
-            class_count,
+            class_count: u32_at(d, 0x60)? as usize,
+            class_defs: u32_at(d, 0x64)? as usize,
             hidden: 0,
         };
         // call sites and method handles are only listed in the map
@@ -163,43 +142,47 @@ impl<'a> Reader<'a> {
             let kind = u16_at(d, o)?;
             let id = u16_at(d, o + 4)? as usize;
             let member = if kind <= 3 {
-                Member::Field(
-                    r.fields
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad field in method handle"))?,
-                )
+                Member::Field(View { s, t: &r }.fl(id as u32)?)
             } else {
-                Member::Method(
-                    r.methods
-                        .get(id)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad method in method handle"))?,
-                )
+                Member::Method(View { s, t: &r }.me(id as u32)?)
             };
             r.handles.push(Handle { kind, member });
         }
         for i in 0..sections.0 {
             let mut o = u32_at(d, sections.1 + i * 4)? as usize;
-            let v = r.array(&mut o)?;
+            let v = View { s, t: &r }.array(&mut o)?;
             r.call_sites.push(Arc::new(v));
         }
         Ok(r)
     }
 
-    fn st(&self, i: u32) -> R<S> {
-        self.strings
-            .get(i as usize)
-            .cloned()
-            .ok_or_else(|| Error::dex(format!("bad string id {i}")))
+    fn class_name(&self, i: usize) -> R<TypeId> {
+        self.ty(u32_at(self.s.bytes(), self.t.class_defs + i * 32)?)
     }
-    fn ty(&self, i: u32) -> R<S> {
-        self.types
-            .get(i as usize)
-            .cloned()
-            .ok_or_else(|| Error::dex(format!("bad type id {i}")))
+
+    /// An id read from the file, if the file's table has it.
+    fn id<I: Id>(&self, table: usize, i: u32, what: &str) -> R<I> {
+        match (i as usize) < self.s.file_counts()[table] {
+            true => Ok(I::new(i)),
+            false => Err(Error::dex(format!("bad {what} id {i}"))),
+        }
     }
-    fn opt_st(&self, i: u32) -> R<Option<S>> {
+    fn st(&self, i: u32) -> R<StrId> {
+        self.id(0, i, "string")
+    }
+    fn ty(&self, i: u32) -> R<TypeId> {
+        self.id(1, i, "type")
+    }
+    fn pr(&self, i: u32) -> R<ProtoId> {
+        self.id(2, i, "proto")
+    }
+    fn fl(&self, i: u32) -> R<FieldId> {
+        self.id(3, i, "field")
+    }
+    fn me(&self, i: u32) -> R<MethodId> {
+        self.id(4, i, "method")
+    }
+    fn opt_st(&self, i: u32) -> R<Option<StrId>> {
         if i == u32::MAX {
             Ok(None)
         } else {
@@ -207,15 +190,15 @@ impl<'a> Reader<'a> {
         }
     }
     /// uleb128p1 string index
-    fn p1(&self, o: &mut usize) -> R<Option<S>> {
-        match uleb128(self.d, o)? {
+    fn p1(&self, o: &mut usize) -> R<Option<StrId>> {
+        match uleb128(self.s.bytes(), o)? {
             0 => Ok(None),
             v => self.st(v - 1).map(Some),
         }
     }
 
     fn array(&self, o: &mut usize) -> R<Vec<Value>> {
-        let n = uleb128(self.d, o)?;
+        let n = uleb128(self.s.bytes(), o)?;
         (0..n).map(|_| self.value(o, 0)).collect()
     }
 
@@ -223,7 +206,7 @@ impl<'a> Reader<'a> {
         if depth > 64 {
             return Err(Error::dex("encoded value nesting too deep"));
         }
-        let d = self.d;
+        let d = self.s.bytes();
         let h = *d.get(*o).ok_or_else(|| Error::dex("value past end"))?;
         *o += 1;
         let (t, arg) = (h & 0x1f, (h >> 5) as usize);
@@ -244,38 +227,19 @@ impl<'a> Reader<'a> {
             0x06 => Value::Long(sx(raw(arg + 1)?, arg + 1)),
             0x10 => Value::Float((raw(arg + 1)? << (8 * (3 - arg.min(3)))) as u32),
             0x11 => Value::Double(raw(arg + 1)? << (8 * (7 - arg.min(7)))),
-            0x15 => Value::MethodType(
-                self.protos
+            0x15 => Value::MethodType(self.pr(idx(raw(arg + 1)?))?),
+            0x16 => Value::MethodHandle(
+                self.t
+                    .handles
                     .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad proto"))?,
-            ),
-            0x16 => Value::MethodHandle(Box::new(
-                self.handles
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
+                    .copied()
                     .ok_or_else(|| Error::dex("bad method handle"))?,
-            )),
+            ),
             0x17 => Value::Str(self.st(idx(raw(arg + 1)?))?),
             0x18 => Value::Type(self.ty(idx(raw(arg + 1)?))?),
-            0x19 => Value::Field(
-                self.fields
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad field"))?,
-            ),
-            0x1a => Value::Method(
-                self.methods
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad method"))?,
-            ),
-            0x1b => Value::Enum(
-                self.fields
-                    .get(idx(raw(arg + 1)?) as usize)
-                    .cloned()
-                    .ok_or_else(|| Error::dex("bad field"))?,
-            ),
+            0x19 => Value::Field(self.fl(idx(raw(arg + 1)?))?),
+            0x1a => Value::Method(self.me(idx(raw(arg + 1)?))?),
+            0x1b => Value::Enum(self.fl(idx(raw(arg + 1)?))?),
             0x1c => {
                 let n = uleb128(d, o)?;
                 Value::Array((0..n).map(|_| self.value(o, depth + 1)).collect::<R<_>>()?)
@@ -288,11 +252,11 @@ impl<'a> Reader<'a> {
     }
 
     fn anno(&self, o: &mut usize, vis: u8, depth: u32) -> R<Anno> {
-        let ty = self.ty(uleb128(self.d, o)?)?;
-        let n = uleb128(self.d, o)?;
+        let ty = self.ty(uleb128(self.s.bytes(), o)?)?;
+        let n = uleb128(self.s.bytes(), o)?;
         let mut elems = Vec::with_capacity(n.min(64) as usize);
         for _ in 0..n {
-            let name = self.st(uleb128(self.d, o)?)?;
+            let name = self.st(uleb128(self.s.bytes(), o)?)?;
             elems.push((name, self.value(o, depth)?));
         }
         Ok(Anno { vis, ty, elems })
@@ -302,11 +266,12 @@ impl<'a> Reader<'a> {
         if off == 0 {
             return Ok(vec![]);
         }
-        (0..u32_at(self.d, off)? as usize)
+        (0..u32_at(self.s.bytes(), off)? as usize)
             .map(|k| {
-                let mut o = u32_at(self.d, off + 4 + k * 4)? as usize;
+                let mut o = u32_at(self.s.bytes(), off + 4 + k * 4)? as usize;
                 let vis = *self
-                    .d
+                    .s
+                    .bytes()
                     .get(o)
                     .ok_or_else(|| Error::dex("annotation past end"))?;
                 o += 1;
@@ -315,33 +280,26 @@ impl<'a> Reader<'a> {
             .collect()
     }
 
-    /// The DEX's id tables, already in model form and sorted order, for reusing as write pools.
-    #[allow(clippy::type_complexity)]
-    pub(super) fn pool_tables(
-        &self,
-    ) -> (
-        &[S],
-        &[S],
-        &[Proto],
-        &[FieldRef],
-        &[MethodRef],
-        &[Handle],
-        &[Arc<Vec<Value>>],
-    ) {
-        (
-            &self.strings,
-            &self.types,
-            &self.protos,
-            &self.fields,
-            &self.methods,
-            &self.handles,
-            &self.call_sites,
-        )
+    fn class(&self, i: usize) -> R<Class> {
+        self.class_with(i, &mut |co, nparams| self.code(co, nparams).map(Some))
     }
 
-    pub fn class(&self, i: usize) -> R<Class> {
-        let d = self.d;
-        let o = self.class_defs + i * 32;
+    /// Class `i` without its methods' code, what the code refers to given to `used` instead.
+    fn outline(&self, i: usize, used: &mut dyn FnMut(Part<'_>)) -> R<Class> {
+        self.class_with(i, &mut |co, nparams| {
+            self.code_refs(co, nparams, used)?;
+            Ok(None)
+        })
+    }
+
+    /// Class `i`, the code item at an offset, of a method of so many parameters, read by `code`.
+    fn class_with(
+        &self,
+        i: usize,
+        code: &mut dyn FnMut(usize, usize) -> R<Option<Code>>,
+    ) -> R<Class> {
+        let d = self.s.bytes();
+        let o = self.t.class_defs + i * 32;
         let name = self.ty(u32_at(d, o)?)?;
         let sup = match u32_at(d, o + 8)? {
             u32::MAX => None,
@@ -410,7 +368,7 @@ impl<'a> Reader<'a> {
         .into_iter();
 
         // hiddenapi flags: one uleb128 per member, in class_data order
-        let mut hid = match self.hidden {
+        let mut hid = match self.t.hidden {
             0 => 0,
             h => match u32_at(d, h + 4 + i * 4)? as usize {
                 0 => 0,
@@ -438,14 +396,9 @@ impl<'a> Reader<'a> {
                 for _ in 0..count {
                     idx += uleb128(d, &mut off)?;
                     let access = uleb128(d, &mut off)?;
-                    let f = self
-                        .fields
-                        .get(idx as usize)
-                        .ok_or_else(|| Error::dex("bad field id"))?;
                     let init = if k == 0 { statics.next() } else { None };
                     c.fields.push(Field {
-                        name: f.name.clone(),
-                        ty: f.ty.clone(),
+                        id: self.fl(idx)?,
                         access,
                         hidden: hidden()?,
                         init,
@@ -459,13 +412,10 @@ impl<'a> Reader<'a> {
                     idx += uleb128(d, &mut off)?;
                     let access = uleb128(d, &mut off)?;
                     let code_off = uleb128(d, &mut off)? as usize;
-                    let m = self
-                        .methods
-                        .get(idx as usize)
-                        .ok_or_else(|| Error::dex("bad method id"))?;
+                    let id = self.me(idx)?;
+                    let nparams = self.s.params(self.s.method(id).proto).count();
                     let mut method = Method {
-                        name: m.name.clone(),
-                        proto: m.proto.clone(),
+                        id,
                         access,
                         hidden: hidden()?,
                         code: None,
@@ -474,22 +424,14 @@ impl<'a> Reader<'a> {
                     };
                     if let Some(sets) = pa.remove(&idx) {
                         let mut sets = sets;
-                        sets.resize(method.proto.params.len().max(sets.len()), vec![]);
+                        sets.resize(nparams.max(sets.len()), vec![]);
                         if sets.iter().any(|s| !s.is_empty()) {
                             method.param_annos = Some(sets);
                         }
                     }
                     if code_off != 0 {
-                        method.code = Some(
-                            self.code(code_off, method.proto.params.len())
-                                .map_err(|e| {
-                                    e.at(format!(
-                                        "{}->{}",
-                                        String::from_utf8_lossy(&c.name),
-                                        String::from_utf8_lossy(&method.name)
-                                    ))
-                                })?,
-                        );
+                        method.code =
+                            code(code_off, nparams).map_err(|e| e.at(format!("method {idx}")))?;
                     }
                     c.methods.push(method);
                 }
@@ -498,172 +440,57 @@ impl<'a> Reader<'a> {
         Ok(c)
     }
 
-    fn code(&self, co: usize, nparams: usize) -> R<Code> {
-        let d = self.d;
-        let registers = u16_at(d, co)?;
-        let ntries = u16_at(d, co + 6)? as usize;
-        let debug_off = u32_at(d, co + 8)? as usize;
-        let units = u32_at(d, co + 12)? as usize;
-        let insns = d
-            .get(co + 16..co + 16 + units * 2)
-            .ok_or_else(|| Error::dex("code past end"))?;
-        let unit = |pc: usize| -> R<u32> {
-            insns
-                .get(pc * 2..pc * 2 + 2)
-                .map(|b| u16::from_le_bytes([b[0], b[1]]) as u32)
-                .ok_or_else(|| Error::dex(format!("payload past end at {pc:#x}")))
+    /// A decoded instruction as the model has it: its operand what the file's index of it
+    /// names, or the address it branches to.
+    fn instruction(&self, i: &bytecode::Insn) -> R<Ins> {
+        let (_, f, kind) = bytecode::info(i.op).ok_or_else(|| Error::dex("unknown opcode"))?;
+        let operand = match (f, kind) {
+            (f, _) if f.has_target() => Operand::Label((i.off as i64 + i.lit) as u32),
+            (Fmt::F45cc | Fmt::F4rcc, _) => Operand::Polymorphic(self.me(i.idx)?, self.pr(i.idx2)?),
+            (_, bytecode::Ref::String) => Operand::Str(self.st(i.idx)?),
+            (_, bytecode::Ref::Type) => Operand::Type(self.ty(i.idx)?),
+            (_, bytecode::Ref::Field) => Operand::Field(self.fl(i.idx)?),
+            (_, bytecode::Ref::Method) => Operand::Method(self.me(i.idx)?),
+            (_, bytecode::Ref::Proto) => Operand::Proto(self.pr(i.idx)?),
+            (_, bytecode::Ref::CallSite) => Operand::CallSite(
+                (self.t.call_sites.get(i.idx as usize).cloned())
+                    .ok_or_else(|| Error::dex("bad call site id"))?,
+            ),
+            (_, bytecode::Ref::MethodHandle) => Operand::Handle(
+                (self.t.handles.get(i.idx as usize).copied())
+                    .ok_or_else(|| Error::dex("bad method handle id"))?,
+            ),
+            (f, bytecode::Ref::None) if f.has_literal() => Operand::Lit(i.lit),
+            (_, bytecode::Ref::None) => Operand::None,
         };
-        let decoded = bytecode::decode(insns)?;
+        Ok(Ins {
+            op: i.op,
+            regs: i.regs,
+            n: i.nregs,
+            operand,
+        })
+    }
 
-        let mut labels = BTreeSet::new();
-        // offset -> item, merged in address order (payloads are skipped by decode)
-        let mut at: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
-        let mut payload_users: BTreeMap<u32, u32> = BTreeMap::new();
-        for i in &decoded {
-            let (_, f, kind) = bytecode::info(i.op).unwrap();
-            let mut ins = Ins {
-                op: i.op,
-                regs: i.regs,
-                n: i.nregs,
-                lit: i.lit,
-                target: 0,
-                r: Ref::None,
-                proto: None,
-            };
-            match f {
-                Fmt::F10t | Fmt::F20t | Fmt::F30t | Fmt::F21t | Fmt::F22t | Fmt::F31t => {
-                    let t = (i.off as i64 + i.lit) as u32;
-                    ins.target = t;
-                    ins.lit = 0;
-                    labels.insert(t);
-                    if f == Fmt::F31t {
-                        payload_users.insert(t, i.off);
-                    }
-                }
-                _ => {}
-            }
-            ins.r = match kind {
-                bytecode::Ref::None => Ref::None,
-                bytecode::Ref::String => Ref::Str(self.st(i.idx)?),
-                bytecode::Ref::Type => Ref::Type(self.ty(i.idx)?),
-                bytecode::Ref::Field => Ref::Field(
-                    self.fields
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad field id"))?,
-                ),
-                bytecode::Ref::Method => Ref::Method(
-                    self.methods
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad method id"))?,
-                ),
-                bytecode::Ref::Proto => Ref::Proto(
-                    self.protos
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad proto id"))?,
-                ),
-                bytecode::Ref::CallSite => Ref::CallSite(
-                    self.call_sites
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad call site id"))?,
-                ),
-                bytecode::Ref::MethodHandle => Ref::Handle(
-                    self.handles
-                        .get(i.idx as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad method handle id"))?,
-                ),
-            };
-            if matches!(f, Fmt::F45cc | Fmt::F4rcc) {
-                ins.proto = Some(
-                    self.protos
-                        .get(i.idx2 as usize)
-                        .cloned()
-                        .ok_or_else(|| Error::dex("bad proto id"))?,
-                );
-            }
-            at.entry(i.off).or_default().push(Item::Ins(ins));
-        }
-        for (&p, &user) in &payload_users {
-            let p = p as usize;
-            let item = match unit(p)? {
-                0x0100 => {
-                    let n = unit(p + 1)? as usize;
-                    let first = (unit(p + 2)? | unit(p + 3)? << 16) as i32;
-                    let targets = (0..n)
-                        .map(|k| {
-                            Ok((user as i64
-                                + (unit(p + 4 + k * 2)? | unit(p + 5 + k * 2)? << 16) as i32 as i64)
-                                as u32)
-                        })
-                        .collect::<R<Vec<_>>>()?;
-                    labels.extend(targets.iter().copied());
-                    Item::Packed { first, targets }
-                }
-                0x0200 => {
-                    let n = unit(p + 1)? as usize;
-                    let key = |k: usize| -> R<i32> {
-                        Ok((unit(p + 2 + k * 2)? | unit(p + 3 + k * 2)? << 16) as i32)
-                    };
-                    let tgt = |k: usize| -> R<u32> {
-                        Ok((user as i64
-                            + (unit(p + 2 + n * 2 + k * 2)? | unit(p + 3 + n * 2 + k * 2)? << 16)
-                                as i32 as i64) as u32)
-                    };
-                    let v = (0..n)
-                        .map(|k| Ok((key(k)?, tgt(k)?)))
-                        .collect::<R<Vec<_>>>()?;
-                    labels.extend(v.iter().map(|x| x.1));
-                    Item::Sparse(v)
-                }
-                0x0300 => {
-                    let width = unit(p + 1)? as u16;
-                    let n = (unit(p + 2)? | unit(p + 3)? << 16) as usize;
-                    let start = (p + 4) * 2;
-                    let data = insns
-                        .get(start..start + n * width as usize)
-                        .ok_or_else(|| Error::dex("array data past end"))?
-                        .to_vec();
-                    Item::Array { width, data }
-                }
-                w => return Err(Error::dex(format!("bad payload {w:#x} at {p:#x}"))),
-            };
-            at.entry(p as u32).or_default().push(item);
-            // the nop just before an aligned payload is padding; the writer re-adds it
-            if p.is_multiple_of(2)
-                && p > 0
-                && let Some(v) = at.get_mut(&(p as u32 - 1))
-                && matches!(v.as_slice(), [Item::Ins(i)] if i.op == 0)
-            {
-                at.remove(&(p as u32 - 1));
-            }
-        }
-
-        let mut tries = Vec::with_capacity(ntries);
-        for t in crate::dex::parse_tries(d, co, units)? {
-            let end = t.start + t.count;
-            labels.insert(t.start);
-            labels.insert(end);
-            let handlers = t
-                .handlers
-                .into_iter()
-                .map(|(ty, a)| {
-                    labels.insert(a);
-                    Ok((ty.map(|x| self.ty(x)).transpose()?, a))
-                })
+    /// The try blocks of the code item at `co`, each with the types it catches.
+    fn tries(&self, co: usize, units: usize) -> R<Vec<Try>> {
+        let mut tries = vec![];
+        for t in crate::dex::parse_tries(self.s.bytes(), co, units)? {
+            let handlers = (t.handlers.into_iter())
+                .map(|(ty, a)| Ok((ty.map(|x| self.ty(x)).transpose()?, a)))
                 .collect::<R<Vec<_>>>()?;
             tries.push(Try {
                 start: t.start,
-                end,
+                end: t.start + t.count,
                 handlers,
             });
         }
+        Ok(tries)
+    }
 
-        // debug events by address
-        let mut events: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
+    /// The debug info at `debug_off`, if there is any: each event with its address given to
+    /// `event`, in address order; the parameter names it has.
+    fn debug(&self, debug_off: usize, event: &mut dyn FnMut(u32, Item)) -> R<Vec<Option<StrId>>> {
+        let d = self.s.bytes();
         let mut param_names = vec![];
         if debug_off != 0 {
             let mut o = debug_off;
@@ -709,40 +536,183 @@ impl<'a> Reader<'a> {
                         Item::Line(line)
                     }
                 };
-                events.entry(addr).or_default().push(ev);
+                event(addr, ev);
             }
         }
+        Ok(param_names)
+    }
+
+    /// What the code item at `co` refers to, given to `used` in no order, without the code
+    /// being built: what [`View::code`] would keep of it, and no more.
+    fn code_refs(&self, co: usize, nparams: usize, used: &mut dyn FnMut(Part<'_>)) -> R<()> {
+        let d = self.s.bytes();
+        let debug_off = u32_at(d, co + 8)? as usize;
+        let units = u32_at(d, co + 12)? as usize;
+        let insns = d
+            .get(co + 16..co + 16 + units * 2)
+            .ok_or_else(|| Error::dex("code past end"))?;
+        for i in &bytecode::decode(insns)? {
+            used(Part::Item(&Item::Ins(self.instruction(i)?)));
+        }
+        if u16_at(d, co + 6)? != 0 {
+            let tries = self.tries(co, units)?;
+            let caught = tries.iter().flat_map(|t| &t.handlers);
+            caught.filter_map(|h| h.0).for_each(|t| used(Part::Type(t)));
+        }
+        let names = self.debug(debug_off, &mut |_, ev| used(Part::Item(&ev)))?;
+        // a name past the parameters is not kept
+        (names.iter().take(nparams).flatten()).for_each(|n| used(Part::Str(*n)));
+        Ok(())
+    }
+
+    fn code(&self, co: usize, nparams: usize) -> R<Code> {
+        let d = self.s.bytes();
+        let registers = u16_at(d, co)?;
+        let debug_off = u32_at(d, co + 8)? as usize;
+        let units = u32_at(d, co + 12)? as usize;
+        let insns = d
+            .get(co + 16..co + 16 + units * 2)
+            .ok_or_else(|| Error::dex("code past end"))?;
+        let unit = |pc: usize| -> R<u32> {
+            insns
+                .get(pc * 2..pc * 2 + 2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]) as u32)
+                .ok_or_else(|| Error::dex(format!("payload past end at {pc:#x}")))
+        };
+        let decoded = bytecode::decode(insns)?;
+
+        // Everything is gathered by address and merged once at the end. The instructions come
+        // decoded in address order and the debug events are stored in it, so only the labels
+        // and the few payloads (which decode skips) are sorted.
+        let mut labels: Vec<u32> = vec![];
+        let mut body: Vec<(u32, Item)> = Vec::with_capacity(decoded.len());
+        let mut payload_users: BTreeMap<u32, u32> = BTreeMap::new();
+        for i in &decoded {
+            let ins = self.instruction(i)?;
+            if let Operand::Label(t) = ins.operand {
+                labels.push(t);
+                if bytecode::info(i.op).is_some_and(|x| x.1 == Fmt::F31t) {
+                    payload_users.insert(t, i.off);
+                }
+            }
+            body.push((i.off, Item::Ins(ins)));
+        }
+        let mut payloads: Vec<(u32, Item)> = vec![];
+        let mut padding: Vec<u32> = vec![];
+        for (&p, &user) in &payload_users {
+            let p = p as usize;
+            let item = match unit(p)? {
+                0x0100 => {
+                    let n = unit(p + 1)? as usize;
+                    let first = (unit(p + 2)? | unit(p + 3)? << 16) as i32;
+                    let targets = (0..n)
+                        .map(|k| {
+                            Ok((user as i64
+                                + (unit(p + 4 + k * 2)? | unit(p + 5 + k * 2)? << 16) as i32 as i64)
+                                as u32)
+                        })
+                        .collect::<R<Vec<_>>>()?;
+                    labels.extend(targets.iter().copied());
+                    Item::Packed { first, targets }
+                }
+                0x0200 => {
+                    let n = unit(p + 1)? as usize;
+                    let key = |k: usize| -> R<i32> {
+                        Ok((unit(p + 2 + k * 2)? | unit(p + 3 + k * 2)? << 16) as i32)
+                    };
+                    let tgt = |k: usize| -> R<u32> {
+                        Ok((user as i64
+                            + (unit(p + 2 + n * 2 + k * 2)? | unit(p + 3 + n * 2 + k * 2)? << 16)
+                                as i32 as i64) as u32)
+                    };
+                    let v = (0..n)
+                        .map(|k| Ok((key(k)?, tgt(k)?)))
+                        .collect::<R<Vec<_>>>()?;
+                    labels.extend(v.iter().map(|x| x.1));
+                    Item::Sparse(v)
+                }
+                0x0300 => {
+                    let width = unit(p + 1)? as u16;
+                    let n = (unit(p + 2)? | unit(p + 3)? << 16) as usize;
+                    let start = (p + 4) * 2;
+                    let data = insns
+                        .get(start..start + n * width as usize)
+                        .ok_or_else(|| Error::dex("array data past end"))?
+                        .to_vec();
+                    Item::Array { width, data }
+                }
+                w => return Err(Error::dex(format!("bad payload {w:#x} at {p:#x}"))),
+            };
+            payloads.push((p as u32, item));
+            // the nop just before an aligned payload is padding; the writer re-adds it
+            if p.is_multiple_of(2) && p > 0 {
+                padding.push(p as u32 - 1);
+            }
+        }
+        if !payloads.is_empty() {
+            body.retain(|(a, item)| {
+                !(matches!(item, Item::Ins(i) if i.op == 0) && padding.contains(a))
+            });
+            body.extend(payloads);
+            body.sort_by_key(|x| x.0);
+        }
+
+        let tries = self.tries(co, units)?;
+        for t in &tries {
+            labels.extend([t.start, t.end]);
+            labels.extend(t.handlers.iter().map(|h| h.1));
+        }
+
+        // debug events by address
+        let mut events: Vec<(u32, Item)> = vec![];
+        let mut param_names = self.debug(debug_off, &mut |addr, ev| events.push((addr, ev)))?;
         // debug info with no events and no names says nothing; the text form cannot carry it
         param_names.resize(nparams, None);
         let debug =
             debug_off != 0 && (!events.is_empty() || param_names.iter().any(|n| n.is_some()));
 
-        // shrinkers leave line entries inside an instruction; Smali can only place them between
-        let starts: BTreeSet<u32> = at.keys().copied().chain([units as u32]).collect();
-        if events.keys().any(|a| !starts.contains(a)) {
-            let mut snapped: BTreeMap<u32, Vec<Item>> = BTreeMap::new();
-            for (a, ev) in std::mem::take(&mut events) {
-                let to = starts.range(a..).next().copied().unwrap_or(a);
-                snapped.entry(to).or_default().extend(ev);
+        // shrinkers leave line entries inside an instruction; Smali can only place them between:
+        // each goes to the next start of one, or the end of the code
+        let start = |a: u32| body.binary_search_by_key(&a, |x| x.0).is_ok() || a == units as u32;
+        if events.iter().any(|(a, _)| !start(*a)) {
+            for (a, _) in &mut events {
+                let next = body.get(body.partition_point(|x| x.0 < *a)).map(|x| x.0);
+                let end = (units as u32 >= *a).then_some(units as u32);
+                *a = [next, end].into_iter().flatten().min().unwrap_or(*a);
             }
-            events = snapped;
         }
+        labels.sort_unstable();
+        labels.dedup();
 
-        let mut items = Vec::with_capacity(decoded.len() + labels.len());
-        let mut keys: BTreeSet<u32> = at.keys().copied().collect();
-        keys.extend(labels.iter().copied());
-        keys.extend(events.keys().copied());
-        for k in keys {
-            if labels.contains(&k) {
-                items.push(Item::Label(k));
+        // at each address: its label, then its debug events, then what is there
+        let mut items = Vec::with_capacity(body.len() + labels.len() + events.len());
+        let (mut labels, mut events) =
+            (labels.into_iter().peekable(), events.into_iter().peekable());
+        // the labels and events up to the address `to`, or all that are left
+        let mut before = |items: &mut Vec<Item>, to: Option<u32>| {
+            loop {
+                let next = match (labels.peek(), events.peek()) {
+                    (Some(l), Some(e)) => (*l).min(e.0),
+                    (Some(l), None) => *l,
+                    (None, Some(e)) => e.0,
+                    (None, None) => break,
+                };
+                if to.is_some_and(|to| next > to) {
+                    break;
+                }
+                if labels.next_if_eq(&next).is_some() {
+                    items.push(Item::Label(next));
+                }
+                while let Some((_, ev)) = events.next_if(|x| x.0 == next) {
+                    items.push(ev);
+                }
             }
-            if let Some(ev) = events.remove(&k) {
-                items.extend(ev);
-            }
-            if let Some(v) = at.remove(&k) {
-                items.extend(v);
-            }
+        };
+        for (at, item) in body {
+            before(&mut items, Some(at));
+            items.push(item);
         }
+        before(&mut items, None);
         Ok(Code {
             registers,
             items,

@@ -485,6 +485,15 @@ pub struct Decoded {
     pub files: Vec<(String, String)>,
 }
 
+/// Where the app package of a table has its values and its file-backed resources.
+pub struct Layout {
+    /// A values file's chunks, as indices into [`Package::chunks`], by its path under res/. A
+    /// file is of one type in one configuration, so most have one chunk.
+    pub values: BTreeMap<String, Vec<usize>>,
+    /// (relative path under res/, source path inside the APK)
+    pub files: Vec<(String, String)>,
+}
+
 const PLURALS: [(u32, &str); 6] = [
     (0x01000004, "other"),
     (0x01000005, "zero"),
@@ -497,40 +506,153 @@ const PLURALS: [(u32, &str); 6] = [
 /// A configuration's entries by index: key, value.
 type Entries<'a> = BTreeMap<usize, (u32, &'a EntryValue)>;
 
+/// A type's name: `string`, or `type7` for one the package does not name.
+fn type_name(p: &Package, ty: u8) -> String {
+    p.type_name(ty)
+        .map_or_else(|| format!("type{ty}"), str::to_owned)
+}
+
+/// A string value pointing into res/ is a file resource: where the APK has the file.
+fn file_source<'a>(t: &'a Table, tname: &str, value: &EntryValue) -> Option<&'a String> {
+    let EntryValue::Simple(Value {
+        ty: Value::STRING,
+        data,
+    }) = value
+    else {
+        return None;
+    };
+    let src = t.strings.strings.get(*data as usize)?;
+    (src.starts_with("res/") && tname != "string").then_some(src)
+}
+
+/// A resource's name as XML has it, from `names`, which are the table's.
+fn entry_name(names: &Names, id: u32) -> String {
+    xml_escape(names.map.get(&id).map_or("unnamed", |(_, n)| n.as_str()))
+}
+
+/// The directory suffix of a configuration: `-night`, or nothing for the default.
+fn qualifiers(config: &[u8]) -> String {
+    match config::name(config) {
+        q if q.is_empty() => q,
+        q => format!("-{q}"),
+    }
+}
+
+/// Where the app package has its values, as `values*/` files, and its file-backed resources:
+/// what [`decode_table`] decodes, without the text of the values.
+pub fn layout(t: &Table, names: &Names) -> Layout {
+    let mut values: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut files = Vec::new();
+    let chunks = t.app().map_or(&[][..], |p| &p.chunks);
+    for (at, c) in chunks.iter().enumerate() {
+        let (Chunk::Type(ty), Some(p)) = (c, t.app()) else {
+            continue;
+        };
+        let (tname, qual) = (type_name(p, ty.id), qualifiers(&ty.config));
+        let mut valued = false;
+        for (i, e) in ty.entries.iter().enumerate() {
+            let Some(e) = e else { continue };
+            let Some(src) = file_source(t, &tname, &e.value) else {
+                valued = true;
+                continue;
+            };
+            let name = entry_name(names, p.id << 24 | (ty.id as u32) << 16 | i as u32);
+            let ext = if src.ends_with(".9.png") {
+                ".9.png"
+            } else {
+                src.rfind('.').map_or("", |k| &src[k..])
+            };
+            let path = format!("{tname}{qual}/{name}{ext}");
+            files.push(((ty.id, qual.clone(), i), (path, src.clone())));
+        }
+        if valued {
+            let path = format!("values{qual}/{}.xml", file_for(&tname));
+            values.entry(path).or_default().push(at);
+        }
+    }
+    // by type and configuration, then by entry: a path two resources share is the last one's
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Layout {
+        values,
+        files: files.into_iter().map(|(_, file)| file).collect(),
+    }
+}
+
 /// The app package's values, as `values*/` files, and its file-backed resources.
 pub fn decode_table(t: &Table, names: &Names) -> Decoded {
-    let mut values: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut files = Vec::new();
-    let Some(p) = t.app() else {
-        return Decoded {
-            values: BTreeMap::new(),
-            files,
-        };
-    };
-    let strings = &t.strings.strings;
-    let resources = resource_names(p);
-    // by type and qualifiers, then by entry: one directory per configuration
-    let mut configs: BTreeMap<(u8, String), Entries> = BTreeMap::new();
+    let layout = layout(t, names);
+    let mut values: BTreeMap<String, String> = layout
+        .values
+        .iter()
+        .map(|(path, chunks)| (path.clone(), values_file(t, names, chunks)))
+        .collect();
+    values.extend(public(t, names).map(|text| ("values/public.xml".to_owned(), text)));
+    Decoded {
+        values,
+        files: layout.files,
+    }
+}
+
+fn resources_xml(lines: &[String]) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n{}\n</resources>\n",
+        lines.join("\n")
+    )
+}
+
+/// `values/public.xml`: every resource's ID, so that a rebuild keeps them where compiled code
+/// expects them. None for a table with no resources.
+pub fn public(t: &Table, names: &Names) -> Option<String> {
+    let p = t.app()?;
+    let mut public: BTreeMap<u32, String> = BTreeMap::new();
     for c in &p.chunks {
         let Chunk::Type(ty) = c else { continue };
-        let qual = match config::name(&ty.config) {
-            q if q.is_empty() => q,
-            q => format!("-{q}"),
+        let tname = type_name(p, ty.id);
+        let there = ty.entries.iter().enumerate().filter(|(_, e)| e.is_some());
+        for (index, _) in there {
+            let id = p.id << 24 | (ty.id as u32) << 16 | index as u32;
+            public.entry(id).or_insert_with(|| {
+                let name = names.map.get(&id).map_or("unnamed", |(_, n)| n.as_str());
+                format!(
+                    "    <public type=\"{}\" name=\"{}\" id=\"0x{id:08x}\" />",
+                    xml_escape(&tname),
+                    xml_escape(name)
+                )
+            });
+        }
+    }
+    let lines: Vec<String> = public.into_values().collect();
+    (!lines.is_empty()).then(|| resources_xml(&lines))
+}
+
+/// The values file the chunks `chunks` of the app package make, which [`layout`] says: the
+/// values of a type in a configuration.
+pub fn values_file(t: &Table, names: &Names, chunks: &[usize]) -> String {
+    let mut lines: Vec<String> = vec![];
+    let Some(p) = t.app() else {
+        return resources_xml(&lines);
+    };
+    let strings = &t.strings.strings;
+    // by type, then by entry
+    let mut types: BTreeMap<u8, Entries> = BTreeMap::new();
+    for at in chunks {
+        let Some(Chunk::Type(ty)) = p.chunks.get(*at) else {
+            continue;
         };
-        let map = configs.entry((ty.id, qual)).or_default();
+        let map = types.entry(ty.id).or_default();
         for (i, e) in ty.entries.iter().enumerate() {
             if let Some(e) = e {
                 map.insert(i, (e.key, &e.value));
             }
         }
     }
-    for ((ty, qual), entries) in &configs {
-        let tname = p
-            .type_name(*ty)
-            .map_or_else(|| format!("type{ty}"), str::to_owned);
+    for (ty, entries) in &types {
+        let tname = type_name(p, *ty);
         for (index, (_, entry)) in entries {
-            let id = p.id << 24 | (*ty as u32) << 16 | *index as u32;
-            let name = xml_escape(resources.get(&id).map_or("unnamed", |(_, n)| n.as_str()));
+            if file_source(t, &tname, entry).is_some() {
+                continue;
+            }
+            let name = entry_name(names, p.id << 24 | (*ty as u32) << 16 | *index as u32);
             let fmt = |v: Value| format_value(v, strings, names);
             // a string with its spans; anything else, a reference say, as itself
             let text = |v: Value| match v.ty {
@@ -538,23 +660,6 @@ pub fn decode_table(t: &Table, names: &Names) -> Decoded {
                 _ => xml_escape(&fmt(v)),
             };
             match entry {
-                // a string value pointing into res/ is a file resource
-                EntryValue::Simple(Value {
-                    ty: Value::STRING,
-                    data: i,
-                }) if strings
-                    .get(*i as usize)
-                    .is_some_and(|p| p.starts_with("res/"))
-                    && tname != "string" =>
-                {
-                    let src = strings[*i as usize].clone();
-                    let ext = if src.ends_with(".9.png") {
-                        ".9.png"
-                    } else {
-                        src.rfind('.').map_or("", |k| &src[k..])
-                    };
-                    files.push((format!("{tname}{qual}/{name}{ext}"), src));
-                }
                 EntryValue::Simple(v) => {
                     let line = match tname.as_str() {
                         "string" => format!("    <string name=\"{name}\">{}</string>", text(*v)),
@@ -567,10 +672,7 @@ pub fn decode_table(t: &Table, names: &Names) -> Decoded {
                             text(*v)
                         ),
                     };
-                    values
-                        .entry(format!("values{qual}/{}.xml", file_for(&tname)))
-                        .or_default()
-                        .push(line);
+                    lines.push(line);
                 }
                 EntryValue::Complex { parent, map: items } => {
                     let mut s = String::new();
@@ -680,48 +782,12 @@ pub fn decode_table(t: &Table, names: &Names) -> Decoded {
                             s += "    </item>";
                         }
                     }
-                    values
-                        .entry(format!("values{qual}/{}.xml", file_for(&tname)))
-                        .or_default()
-                        .push(s);
+                    lines.push(s);
                 }
             }
         }
     }
-    // every resource's ID, so that a rebuild keeps them where compiled code expects them
-    let mut public: BTreeMap<u32, String> = BTreeMap::new();
-    for ((ty, _), entries) in &configs {
-        let tname = p
-            .type_name(*ty)
-            .map_or_else(|| format!("type{ty}"), str::to_owned);
-        for index in entries.keys() {
-            let id = p.id << 24 | (*ty as u32) << 16 | *index as u32;
-            public.entry(id).or_insert_with(|| {
-                let name = resources.get(&id).map_or("unnamed", |(_, n)| n.as_str());
-                format!(
-                    "    <public type=\"{}\" name=\"{}\" id=\"0x{id:08x}\" />",
-                    xml_escape(&tname),
-                    xml_escape(name)
-                )
-            });
-        }
-    }
-    if !public.is_empty() {
-        values.insert("values/public.xml".into(), public.into_values().collect());
-    }
-    let values = values
-        .into_iter()
-        .map(|(path, lines)| {
-            (
-                path,
-                format!(
-                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n{}\n</resources>\n",
-                    lines.join("\n")
-                ),
-            )
-        })
-        .collect();
-    Decoded { values, files }
+    resources_xml(&lines)
 }
 
 fn file_for(tname: &str) -> String {

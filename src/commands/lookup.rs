@@ -7,9 +7,9 @@ use crate::session;
 
 /// Every DEX of the APK, whole, with the deobfuscator's names when it is on.
 pub fn load_dexes(apk: &str, deobf: bool) -> Result<Vec<Dex<'static>>, String> {
-    let apk = crate::export::open(&session::prepare(apk)?)?;
+    let mut apk = crate::export::open(&session::prepare(apk)?)?;
     let raw: &'static [Vec<u8>] = Box::leak(
-        apk.dex
+        apk.dex()?
             .into_iter()
             .map(|(_, b)| b)
             .collect::<Vec<_>>()

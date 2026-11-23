@@ -165,11 +165,7 @@ fn search_urls_first_party_default() {
     return-void
 .end method
 "#;
-    let classes = [app, lib]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dex = apkscope_core::smali::assemble(&[app, lib], *b"035").unwrap();
     let dir = std::env::temp_dir().join(format!("apkscope-urls-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let apk = dir.join("fixture.apk");
@@ -252,11 +248,7 @@ fn info_native_libs_sdk_share_and_scan_crossref() {
     return-void
 .end method
 "#;
-    let classes = [app, lib]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dex = apkscope_core::smali::assemble(&[app, lib], *b"035").unwrap();
     let dir = std::env::temp_dir().join(format!("apkscope-info-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let apk = dir.join("fixture.apk");
@@ -368,11 +360,8 @@ fn search_api_reconstructs_retrofit_sheet() {
     return-void
 .end method
 "#;
-    let classes = [buildconfig, api, book, client, repo]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dex =
+        apkscope_core::smali::assemble(&[buildconfig, api, book, client, repo], *b"035").unwrap();
     let dir = std::env::temp_dir().join(format!("apkscope-api-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let apk = dir.join("fixture.apk");
@@ -490,11 +479,7 @@ fn secrets_fixture_first_party_keys() {
     return-void
 .end method
 "#;
-    let classes = [buildconfig, api, repo]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dex = apkscope_core::smali::assemble(&[buildconfig, api, repo], *b"035").unwrap();
     // a minimal APK: one DEX, no manifest, no resources
     let dir = std::env::temp_dir().join(format!("apkscope-secrets-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -625,11 +610,7 @@ fn search_config_reports_changeable_surface() {
     return v0
 .end method
 "#;
-    let classes = [buildconfig, app, other]
-        .iter()
-        .map(|s| apkscope_core::smali::text::parse(s).unwrap())
-        .collect::<Vec<_>>();
-    let dex = apkscope_core::smali::write::write(&classes, *b"035").unwrap();
+    let dex = apkscope_core::smali::assemble(&[buildconfig, app, other], *b"035").unwrap();
     let dir = std::env::temp_dir().join(format!("apkscope-config-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let apk = dir.join("fixture.apk");

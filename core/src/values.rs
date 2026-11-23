@@ -340,41 +340,46 @@ struct Resource<'a> {
     element: &'a Element,
 }
 
+/// The resource an element of a values file defines, if it defines one.
+fn resource(e: &Element) -> Result<Option<Resource<'_>>> {
+    let ty = match e.name.as_str() {
+        "string" | "bool" | "integer" | "color" | "dimen" | "fraction" | "style" | "attr"
+        | "plurals" => e.name.clone(),
+        "string-array" | "integer-array" | "array" => "array".into(),
+        "drawable" => "drawable".into(),
+        "item" => e
+            .attr("type")
+            .map(str::to_owned)
+            .ok_or_else(|| Error::xml(format!("line {}: <item> without a type", e.line)))?,
+        // what aapt2 compiles into R and not into the table, and public.xml
+        "declare-styleable" | "eat-comment" | "skip" | "public" | "public-group"
+        | "java-symbol" | "add-resource" | "overlayable" => return Ok(None),
+        other => {
+            return Err(Error::xml(format!(
+                "line {}: unknown resource element <{other}>",
+                e.line
+            )));
+        }
+    };
+    let name = e
+        .attr("name")
+        .map(str::to_owned)
+        .ok_or_else(|| Error::xml(format!("line {}: <{}> without a name", e.line, e.name)))?;
+    Ok(Some(Resource {
+        ty,
+        name,
+        element: e,
+    }))
+}
+
 /// The resources a file defines, by type and name.
 fn resources(root: &Element) -> Result<Vec<Resource<'_>>> {
-    let mut out = vec![];
-    for e in root.elements() {
-        let name = || {
-            e.attr("name")
-                .map(str::to_owned)
-                .ok_or_else(|| Error::xml(format!("line {}: <{}> without a name", e.line, e.name)))
-        };
-        let ty = match e.name.as_str() {
-            "string" | "bool" | "integer" | "color" | "dimen" | "fraction" | "style" | "attr"
-            | "plurals" => e.name.clone(),
-            "string-array" | "integer-array" | "array" => "array".into(),
-            "drawable" => "drawable".into(),
-            "item" => e
-                .attr("type")
-                .map(str::to_owned)
-                .ok_or_else(|| Error::xml(format!("line {}: <item> without a type", e.line)))?,
-            // what aapt2 compiles into R and not into the table, and public.xml
-            "declare-styleable" | "eat-comment" | "skip" | "public" | "public-group"
-            | "java-symbol" | "add-resource" | "overlayable" => continue,
-            other => {
-                return Err(Error::xml(format!(
-                    "line {}: unknown resource element <{other}>",
-                    e.line
-                )));
-            }
-        };
-        out.push(Resource {
-            ty,
-            name: name()?,
-            element: e,
-        });
-    }
-    Ok(out)
+    let defined = root.elements().map(resource);
+    Ok(defined
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 const PLURALS: [(&str, u32); 6] = [
@@ -650,6 +655,95 @@ fn file_types(file: &str) -> Vec<String> {
     }
 }
 
+/// Give the app package `app` the resource `r` in the configuration `at`, where its value was
+/// `had`; its ID, which is `public` if it is new and that is given.
+#[allow(clippy::too_many_arguments)]
+fn put(
+    t: &mut Table,
+    app: u32,
+    at: &[u8],
+    r: &Resource,
+    index: &Index,
+    names: &Names,
+    had: Option<&EntryValue>,
+    public: Option<u32>,
+    keep: bool,
+) -> Result<u32> {
+    let p = t.package(app).expect("the app package");
+    let id = index.ids.get(&(r.ty.clone(), r.name.clone())).copied();
+    // a value new to this configuration: one of its others says what it is
+    let orig = had
+        .cloned()
+        .or_else(|| id.and_then(|id| p.values(id).next().map(|(_, e)| e.value.clone())));
+    let v = value(r, orig.as_ref(), index, names, &mut t.strings, keep)?;
+    let p = t.package_mut(app).expect("the app package");
+    match (id, public) {
+        (Some(id), _) => {
+            if had != Some(&v) {
+                p.set(id, at, v)?;
+            }
+            Ok(id)
+        }
+        (None, Some(id)) => {
+            p.add_as(id, &r.ty, &r.name, at, v)?;
+            Ok(id)
+        }
+        (None, None) => p.add(&r.ty, &r.name, at, v),
+    }
+}
+
+/// What a values element holds: text, or the items of an array, each as text.
+pub enum Body<'a> {
+    Text(&'a str),
+    Items(&'a [String]),
+}
+
+/// Set the resource the values element `<kind name="name">` defines, with `body` in it, in the
+/// configuration the qualifiers `qualifiers` name (`night`, `en-rIN`, or none): what applying
+/// a values file with that element does for it, and nothing for any other resource. Whether
+/// the resource had a value there.
+pub fn set(
+    t: &mut Table,
+    kind: &str,
+    name: &str,
+    qualifiers: &str,
+    body: Body<'_>,
+    min_sdk: u16,
+) -> Result<bool> {
+    let text = |text: &str| vec![Node::Text(text.to_owned())];
+    let element = Element {
+        name: kind.to_owned(),
+        attrs: vec![("name".to_owned(), name.to_owned())],
+        children: match body {
+            Body::Text(body) => text(body),
+            Body::Items(items) => items
+                .iter()
+                .map(|item| {
+                    Node::Element(Element {
+                        name: "item".to_owned(),
+                        attrs: vec![],
+                        children: text(item),
+                        line: 0,
+                    })
+                })
+                .collect(),
+        },
+        line: 0,
+    };
+    let r =
+        resource(&element)?.ok_or_else(|| Error::xml(format!("<{kind}> defines no resource")))?;
+    let names = Names::new(t);
+    let p = t
+        .app()
+        .ok_or_else(|| Error::resources("no package to put values in"))?;
+    let (app, at) = (p.id, p.config(qualifiers, min_sdk)?);
+    let index = Index::new(p);
+    let id = index.ids.get(&(r.ty.clone(), r.name.clone()));
+    let had = id.and_then(|id| p.get(*id, &at)).map(|e| e.value.clone());
+    put(t, app, &at, &r, &index, &names, had.as_ref(), None, true)?;
+    Ok(had.is_some())
+}
+
 /// Apply `res/values*/*.xml` files, by their path under `res/` (`values-night/colors.xml`), to
 /// the app package. Each file says everything its configuration has of the types in it: a
 /// value it has is set or added, one it no longer has is removed. `values/public.xml` gives
@@ -730,31 +824,11 @@ fn apply_with(
             had
         };
         for r in &defined {
-            let p = t.package(app).expect("the app package");
-            let id = index.ids.get(&(r.ty.clone(), r.name.clone())).copied();
-            let orig = id.and_then(|id| had.get(&id)).cloned();
-            // a value new to this configuration: one of its others says what it is
-            let orig = orig
-                .or_else(|| id.and_then(|id| p.values(id).next().map(|(_, e)| e.value.clone())));
-            let v = value(r, orig.as_ref(), &index, &names, &mut t.strings, keep)
-                .map_err(|e| e.at(path))?;
-            let p = t.package_mut(app).expect("the app package");
-            let id = match id {
-                Some(id) => {
-                    if had.get(&id) != Some(&v) {
-                        p.set(id, &at, v)?;
-                    }
-                    id
-                }
-                None => match public.get(&(r.ty.clone(), r.name.clone())) {
-                    Some(&id) => {
-                        p.add_as(id, &r.ty, &r.name, &at, v)?;
-                        id
-                    }
-                    None => p.add(&r.ty, &r.name, &at, v)?,
-                },
-            };
-            seen.insert(id);
+            let id = index.ids.get(&(r.ty.clone(), r.name.clone()));
+            let had = id.and_then(|id| had.get(id));
+            let public = public.get(&(r.ty.clone(), r.name.clone())).copied();
+            let id = put(t, app, &at, r, &index, &names, had, public, keep);
+            seen.insert(id.map_err(|e| e.at(path))?);
         }
         // what the file no longer has; a file resource (a string naming a path under res/) is
         // the file's, not a values file's
