@@ -9,8 +9,15 @@
 # stable and canary releases.
 #
 # Usage:
-#   ./scripts/preview-pr.sh 53            # the latest build of PR #53
-#   ./scripts/preview-pr.sh 53 1a2b3c4    # only if that is the PR's head commit
+#   ./scripts/preview-pr.sh 53              # the latest build of PR #53
+#   ./scripts/preview-pr.sh 53 1a2b3c4      # only if that is the PR's head commit
+#   ./scripts/preview-pr.sh 53 --uninstall  # remove the preview again
+#   ./scripts/preview-pr.sh 53 --zip FILE   # install a hand-downloaded artifact zip
+#
+# --uninstall is purely local: no login, no network, no platform check. It
+# removes only apkscope-pr-<N> from APKSCOPE_INSTALL_DIR (default ~/.local/bin)
+# and never touches the real apkscope; removing a preview that is not there
+# is a no-op, so it is safe to rerun.
 #
 # Needs a GitHub login: the artifact download API requires authentication even
 # on public repos (GitHub policy). `gh` (logged in) or GITHUB_TOKEN is enough;
@@ -20,7 +27,7 @@
 #
 # Environment overrides (for forks, mirrors, custom locations):
 #   APKSCOPE_REPO=suffixing/apkscope        # GitHub owner/name to download from
-#   APKSCOPE_INSTALL_DIR=/usr/local/bin     # where to put the binary
+#   APKSCOPE_INSTALL_DIR=/usr/local/bin     # where to put (and remove) the binary
 #   APKSCOPE_PREVIEW_ZIP=/path/to/zip       # a hand-downloaded artifact zip
 #   GITHUB_TOKEN                            # a token, when gh is not installed
 set -eu
@@ -28,18 +35,13 @@ set -eu
 REPO="${APKSCOPE_REPO:-suffixing/apkscope}"
 DEST="${APKSCOPE_INSTALL_DIR:-$HOME/.local/bin}"
 API="${GITHUB_API_URL:-https://api.github.com}/repos/$REPO"
-PR="${1:-}"
-WANT_SHA="${2:-}"
-ZIP="${APKSCOPE_PREVIEW_ZIP:-}"
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
-  exit 1
+  # print the comment header (after the shebang, up to the first non-comment
+  # line) - no hardcoded line numbers to drift when the header changes
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+  exit "${1:-1}"
 }
-
-case "${1:-}" in
-  -h|--help) usage ;;
-esac
 
 # --- output helpers (same vocabulary as install.sh) ------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
@@ -61,6 +63,30 @@ step()  { printf '  %s ...\n' "$1"; }
 note()  { printf '%snote:%s %s\n' "$dim" "$reset" "$1" >&2; }
 warn()  { printf '%swarning:%s %s\n' "$yellow" "$reset" "$1" >&2; }
 die()   { printf '%serror:%s %s\n' "$red" "$reset" "$1" >&2; exit 1; }
+
+# --- arguments ---------------------------------------------------------------------
+# PR number first, optional head-commit pin second; flags may appear anywhere.
+PR=""
+WANT_SHA=""
+ZIP="${APKSCOPE_PREVIEW_ZIP:-}"
+uninstall=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --uninstall) uninstall=1 ;;
+    --zip)
+      [ $# -ge 2 ] || die "--zip needs a file argument (see --help)"
+      ZIP="$2"; shift ;;
+    --zip=*) ZIP="${1#--zip=}" ;;
+    -*) die "unknown option '$1' (see --help)" ;;
+    *)
+      if [ -z "$PR" ]; then PR="$1"
+      elif [ -z "$WANT_SHA" ]; then WANT_SHA="$1"
+      else die "unexpected extra argument '$1' (see --help)"
+      fi ;;
+  esac
+  shift
+done
 
 [ -n "$PR" ] || usage
 case "$PR" in
@@ -85,6 +111,29 @@ homepath() {
     *) printf '%s' "$1" ;;
   esac
 }
+
+# --- uninstall ---------------------------------------------------------------------
+# Purely local: runs before platform detection and before any API call, so it
+# works offline, without a login, and even on a machine that cannot run the
+# build. Only the side-by-side apkscope-pr-<N> is ever a candidate - the real
+# apkscope is never touched, and nothing else in $DEST is looked at.
+if [ "$uninstall" = 1 ]; then
+  [ -z "$WANT_SHA" ] || die "--uninstall takes no commit argument"
+  target="$DEST/apkscope-pr-$PR"
+  if [ -d "$target" ]; then
+    die "$target is a directory, not a preview binary - refusing to remove it"
+  fi
+  if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+    ok "no preview for PR #$PR in $(homepath "$DEST") - nothing to remove"
+    exit 0
+  fi
+  if ! rm -f "$target" 2>/dev/null; then
+    die "cannot remove $target (try: sudo APKSCOPE_INSTALL_DIR=$DEST ./scripts/preview-pr.sh $PR --uninstall)"
+  fi
+  ok "removed $(homepath "$DEST")/apkscope-pr-$PR"
+  note "the real apkscope install was not touched"
+  exit 0
+fi
 
 # --- detect platform ------------------------------------------------------------
 os=$(uname -s)
@@ -203,9 +252,11 @@ head_sha=$(printf '%s' "$pr_json" | json_compact | pr_head_sha)
 short_sha=$(printf '%.7s' "$head_sha")
 
 # a specific commit was requested: accept it as a full sha or a short prefix
+# (case-insensitively, like preview-pr.ps1)
 if [ -n "$WANT_SHA" ]; then
+  want_sha=$(printf '%s' "$WANT_SHA" | tr 'ABCDEF' 'abcdef')
   case "$head_sha" in
-    "$WANT_SHA"*) ;;
+    "$want_sha"*) ;;
     *) die "PR #$PR's latest build is $short_sha, not $WANT_SHA — drop the argument, or update it after pushing" ;;
   esac
 fi
@@ -321,4 +372,5 @@ esac
 printf '\n'
 "$DEST/$name" --version
 printf '\n'
-note "this preview is UNREVIEWED PR code, not a release. It replaced nothing: the real apkscope is untouched, and 'apkscope upgrade' still only offers stable and canary. Remove the preview with: rm \"$(homepath "$DEST")/$name\""
+note "this preview is UNREVIEWED PR code, not a release; the real apkscope is untouched"
+note "remove it with: ./scripts/preview-pr.sh $PR --uninstall"
