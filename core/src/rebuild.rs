@@ -115,12 +115,17 @@ pub fn rebuild(src: &str, edits: &Edits) -> Result<(Vec<u8>, usize)> {
 }
 
 /// [`rebuild`] from anything that reads and seeks, such as a `Cursor` over the APK's bytes.
-pub fn rebuild_from<R: Read + Seek>(mut src: R, edits: &Edits) -> Result<(Vec<u8>, usize)> {
-    let size = src
-        .seek(std::io::SeekFrom::End(0))
-        .map_err(zip::result::ZipError::Io)?;
-    let mut zip = zip::ZipArchive::new(src)?;
-    let mut out = Vec::with_capacity(size as usize);
+pub fn rebuild_from<R: Read + Seek>(src: R, edits: &Edits) -> Result<(Vec<u8>, usize)> {
+    archive(&mut zip::ZipArchive::new(src)?, edits)
+}
+
+/// [`rebuild`] an archive already open.
+pub fn archive<R: Read + Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    edits: &Edits,
+) -> Result<(Vec<u8>, usize)> {
+    // about what it takes when little changes: the entries, then a central directory
+    let mut out = Vec::with_capacity(zip.central_directory_start() as usize + zip.len() * 96);
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
     // a manifest without signature files beside it is a plain JAR's, not a v1 signature
