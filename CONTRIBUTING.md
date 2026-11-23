@@ -29,6 +29,13 @@ CLI, MCP server and viewer over one engine. These rules keep it fast and trustwo
    cargo test --release --no-default-features
    ```
 
+6. **Let reviewers run it.** CI publishes every PR's build as workflow artifacts. Point
+   reviewers and field testers at them: `./scripts/preview-pr.sh <PR>` (Linux/macOS) or
+   `./scripts/preview-pr.ps1 -Pr <PR>` (Windows) installs the PR's build side by side as
+   `apkscope-pr-<N>` — no Rust toolchain, no checkout, and the real install stays untouched.
+   Prefer a preview over "tested locally" claims in the PR description: it is the same binary
+   CI built, digest-checked.
+
 ## Ground rules
 
 - **Offline only.** apkscope makes no network calls during analysis. The only exception is `upgrade`.

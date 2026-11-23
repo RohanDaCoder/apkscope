@@ -256,6 +256,23 @@ with a new-enough glibc.
 
 To uninstall, run `scripts/uninstall.sh` (Linux/macOS) or `scripts/uninstall.ps1` (Windows).
 
+**Trying a pull request before it ships:** every PR's CI publishes its builds as workflow
+artifacts (see the Checks tab of the PR). To run one next to your real install:
+
+```bash
+./scripts/preview-pr.sh 53        # Linux/macOS: installs apkscope-pr-53 side by side
+```
+
+```powershell
+./scripts/preview-pr.ps1 -Pr 53   # Windows: installs apkscope-pr-53.exe side by side
+```
+
+The script verifies the SHA-256 digest GitHub reports for the artifact and never touches your
+real `apkscope`. It needs a GitHub login (`gh` logged in, or `GITHUB_TOKEN`) — artifact downloads
+are authenticated even on public repos. The preview is unreviewed PR code: the self-updater still
+only offers signed-off stable and canary releases. Delete the preview with `rm` /
+`Remove-Item` when done.
+
 **2. Give it to your agent:**
 
 ```bash
