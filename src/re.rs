@@ -1599,7 +1599,7 @@ fn eval_string(dexes: &[Dex], mref: &str, args: Vec<V>) -> Option<String> {
 
 /// Static methods that look like string decryptors: return String, take only strings, ints,
 /// longs or byte/char arrays.
-fn decryptor_shape(dx: &Dex, m: u32) -> bool {
+pub(crate) fn decryptor_shape(dx: &Dex, m: u32) -> bool {
     let Ok((_, name, proto)) = dx.method_parts(m) else {
         return false;
     };

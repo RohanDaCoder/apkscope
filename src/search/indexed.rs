@@ -31,12 +31,23 @@ const HTTP_MEMBERS: [&str; 7] = [
 
 const SECRET_NAME_RE: &str = r"(?i)api_?key|secret|token|password|passwd|client_?id|private_?key|access_?key|auth_?header|sign_?key|signing_?salt|hmac_?key|hash_?key|encryption_?key|license_?key|merchant_?id|partner_?code";
 
+/// A type descriptor or its shown name (`a.b.C`, deobfuscated) contains `core` (lowercase).
+fn type_has(desc: &str, core: &str) -> bool {
+    desc.to_ascii_lowercase().contains(core)
+        || dex::java_name(desc).to_ascii_lowercase().contains(core)
+}
+
 /// Classes that can contain a match, from the index; None = every class must be read.
 fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
     let idx = st.index.get()?;
+    let core = m.code_core.as_deref();
+    let decryptors = core
+        .map(|_| super::code_filter::decryptors(st))
+        .unwrap_or_default();
     let wants = |kind: usize| match m.scope {
         Scope::String | Scope::Urls => kind == index::STRING,
         Scope::Usages | Scope::Secrets => true,
+        Scope::Code => core.is_some(),
         Scope::Http => kind != index::STRING,
         _ => false,
     };
@@ -68,6 +79,10 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
                     for id in 0..dx.counts()[kind] {
                         let ok = match kind {
                             index::STRING => dx.string(id as u32).is_ok_and(|s| match m.scope {
+                                // as the printer writes it: escapes are words of the line too
+                                Scope::Code => core.is_some_and(|c| {
+                                    crate::ir::java_string(&s).to_ascii_lowercase().contains(c)
+                                }),
                                 Scope::String | Scope::Usages => m.query_hits(&s),
                                 _ => m.line(&format!("\"{s}\"")),
                             }),
@@ -77,16 +92,21 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
                                     m.query_hits(&dex::java_name(&t))
                                         || crate::deobf::class(&t).is_some_and(|n| m.query_hits(n))
                                 }
+                                Scope::Code => core.is_some_and(|c| type_has(&t, c)),
                                 _ => false,
                             }),
                             _ => {
+                                let mut proto = 0;
                                 let (owner, name, ty) = if kind == index::FIELD {
                                     dx.field_parts(id as u32)
                                         .map(|(c, t, n)| (c, n, t))
                                         .unwrap_or_default()
                                 } else {
                                     dx.method_parts(id as u32)
-                                        .map(|(c, n, _)| (c, n, String::new()))
+                                        .map(|(c, n, p)| {
+                                            proto = p;
+                                            (c, n, String::new())
+                                        })
                                         .unwrap_or_default()
                                 };
                                 let shown = if kind == index::FIELD {
@@ -104,6 +124,28 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
                                         m.query_hits(&name)
                                             || shown.is_some_and(|n| m.query_hits(&n))
                                     }
+                                    // the name, the owner and the types a declaration or a call
+                                    // prints; a string decryptor's call prints its plaintext too
+                                    Scope::Code => core.is_some_and(|c| {
+                                        name.to_ascii_lowercase().contains(c)
+                                            || shown
+                                                .is_some_and(|n| n.to_ascii_lowercase().contains(c))
+                                            || type_has(&owner, c)
+                                            || (kind == index::FIELD && type_has(&ty, c))
+                                            || (kind == index::METHOD
+                                                && (dx.proto_parts(proto).is_ok_and(|(r, ps)| {
+                                                    type_has(&r, c)
+                                                        || ps.iter().any(|p| type_has(p, c))
+                                                }) || (crate::re::decryptor_shape(
+                                                    dx, id as u32,
+                                                ) && dx.proto(proto).is_ok_and(|p| {
+                                                    decryptors.contains(&(
+                                                        owner.clone(),
+                                                        name.clone(),
+                                                        p,
+                                                    ))
+                                                }))))
+                                    }),
                                     _ => false,
                                 }
                             }
@@ -117,10 +159,21 @@ fn candidates(st: &State, m: &Matcher) -> Option<Vec<usize>> {
             });
         }
     });
-    for k in found.into_inner().unwrap() {
+    let mut found = found.into_inner().unwrap();
+    if let Some(c) = core {
+        found.extend(
+            super::code_filter::declared(st, c)
+                .into_iter()
+                .map(|k| k as u32),
+        );
+    }
+    for k in found {
         if let Some(h) = hit.get_mut(k as usize) {
             *h = true;
         }
+    }
+    if core.is_some() {
+        super::code_filter::add_lambda_hosts(st, &mut hit);
     }
     Some(
         hit.iter()
