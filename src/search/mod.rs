@@ -5,6 +5,7 @@
 //! build on this seam; `session` opens the APK around it.
 
 mod api;
+mod code_filter;
 mod config;
 mod indexed;
 mod secrets;
@@ -369,6 +370,8 @@ pub struct Matcher {
     pub only: Option<Vec<bool>>,
     query: Option<regex::Regex>,
     builtin: Option<regex::Regex>,
+    /// `code` with a literal query: the word every matching line holds from the DEX
+    code_core: Option<String>,
 }
 
 impl Matcher {
@@ -401,6 +404,9 @@ impl Matcher {
             only: None,
             query,
             builtin,
+            code_core: (scope == Scope::Code && !use_regex)
+                .then(|| code_filter::core(q))
+                .flatten(),
         })
     }
 

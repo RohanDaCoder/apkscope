@@ -89,6 +89,10 @@ fn class_refs(dx: &Dex, c: usize, k: u32, out: &mut [Vec<(u32, u32)>; 4]) {
         for m in &data.methods {
             out[METHOD].push((m.method_idx, k));
             let Some(code) = &m.code else { continue };
+            // a catch clause prints its exception type
+            for t in &code.tries {
+                out[TYPE].extend(t.handlers.iter().filter_map(|h| h.0).map(|ty| (ty, k)));
+            }
             for i in bytecode::decode(code.insns).unwrap_or_default() {
                 let Some((_, _, r)) = bytecode::info(i.op) else {
                     continue;
