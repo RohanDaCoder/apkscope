@@ -496,6 +496,10 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
   and use `--attach`. Script capture needs an engine that exports `evalString`, and isn't verified on
   a real game yet (an x86 emulator can't hook ARM-only engines).
 - `il2cpp` reads arm64 builds and was checked on metadata v39 (Unity 6); older versions may misparse.
+- The `http` Frida preset hooks OkHttp 3/4 by its public class names and the platform's
+  HttpURLConnection; an OkHttp renamed by R8, Cronet or a native HTTP stack are not seen (the
+  preset logs what it hooked). It is checked for syntax, not yet on a device. `frida-server` names
+  the file to fetch and pushes a file you give it; apkscope downloads nothing.
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
 - `build` signs with v2 + v3, not v1 (JAR): Android 5-6 devices refuse the result, and `build` warns
   when the app's `minSdkVersion` is below 24. Keystores: RSA keys in JKS or PKCS#12 (not JCEKS, not EC).

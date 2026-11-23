@@ -141,8 +141,10 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "top": {"type": "integer", "description": "how many biggest entries (default 25)"}}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
-        {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Takes effect at once, no restart.",
-         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string", "description": "Java class name or descriptor"}, "method": {"type": "string", "description": "method name (omit for all methods, <init> for constructors)"}}}},
+        {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Or load a built-in preset: http logs every OkHttp 3/4 request and response (method, URL, headers, bodies up to 64 KB, status) and HttpURLConnection status, as kind http in frida_events. Takes effect at once, no restart.",
+         "inputSchema": {"type": "object", "properties": {"apk_path": apk, "class": {"type": "string", "description": "Java class name or descriptor"}, "method": {"type": "string", "description": "method name (omit for all methods, <init> for constructors)"}, "preset": {"type": "string", "enum": ["http"], "description": "a built-in hook set instead of class/method"}}}},
+        {"name": "frida_setup", "description": "Check a device for Frida before frida_start: device ABIs and SDK, this machine's frida version, whether frida-server is on the device, running and the same version. Names the exact frida-server file and release URL to download (apkscope downloads nothing); with push, pushes that downloaded (unpacked) file over adb, starts it as root and checks it. Warns when an x86_64 device would need ARM translation.",
+         "inputSchema": {"type": "object", "properties": {"device": {"type": "string", "description": "adb serial (default: the only device)"}, "push": {"type": "string", "description": "path of an unpacked frida-server file to push and start"}}}},
         {"name": "frida_script", "description": "Load your own Frida JavaScript into the live session under a name (same name replaces it). Wrap Java code in Java.perform; call __ev(kind, name, value) to report events that frida_events shows; console.log lines show as kind log.",
          "inputSchema": {"type": "object", "required": ["name", "js"], "properties": {"name": {"type": "string"}, "js": {"type": "string"}}}},
         {"name": "frida_unhook", "description": "Remove a hook or script: a class (all its methods), Class#method, a script name, or * for everything.",
@@ -688,6 +690,10 @@ fn call(
 
 /// The frida_* tools, on the one live session.
 fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, bool), String> {
+    if name == "frida_setup" {
+        let out = crate::frida_setup::setup(s(a, "device").as_deref(), s(a, "push").as_deref())?;
+        return Ok((out, true));
+    }
     if name == "frida_start" {
         *live = None;
         let target = match (s(a, "package"), s(a, "apk_path")) {
@@ -709,8 +715,21 @@ fn live_call(live: &mut Option<Live>, name: &str, a: &Value) -> Result<(String, 
         return Err(format!("frida has exited:\n{}", l.text(0, "", 30).0));
     }
     match name {
+        "frida_hook" if s(a, "preset").is_some() => {
+            let p = s(a, "preset").unwrap_or_default();
+            let js =
+                crate::live::preset(&p).ok_or_else(|| format!("no preset {p}; presets: http"))?;
+            l.hook(&p, js, true)?;
+            Ok((
+                format!(
+                    "loaded preset {p}; its events have kind http (frida_events filter: http); active: {}",
+                    l.hook_keys().join(", ")
+                ),
+                true,
+            ))
+        }
         "frida_hook" => {
-            let class = s(a, "class").ok_or("class is required")?;
+            let class = s(a, "class").ok_or("class (or preset) is required")?;
             let method = s(a, "method");
             let mut args = vec![
                 "frida".into(),

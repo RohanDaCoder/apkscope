@@ -40,6 +40,8 @@ an MCP tool (`apkscope mcp`, see the README) and has examples under `apkscope <c
 | Which layout uses an id | `search app.apk res "@id/login_button"` (file:line) |
 | Read a resource | `resource app.apk res/layout/main.xml` |
 | What changed between versions / did my patch land | `diff old.apk new.apk --strings` |
+| Get Frida working on a device | `frida-server` (MCP `frida_setup`): names the exact frida-server file to download, `--push FILE` pushes, starts and checks it |
+| See the app's HTTP traffic live | MCP `frida_start`, then `frida_hook preset=http`, then `frida_events filter=http`; CLI: `frida --preset http > http.js` |
 
 ## Patching and rebuilding
 

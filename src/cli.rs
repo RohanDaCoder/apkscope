@@ -387,6 +387,9 @@ pub enum Cmd {
     /// Frida hook script
     #[command(name = "frida", after_help = crate::examples::FRIDA)]
     Frida(FridaArgs),
+    /// check the device for Frida: which frida-server file it needs, push and start one
+    #[command(name = "frida-server", after_help = crate::examples::FRIDA_SERVER)]
+    FridaServer(FridaServerArgs),
     /// run under Frida, save unpacked DEX and decrypted scripts
     #[command(name = "dump")]
     Dump(DumpArgs),
@@ -594,11 +597,26 @@ pub struct CallgraphArgs {
 
 #[derive(Args)]
 pub struct FridaArgs {
-    pub apk: String,
-    pub class: String,
+    #[arg(required_unless_present = "preset")]
+    pub apk: Option<String>,
+    #[arg(required_unless_present = "preset")]
+    pub class: Option<String>,
     pub member: Option<String>,
     #[arg(long = "live")]
     pub live: bool,
+    /// a built-in hook set instead of one method: http (OkHttp + HttpURLConnection traffic)
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["apk", "class", "member"])]
+    pub preset: Option<String>,
+}
+
+#[derive(Args)]
+pub struct FridaServerArgs {
+    /// adb device serial (default: the only device)
+    #[arg(long = "device", short = 'D', value_name = "ID")]
+    pub device: Option<String>,
+    /// push this frida-server file (unpacked) to the device, start it and check it
+    #[arg(long, value_name = "FILE")]
+    pub push: Option<String>,
 }
 
 #[derive(Args)]

@@ -42,11 +42,28 @@ pub fn access(a: &ReconArgs) -> Result<(), String> {
 }
 
 pub fn frida(a: &FridaArgs) -> Result<(), String> {
-    let st = cli::load(&a.apk, false)?;
-    cli::emit(&re::frida(
-        &st.dexes,
-        &a.class,
-        a.member.as_deref(),
-        a.live,
+    if let Some(p) = &a.preset {
+        let js = crate::live::preset(p).ok_or_else(|| {
+            let names: Vec<&str> = crate::live::PRESETS.iter().map(|p| p.0).collect();
+            format!("no preset {p}; presets: {}", names.join(", "))
+        })?;
+        // --live: the body for a live session; otherwise a script frida -l runs on its own
+        return cli::emit(&if a.live {
+            js.to_string()
+        } else {
+            crate::live::standalone(js)
+        });
+    }
+    let (Some(apk), Some(class)) = (&a.apk, &a.class) else {
+        return Err("pass <apk> <Class> [method], or --preset NAME".into());
+    };
+    let st = cli::load(apk, false)?;
+    cli::emit(&re::frida(&st.dexes, class, a.member.as_deref(), a.live)?)
+}
+
+pub fn frida_server(a: &crate::cli::FridaServerArgs) -> Result<(), String> {
+    cli::emit(&crate::frida_setup::setup(
+        a.device.as_deref(),
+        a.push.as_deref(),
     )?)
 }
