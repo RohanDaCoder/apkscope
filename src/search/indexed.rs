@@ -367,7 +367,12 @@ fn scan(st: &State, m: &Matcher, list: &[usize], prog: &Progress) -> Vec<Hit> {
             .then(|| cache::Writer::create(&st.cache_dir, st.classes.len()))
             .flatten();
     let next = AtomicUsize::new(0);
+    // Hits are tagged with their position in `list`. Work is claimed in list order and every
+    // claimed class is read to the end, so the classes read are always a prefix of `list`;
+    // stopping on the shared count and keeping the first LIMIT by position gives the same hits
+    // on every run, however the threads were scheduled.
     let found = Mutex::new(Vec::new());
+    let count = AtomicUsize::new(0);
     let full = AtomicBool::new(false);
     std::thread::scope(|s| {
         for _ in 0..threads() {
@@ -390,17 +395,19 @@ fn scan(st: &State, m: &Matcher, list: &[usize], prog: &Progress) -> Vec<Hit> {
                             if let Some(w) = &writer {
                                 w.put(k, &text);
                             }
+                            let before = mine.len();
                             for (ln, l) in text.lines().enumerate() {
                                 if m.line(l) {
                                     mine.push((
-                                        st.classes[k].0.clone(),
-                                        ln + 1,
-                                        l.trim().to_string(),
+                                        n,
+                                        (st.classes[k].0.clone(), ln + 1, l.trim().to_string()),
                                     ));
                                 }
                             }
+                            let total = count.fetch_add(mine.len() - before, Ordering::Relaxed)
+                                + (mine.len() - before);
                             // keep scanning to finish the cache, but stop collecting
-                            if mine.len() >= LIMIT && writer.is_none() {
+                            if total >= LIMIT && writer.is_none() {
                                 full.store(true, Ordering::Relaxed);
                             }
                         }
@@ -417,7 +424,14 @@ fn scan(st: &State, m: &Matcher, list: &[usize], prog: &Progress) -> Vec<Hit> {
     {
         *st.cache.write().unwrap() = Some(Arc::new(r));
     }
-    let mut v = found.into_inner().unwrap();
+    let mut v: Vec<(usize, Hit)> = found.into_inner().unwrap();
+    v.sort_unstable_by_key(|h| (h.0, h.1.1));
+    // a scan that stopped early read a prefix that may hold more than LIMIT; one that read
+    // everything is already the same on every run
+    if full.load(Ordering::Relaxed) {
+        v.truncate(LIMIT);
+    }
+    let mut v: Vec<Hit> = v.into_iter().map(|h| h.1).collect();
     v.sort();
     v
 }

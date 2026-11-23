@@ -174,8 +174,26 @@ pub const INPUTS: [&str; 6] = ["apk", "jar", "apks", "xapk", "apkm", "dex"];
 /// Turn any supported input into an APK path: a `.jar` of DEX files (Android's framework JARs)
 /// reads as one, split bundles (`.apks`, `.xapk`, `.apkm`) give their `base.apk`, a bare `.dex`
 /// is wrapped in a minimal APK. Both land in the cache folder.
+/// Write `out` through `fill` into `out.part`, and move it over `out` only when it is whole: a
+/// copy cut off by a crash or a kill is never taken for a finished one on the next run.
+fn write_whole(
+    out: &std::path::Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let mut part = out.as_os_str().to_owned();
+    part.push(".part");
+    let part = std::path::PathBuf::from(part);
+    let done = std::fs::File::create(&part)
+        .and_then(|mut f| fill(&mut f).and_then(|()| f.sync_all()))
+        .and_then(|()| std::fs::rename(&part, out));
+    done.map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        format!("{}: {e}", out.display())
+    })
+}
+
 pub fn prepare(path: &str) -> Result<String, String> {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let ext = std::path::Path::new(path)
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -209,15 +227,22 @@ pub fn prepare(path: &str) -> Result<String, String> {
                 });
             let base = base.ok_or("no APK inside this bundle")?;
             let size = zip.by_name(&base).map_err(|e| e.to_string())?.size();
-            let out = dir.join(format!("{stem}-{size:x}-base.apk"));
+            // the bundle's own size and date are in the name, so two bundles that share a file
+            // name and a base size never share a copy
+            let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs());
+            let out = dir.join(format!(
+                "{stem}-{:x}-{mtime:x}-{size:x}-base.apk",
+                meta.len()
+            ));
             if !out.exists() {
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let mut data = Vec::new();
-                zip.by_name(&base)
-                    .map_err(|e| e.to_string())?
-                    .read_to_end(&mut data)
-                    .map_err(|e| e.to_string())?;
-                std::fs::write(&out, data).map_err(|e| e.to_string())?;
+                let mut entry = zip.by_name(&base).map_err(|e| e.to_string())?;
+                write_whole(&out, |f| std::io::copy(&mut entry, f).map(|_| ()))?;
             }
             Ok(out.display().to_string())
         }
@@ -226,14 +251,15 @@ pub fn prepare(path: &str) -> Result<String, String> {
             Dex::parse(&data).map_err(|e| format!("{path}: {e}"))?;
             let out = dir.join(format!("{stem}-{:x}.apk", data.len()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let mut w =
-                zip::ZipWriter::new(std::fs::File::create(&out).map_err(|e| e.to_string())?);
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            w.start_file("classes.dex", opts)
-                .map_err(|e| e.to_string())?;
-            w.write_all(&data).map_err(|e| e.to_string())?;
-            w.finish().map_err(|e| e.to_string())?;
+            write_whole(&out, |f| {
+                let mut w = zip::ZipWriter::new(f);
+                let opts = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+                w.start_file("classes.dex", opts)?;
+                w.write_all(&data)?;
+                w.finish()?;
+                Ok(())
+            })?;
             Ok(out.display().to_string())
         }
         _ => Err(format!(
@@ -564,3 +590,7 @@ pub fn smali(dx: &Dex, c: usize) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "../../tests/apkscope/search.rs"]
+mod tests;
