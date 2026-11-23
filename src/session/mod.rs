@@ -60,7 +60,7 @@ pub struct State {
     /// res path -> path inside the APK, decoded on demand
     pub files: BTreeMap<String, String>,
     names: Option<res::Names>,
-    apk: Mutex<Apk>,
+    pub(crate) apk: Mutex<Apk>,
     /// every zip entry name, for the overview
     pub entries: Vec<String>,
     pub package: String,

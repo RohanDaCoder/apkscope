@@ -210,11 +210,10 @@ pub fn overview(st: &State) -> String {
             None => writeln!(o, "{l}"),
         };
     }
-    let assets = st
-        .entries
-        .iter()
-        .filter(|e| e.starts_with("assets/"))
-        .count();
-    let _ = writeln!(o, "\n// assets: {assets} files");
+    let _ = writeln!(
+        o,
+        "\n// {}",
+        crate::assets::summary(st).unwrap_or_else(|| "assets: none".into())
+    );
     o
 }

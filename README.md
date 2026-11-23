@@ -499,6 +499,9 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
 - `build` signs with v2 + v3, not v1 (JAR): Android 5-6 devices refuse the result, and `build` warns
   when the app's `minSdkVersion` is below 24. Keystores: RSA keys in JKS or PKCS#12 (not JCEKS, not EC).
+- Assets: text files and a Hermes bundle's string table are searched; Hermes bytecode itself is not
+  disassembled, and archives inside assets (Firefox's `omni.ja`) are not opened. The Hermes reader
+  is checked on bundles built for its tests, not yet on a real React Native app.
 - `--res` with an apktool or APKEditor folder was checked on folders laid out like theirs, not on
   their own output; Retrofit's parameter names in obfuscated apps are mapped for standard Retrofit
   (forks like TikTok's show endpoints with unnamed parameters).

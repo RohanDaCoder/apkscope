@@ -199,6 +199,10 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
             );
         }
     }
+    // assets: text files, and the string table of a Hermes (React Native) bundle
+    if matches!(m.scope, Scope::Urls | Scope::Secrets | Scope::String) {
+        hits.extend(crate::assets::hits(st, m, prog));
+    }
     // endpoints and keys are often kept in native code; one ABI is enough, the others repeat it
     if matches!(m.scope, Scope::Urls | Scope::Secrets) {
         let libs = st.native_libs();
@@ -269,6 +273,8 @@ fn hit_kind(st: &State, t: &str) -> (&'static str, u8) {
         }
     } else if t.starts_with("lib/") {
         ("native", 1)
+    } else if crate::assets::is_asset(t) {
+        ("assets", 1)
     } else {
         ("resources", 1)
     }

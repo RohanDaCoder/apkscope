@@ -352,7 +352,7 @@ impl Scope {
                 "Searches decompiled Java. Names are shown after deobfuscation, so search for what you see in the viewer."
             }
             Scope::String => {
-                "Matches string literals as stored in the app. Strings built at runtime, encrypted or loaded from native code won't appear."
+                "Matches string literals as stored in the app: DEX strings, text files in assets/ and res/raw, and the string table of a Hermes (React Native) bundle. Strings built at runtime, encrypted or loaded from native code won't appear."
             }
             Scope::Usages => {
                 "Finds classes that reference a method, field, class or string with this name, then the lines that mention it. Calls made via reflection, JNI or dynamic loading are not visible."
@@ -362,7 +362,7 @@ impl Scope {
                 "Searches decoded XML resources and the manifest, plus resource file names."
             }
             Scope::Urls => {
-                "Heuristic: finds URL-like string literals. Endpoints built at runtime, encrypted, downloaded from a config, or kept in native libraries won't be found, and some hits are documentation or ad URLs. App code only by default; --all includes library code."
+                "Heuristic: finds URL-like string literals in code, resources, native libraries (one ABI), text files in assets/ and res/raw, and Hermes (React Native) bundles. Endpoints built at runtime, encrypted or downloaded from a config won't be found, nor those inside nested archives (an asset that is itself a zip), and some hits are documentation or ad URLs. App code only by default; --all includes library code."
             }
             Scope::Http => {
                 "Heuristic: finds common networking APIs (Retrofit, OkHttp, HttpURLConnection). Apps using other libraries, their own wrappers, native code or obfuscated networking may not show up, and library code shows up too. App code only by default; --all includes library code."
@@ -430,7 +430,17 @@ impl Matcher {
         })
     }
 
-    fn query_hits(&self, s: &str) -> bool {
+    /// Byte offset of the query's first match in `s` (the scope's own pattern when there is no
+    /// query).
+    pub(crate) fn first_match(&self, s: &str) -> Option<usize> {
+        self.query
+            .as_ref()
+            .or(self.builtin.as_ref())
+            .and_then(|r| r.find(s))
+            .map(|m| m.start())
+    }
+
+    pub(crate) fn query_hits(&self, s: &str) -> bool {
         self.query.as_ref().is_none_or(|q| q.is_match(s))
     }
 
