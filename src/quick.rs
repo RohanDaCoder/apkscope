@@ -9,14 +9,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::bytecode::{self, Ref};
 use crate::dex::{self, Dex};
-use crate::{java, session};
+use crate::{java, search};
 
 /// Run `f(0..n)` on all cores, results in index order.
 pub fn par<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
     let next = AtomicUsize::new(0);
     let out: Mutex<Vec<Option<T>>> = Mutex::new((0..n).map(|_| None).collect());
     std::thread::scope(|s| {
-        for _ in 0..session::threads().min(n).max(1) {
+        for _ in 0..search::threads().min(n).max(1) {
             let _ = std::thread::Builder::new()
                 .stack_size(64 << 20)
                 .spawn_scoped(s, || {
@@ -52,7 +52,7 @@ fn par_sink<T: Send>(
         Mutex::new((0..n).map(|_| None).collect());
     let ready = std::sync::Condvar::new();
     std::thread::scope(|s| {
-        for _ in 0..session::threads().min(n).max(1) {
+        for _ in 0..search::threads().min(n).max(1) {
             let _ = std::thread::Builder::new()
                 .stack_size(64 << 20)
                 .spawn_scoped(s, || {
@@ -317,7 +317,7 @@ pub fn scan_each<T: Send>(
 ) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
     let mut sink = sink;
-    let real = session::prepare(path)?;
+    let real = search::prepare(path)?;
     let mut file = std::fs::File::open(&real).map_err(|e| format!("{path}: {e}"))?;
     // root-level classes*.dex only
     let dex = |n: &[u8]| n.starts_with(b"classes") && n.ends_with(b".dex") && !n.contains(&b'/');
@@ -329,7 +329,7 @@ pub fn scan_each<T: Send>(
             .parse::<u32>()
             .unwrap_or(1)
     });
-    let prefix_pays = entries.len() > session::threads();
+    let prefix_pays = entries.len() > search::threads();
     let mut order: Vec<usize> = (0..entries.len()).collect();
     if !stream {
         // biggest files start first, so no thread is left with a big one at the end
@@ -391,7 +391,7 @@ pub fn scan_each<T: Send>(
 /// One file out of an APK, without indexing the whole archive (big apps have 10k+ entries).
 pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
     use std::io::{Seek, SeekFrom};
-    let mut f = std::fs::File::open(session::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
+    let mut f = std::fs::File::open(search::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
     let Some((_, local, csize, size, method)) = central_dir(&mut f, &|n| n == want.as_bytes())?
         .into_iter()
         .next()
@@ -427,7 +427,7 @@ pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
 
 /// Native `lib/<abi>/*.so` entries of an APK: (name, uncompressed size), sorted by name.
 fn so_entries(path: &str) -> Result<Vec<(String, usize)>, String> {
-    let mut f = std::fs::File::open(session::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
+    let mut f = std::fs::File::open(search::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
     let mut v: Vec<(String, usize)> =
         central_dir(&mut f, &|n| n.starts_with(b"lib/") && n.ends_with(b".so"))?
             .into_iter()
@@ -516,7 +516,7 @@ pub fn flutter(
             format!(
                 "  {n}  ({} KB){}",
                 s / 1024,
-                session::native_lib_meaning(n).map_or_else(String::new, |m| format!("  — {m}"))
+                search::native_lib_meaning(n).map_or_else(String::new, |m| format!("  — {m}"))
             )
         }));
     };
@@ -717,7 +717,7 @@ pub fn package(path: &str) -> String {
         .ok()
         .flatten()
         .and_then(|m| crate::res::decode_xml(&m, None).ok())
-        .and_then(|t| session::attr(&t, "package"))
+        .and_then(|t| search::attr(&t, "package"))
         .unwrap_or_default()
 }
 
@@ -761,7 +761,7 @@ pub fn classes_each(
                         || d[1..d.len().saturating_sub(1).max(1)]
                             .replace('/', ".")
                             .starts_with(prefix))
-                        && (!app_only || session::origin(&j, &pkg) != session::Origin::Library);
+                        && (!app_only || search::origin(&j, &pkg) != search::Origin::Library);
                     keep.then_some(if raw { d } else { j })
                 })
                 .collect::<Vec<_>>())
@@ -939,7 +939,7 @@ fn static_strings(path: &str) -> Result<std::collections::BTreeMap<String, Strin
     let mut out = std::collections::BTreeMap::new();
     for (_, buf) in &lists {
         if let Ok(dx) = Dex::parse(buf) {
-            for c in session::string_constants(&[dx]) {
+            for c in search::string_constants(&[dx]) {
                 out.insert(format!("{}#{}", c.class, c.field), c.value);
             }
         }
@@ -1018,7 +1018,7 @@ fn bounded_edit_distance(a: &str, b: &str, limit: usize) -> usize {
 fn permissions(xml: &str) -> Vec<String> {
     xml.split("<uses-permission")
         .skip(1)
-        .filter_map(|e| session::attr(e.split('<').next()?, "android:name"))
+        .filter_map(|e| search::attr(e.split('<').next()?, "android:name"))
         .collect()
 }
 
@@ -1508,7 +1508,7 @@ pub fn decompile(
     Ok(par(names.len(), |k| {
         let text = match spots[k] {
             None => Err(format!("class {} not found", names[k])),
-            Some((x, c)) if smali => Ok(session::smali(&dexes[x], c)),
+            Some((x, c)) if smali => Ok(search::smali(&dexes[x], c)),
             Some((x, c)) => java::class(&dexes[x], c),
         };
         (names[k].clone(), text)

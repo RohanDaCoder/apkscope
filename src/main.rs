@@ -35,6 +35,7 @@ mod quick;
 mod re;
 mod res_search;
 mod retrofit_map;
+mod search;
 mod session;
 mod upgrade;
 
