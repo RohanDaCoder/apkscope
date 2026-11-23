@@ -419,9 +419,10 @@ use apkscope_core::{apksign, rebuild, smali};
 let class = smali::export_class("app.apk", "com.example.Api")?;
 let mut edits = rebuild::Edits::new();
 smali::inject("app.apk", &[class.replace("const/4 v0, 0x0", "const/4 v0, 0x1")], &mut edits)?;
-let (apk, central_dir) = rebuild::rebuild("app.apk", &edits)?;
 let key = apksign::load("key.pk8".as_ref(), "cert.crt".as_ref())?;
-std::fs::write("out.apk", apksign::sign(apk, central_dir, &key)?)?;
+let mut out = std::fs::File::options().read(true).write(true).create(true).open("out.apk")?;
+rebuild::rebuild("app.apk", &edits, std::io::BufWriter::new(&mut out))?;
+apksign::sign(&mut out, &key)?;                            // signed where it is
 ```
 
 The same works on an APK that is already in memory, or anything else that reads and seeks:
@@ -436,12 +437,14 @@ let mut apk = Apk::new(Cursor::new(&bytes))?;
 let class = smali::export_class_from(&mut apk, "com.example.Api")?;
 let mut edits = rebuild::Edits::new();
 smali::inject_into(&mut apk, &[class.replace("const/4 v0, 0x0", "const/4 v0, 0x1")], &mut edits)?;
-let (unsigned, _) = rebuild::rebuild_from(Cursor::new(&bytes), &edits)?;
+let mut unsigned = Vec::new();
+rebuild::rebuild_from(Cursor::new(&bytes), &edits, &mut unsigned)?;
 ```
 
 An open APK is also where its edits are kept. Opening one reads the list of its entries; a file,
 the DEX files and the resource table are read when an edit asks for them, and `rebuild` writes
-again only what changed. A value is set in the resource table, a file is read and put as
+again only what changed, into anything that writes: the rest goes from the old file to the new
+as it is read, so the APK is never whole in memory. A value is set in the resource table, a file is read and put as
 `apkscope res` lays it out (binary XML as text), and classes are edited through `classes()`:
 
 ```rust
@@ -453,7 +456,7 @@ let layout = String::from_utf8(apk.file("res/layout/main.xml")?.unwrap())?;
 apk.put("res/layout/main.xml", layout.replace("Old", "New").into_bytes())?;
 apk.remove("assets/unused.bin")?;
 apk.classes()?.set_text(&smali)?;                              // a class, from its Smali
-let (unsigned, central_dir) = apk.rebuild()?;
+apk.rebuild(std::fs::File::create("out.apk")?)?;               // unsigned: apksign::sign signs it
 ```
 
 A whole tree of resources, as `apkscope res` writes it, goes back the same way:
@@ -466,7 +469,7 @@ let mut files = resources::decode(&mut apk)?;     // "res/values/strings.xml" ->
 let strings = String::from_utf8(files["res/values/strings.xml"].clone())?;
 files.insert("res/values/strings.xml".into(), strings.replace(">Old<", ">New<").into_bytes());
 let edits = resources::edits(&mut apk, &files, false)?;  // only resources.arsc changes
-let (unsigned, _) = rebuild::rebuild("app.apk", &edits)?;
+rebuild::rebuild("app.apk", &edits, std::fs::File::create("out.apk")?)?;
 ```
 
 Underneath are `table` (`resources.arsc` as a model you can change: `find`, `set`, `add`, `remove`),

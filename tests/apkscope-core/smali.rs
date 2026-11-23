@@ -338,7 +338,8 @@ fn edits_an_apk_in_memory() {
     let mut edits = crate::rebuild::Edits::new();
     let changed = inject_into(&mut open, &[edited], &mut edits).unwrap();
     assert_eq!(changed, ["classes.dex"]);
-    let (out, _) = crate::rebuild::rebuild_from(Cursor::new(&apk), &edits).unwrap();
+    let mut out = Vec::new();
+    crate::rebuild::rebuild_from(Cursor::new(&apk), &edits, &mut out).unwrap();
 
     let mut rebuilt = Apk::new(Cursor::new(out)).unwrap();
     assert_eq!(rebuilt.dex().unwrap().len(), 1);

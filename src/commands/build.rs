@@ -136,15 +136,9 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
             changed.join(", ")
         );
     }
-    let (apk, cd) = rebuild::rebuild(&src, &edits)?;
-    let signed = match &key {
-        Some(key) => apksign::sign(apk, cd, key)?,
-        None => apk,
-    };
-    std::fs::write(output, &signed).map_err(|e| format!("{output}: {e}"))?;
+    let size = export::write_apk(&src, &edits, std::path::Path::new(output), key.as_ref())?;
     crate::note!(
-        "wrote {output} ({} bytes, {} edits) in {:.1}s",
-        signed.len(),
+        "wrote {output} ({size} bytes, {} edits) in {:.1}s",
         edits.len(),
         t.elapsed().as_secs_f64()
     );

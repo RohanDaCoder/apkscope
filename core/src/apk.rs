@@ -11,7 +11,7 @@ use crate::resources::Resources;
 use crate::smali::Classes;
 use crate::{Error, Result, rebuild};
 use std::fs;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write};
 
 pub struct Apk<R = fs::File> {
     pub zip: zip::ZipArchive<R>,
@@ -107,10 +107,10 @@ impl<R: Read + Seek> Apk<R> {
         Ok(&self.entries)
     }
 
-    /// The APK as the edits left it, unsigned, and its central directory offset (where a
-    /// signing block goes): [`rebuild::archive`] with [`Apk::edits`].
-    pub fn rebuild(&mut self) -> Result<(Vec<u8>, usize)> {
+    /// Write the APK as the edits left it into `out`, unsigned: [`rebuild::archive`] with
+    /// [`Apk::edits`]. How many bytes that wrote.
+    pub fn rebuild<W: Write>(&mut self, out: W) -> Result<u64> {
         self.edits()?;
-        rebuild::archive(&mut self.zip, &self.entries)
+        rebuild::archive(&mut self.zip, &self.entries, out)
     }
 }

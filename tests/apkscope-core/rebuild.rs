@@ -30,7 +30,8 @@ fn edits_alignment_and_old_signatures() {
     edits.insert("assets/new.bin".into(), Some(vec![7; 10]));
     edits.insert("classes.dex".into(), Some(vec![1; 300]));
     edits.insert("AndroidManifest.xml".into(), None);
-    let (bytes, cd) = rebuild(src.to_str().unwrap(), &edits).unwrap();
+    let mut bytes = Vec::new();
+    rebuild(src.to_str().unwrap(), &edits, &mut bytes).unwrap();
     let out = std::env::temp_dir().join(format!("apkscope-rebuilt-{}.apk", std::process::id()));
     std::fs::write(&out, &bytes).unwrap();
     let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
@@ -70,10 +71,6 @@ fn edits_alignment_and_old_signatures() {
     // the .so is stored and page-aligned, so Android can map it in place
     let so = z.by_name("lib/arm64-v8a/libx.so").unwrap();
     assert_eq!(so.data_start().unwrap() % 4096, 0);
-    assert_eq!(
-        u32::from_le_bytes(bytes[bytes.len() - 6..bytes.len() - 2].try_into().unwrap()) as usize,
-        cd
-    );
     let _ = std::fs::remove_file(src);
     let _ = std::fs::remove_file(out);
 }
@@ -89,7 +86,8 @@ fn plain_jar_keeps_its_manifest() {
     w.start_file("classes.dex", opts).unwrap();
     w.write_all(&[0u8; 100]).unwrap();
     w.finish().unwrap();
-    let (bytes, _) = rebuild(p.to_str().unwrap(), &Edits::new()).unwrap();
+    let mut bytes = Vec::new();
+    rebuild(p.to_str().unwrap(), &Edits::new(), &mut bytes).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let names: Vec<_> = z.file_names().flatten().collect();
     assert_eq!(names, ["META-INF/MANIFEST.MF", "classes.dex"]);

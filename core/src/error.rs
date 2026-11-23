@@ -13,6 +13,9 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    /// Writing a rebuilt APK to where it goes failed.
+    #[error("cannot write the APK")]
+    Write(#[source] io::Error),
     /// A ZIP archive, or an entry in it, could not be read.
     #[error(transparent)]
     Zip(#[from] zip::result::ZipError),

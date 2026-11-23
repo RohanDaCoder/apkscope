@@ -160,7 +160,8 @@ fn decodes_and_edits_a_tree() {
     );
 
     // a decoded tree of that APK, with the image gone, removes it
-    let rebuilt = rebuild::rebuild_from(Cursor::new(&bytes), &e).unwrap().0;
+    let mut rebuilt = Vec::new();
+    rebuild::rebuild_from(Cursor::new(&bytes), &e, &mut rebuilt).unwrap();
     let mut b = Apk::new(Cursor::new(&rebuilt)).unwrap();
     let mut tree = decode(&mut b).unwrap();
     assert!(tree.contains_key("res/drawable-xxhdpi-v4/icon.png"));
@@ -239,7 +240,8 @@ fn an_open_apk_reads_and_changes_one_file_at_a_time() {
         .unwrap();
     assert_eq!(text(&mut a, "AndroidManifest.xml"), manifest);
 
-    let (rebuilt, _) = a.rebuild().unwrap();
+    let mut rebuilt = Vec::new();
+    a.rebuild(&mut rebuilt).unwrap();
     let mut b = Apk::new(Cursor::new(&rebuilt)).unwrap();
     assert!(text(&mut b, "AndroidManifest.xml").contains(r#"package="com.other""#));
     assert!(text(&mut b, "res/values/strings.xml").contains(">Hi<"));

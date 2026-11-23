@@ -23,8 +23,13 @@ fn sign_then_verify_and_detect_tampering() {
         w.write_all(&[3u8; 5000]).unwrap();
         w.finish().unwrap();
     }
-    let (apk, cd) = crate::rebuild::rebuild(src.to_str().unwrap(), &Default::default()).unwrap();
-    let signed = sign(apk, cd, &key).unwrap();
+    let mut signed = std::io::Cursor::new(Vec::new());
+    let edits = Default::default();
+    crate::rebuild::rebuild(src.to_str().unwrap(), &edits, &mut signed).unwrap();
+    sign(&mut signed, &key).unwrap();
+    // a second signature would leave the first block in front of it
+    assert!(sign(&mut signed, &key).is_err());
+    let signed = signed.into_inner();
     let out = std::env::temp_dir().join(format!("apkscope-signed-{}.apk", std::process::id()));
     std::fs::write(&out, &signed).unwrap();
     assert_eq!(

@@ -2,6 +2,7 @@
 //! self-signed certificate generation, and verification of v2/v3 signatures.
 //! Format: https://source.android.com/docs/security/features/apksigning/v2 (and /v3)
 
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
@@ -247,25 +248,69 @@ fn lp(d: &[u8]) -> Vec<u8> {
     [&(d.len() as u32).to_le_bytes()[..], d].concat()
 }
 
-/// Chunked SHA-256 over the three APK sections the signature covers.
-fn content_digest(sections: &[&[u8]]) -> Vec<u8> {
-    let mut chunks = Vec::new();
-    for s in sections {
-        for c in s.chunks(CHUNK) {
-            let mut h = Sha256::new();
-            h.update([0xa5]);
-            h.update((c.len() as u32).to_le_bytes());
-            h.update(c);
-            chunks.push(h.finalize());
+/// The digests of an APK's 1 MB chunks, taken as its sections are written. A section's last
+/// chunk is as short as what is left of it.
+#[derive(Default)]
+pub(crate) struct Chunks {
+    /// The start of a chunk that is not whole yet.
+    pending: Vec<u8>,
+    digests: Vec<sha2::digest::Output<Sha256>>,
+}
+
+impl Chunks {
+    /// More of the section being written.
+    pub(crate) fn update(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            let n = (CHUNK - self.pending.len()).min(data.len());
+            match n == CHUNK {
+                true => self.digests.push(chunk(&data[..n])),
+                false => {
+                    self.pending.extend_from_slice(&data[..n]);
+                    if self.pending.len() == CHUNK {
+                        self.end();
+                    }
+                }
+            }
+            data = &data[n..];
         }
     }
-    let mut top = Sha256::new();
-    top.update([0x5a]);
-    top.update((chunks.len() as u32).to_le_bytes());
-    for c in &chunks {
-        top.update(c);
+
+    /// The section being written ends here.
+    pub(crate) fn end(&mut self) {
+        if !self.pending.is_empty() {
+            self.digests.push(chunk(&self.pending));
+            self.pending.clear();
+        }
     }
-    top.finalize().to_vec()
+
+    /// The digest of the sections written, each ended.
+    fn digest(&self) -> Vec<u8> {
+        let mut top = Sha256::new();
+        top.update([0x5a]);
+        top.update((self.digests.len() as u32).to_le_bytes());
+        for c in &self.digests {
+            top.update(c);
+        }
+        top.finalize().to_vec()
+    }
+}
+
+fn chunk(c: &[u8]) -> sha2::digest::Output<Sha256> {
+    let mut h = Sha256::new();
+    h.update([0xa5]);
+    h.update((c.len() as u32).to_le_bytes());
+    h.update(c);
+    h.finalize()
+}
+
+/// Chunked SHA-256 over the three APK sections the signature covers.
+fn content_digest(sections: &[&[u8]]) -> Vec<u8> {
+    let mut chunks = Chunks::default();
+    for s in sections {
+        chunks.update(s);
+        chunks.end();
+    }
+    chunks.digest()
 }
 
 /// End-of-central-directory start (no comment support beyond what the scan finds).
@@ -277,10 +322,63 @@ fn eocd_at(apk: &[u8]) -> Result<usize> {
         .ok_or_else(|| Error::signature("no end of central directory"))
 }
 
-/// Sign an unsigned APK (as built by `rebuild`) with v2 + v3.
-pub fn sign(apk: Vec<u8>, cd: usize, key: &Key) -> Result<Vec<u8>> {
-    let eocd = eocd_at(&apk)?;
-    let digest = content_digest(&[&apk[..cd], &apk[cd..eocd], &apk[eocd..]]);
+/// Sign the APK in `apk`, where it is, with v2 + v3: one without a signing block, as `rebuild`
+/// writes one. Its entries are read once for their digests, a chunk at a time, and the signing
+/// block is written after them, with the central directory moved behind it. How many bytes
+/// the APK is then.
+pub fn sign<F: Read + Write + Seek>(apk: &mut F, key: &Key) -> Result<u64> {
+    let read = |e| Error::from(zip::result::ZipError::Io(e));
+    // the end record, the last thing in the file but for its comment, says where the central
+    // directory is
+    let len = apk.seek(SeekFrom::End(0)).map_err(read)?;
+    let mut tail = vec![0; len.min(65_557) as usize];
+    apk.seek(SeekFrom::Start(len - tail.len() as u64))
+        .map_err(read)?;
+    apk.read_exact(&mut tail).map_err(read)?;
+    let mut end = tail.split_off(eocd_at(&tail)?);
+    let size = u32::from_le_bytes(end[12..16].try_into().unwrap()) as usize;
+    let at = u32::from_le_bytes(end[16..20].try_into().unwrap());
+    let mut cd = vec![0; size];
+    apk.seek(SeekFrom::Start(at.into())).map_err(read)?;
+    apk.read_exact(&mut cd).map_err(read)?;
+    // the signature covers the entries, the central directory, and the end record as it is
+    // now, pointing at where the block goes
+    let mut chunks = Chunks::default();
+    let mut buf = vec![0; CHUNK];
+    let mut left = at as usize;
+    apk.seek(SeekFrom::Start(0)).map_err(read)?;
+    while left > 0 {
+        let n = left.min(CHUNK);
+        apk.read_exact(&mut buf[..n]).map_err(read)?;
+        chunks.update(&buf[..n]);
+        left -= n;
+        // a block there already would be left in front of the new one
+        if left == 0 && buf[..n].ends_with(b"APK Sig Block 42") {
+            return Err(Error::signature("the APK is signed already"));
+        }
+    }
+    let block = block(chunks, &cd, &end, key)?;
+    let moved = u32::try_from(u64::from(at) + block.len() as u64)
+        .map_err(|_| Error::TooLarge("the APK".into()))?;
+    end[16..20].copy_from_slice(&moved.to_le_bytes());
+    apk.seek(SeekFrom::Start(at.into())).map_err(Error::Write)?;
+    for part in [&block, &cd, &end] {
+        apk.write_all(part).map_err(Error::Write)?;
+    }
+    apk.flush().map_err(Error::Write)?;
+    Ok(u64::from(moved) + (cd.len() + end.len()) as u64)
+}
+
+/// The v2 + v3 signing block of an unsigned APK: `entries` are the chunks of its entries, `cd`
+/// its central directory and `end` its end record, which says the central directory is where
+/// the block goes.
+fn block(mut entries: Chunks, cd: &[u8], end: &[u8], key: &Key) -> Result<Vec<u8>> {
+    entries.end();
+    for section in [cd, end] {
+        entries.update(section);
+        entries.end();
+    }
+    let digest = entries.digest();
     let pubkey = key
         .private
         .to_public_key()
@@ -339,21 +437,13 @@ pub fn sign(apk: Vec<u8>, cd: usize, key: &Key) -> Result<Vec<u8>> {
         pairs.extend(pair(PADDING_ID, &vec![0; gap - 12]));
     }
     let size = (pairs.len() + 8 + 16) as u64;
-    let block = [
+    Ok([
         &size.to_le_bytes()[..],
         &pairs,
         &size.to_le_bytes(),
         b"APK Sig Block 42",
     ]
-    .concat();
-    let mut out = Vec::with_capacity(apk.len() + block.len());
-    out.extend_from_slice(&apk[..cd]);
-    out.extend_from_slice(&block);
-    out.extend_from_slice(&apk[cd..]);
-    // the central directory moved behind the block
-    let e = eocd + block.len();
-    out[e + 16..e + 20].copy_from_slice(&((cd + block.len()) as u32).to_le_bytes());
-    Ok(out)
+    .concat())
 }
 
 // ---------- verification ----------

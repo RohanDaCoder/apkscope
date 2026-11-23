@@ -288,3 +288,37 @@ android {{
 #[cfg(test)]
 #[path = "../tests/apkscope/export.rs"]
 mod tests;
+
+/// Rebuild `src` with `edits` into the file `output`, then sign it with `key` if there is one.
+/// The APK is written beside `output` and moved over it when it is whole, so `output` may be
+/// `src` and a build that fails leaves nothing behind. How many bytes it is.
+pub fn write_apk(
+    src: &str,
+    edits: &apkscope_core::rebuild::Edits,
+    output: &std::path::Path,
+    key: Option<&apkscope_core::apksign::Key>,
+) -> Result<u64, String> {
+    let mut part = output.as_os_str().to_owned();
+    part.push(".part");
+    let part = std::path::PathBuf::from(part);
+    let failed = |e: std::io::Error| format!("{}: {e}", output.display());
+    let mut file = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&part)
+        .map_err(failed)?;
+    let built = (|| {
+        let size = apkscope_core::rebuild::rebuild(src, edits, std::io::BufWriter::new(&mut file))?;
+        match key {
+            Some(key) => apkscope_core::apksign::sign(&mut file, key),
+            None => Ok(size),
+        }
+    })();
+    let size = built.inspect_err(|_| {
+        let _ = std::fs::remove_file(&part);
+    })?;
+    std::fs::rename(&part, output).map_err(failed)?;
+    Ok(size)
+}
