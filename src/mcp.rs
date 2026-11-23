@@ -139,6 +139,8 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "method": {"type": "string", "description": "method name (omitted = any)"}, "impl": {"type": "string"}, "in": {"type": "array", "items": {"type": "string"}}, "value": {"type": "string"}}))}},
         {"name": "size", "description": "Where the APK's size goes: share per kind (dex, native libs per ABI, res, assets), the biggest entries and duplicate files (same CRC and size).",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "top": {"type": "integer", "description": "how many biggest entries (default 25)"}}}},
+        {"name": "install_apk", "description": "Install an APK or a split bundle (.xapk/.apks/.apkm) on a device over adb: the ABI split the device needs (first device ABI the app ships code for, passed as --abi, so arm64-only apps on x86_64 emulators with ARM translation get arm64), all density and language splits, then reports the primaryCpuAbi the package manager chose. Says when the app cannot run on the device's ABIs.",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "device": {"type": "string", "description": "adb serial (default: the only device)"}, "abi": {"type": "string", "description": "force an ABI (default: auto)"}}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
         {"name": "frida_hook", "description": "Hook every overload of a method (or all methods of a class) in the live session: each call logs its arguments, return value or exception. Takes effect at once, no restart.",
@@ -681,6 +683,15 @@ fn call(
             run_cli(&args)
         }
         "decrypt_strings" => run_cli(&["decrypt".into(), apk]),
+        "install_apk" => {
+            args.extend(["install".into(), apk]);
+            for (k, f) in [("device", "--device"), ("abi", "--abi")] {
+                if let Some(v) = s(a, k) {
+                    args.extend([f.into(), v]);
+                }
+            }
+            run_cli(&args)
+        }
         "scan" => run_cli(&["scan".into(), apk]),
         _ => Err(format!("unknown tool {name}")),
     }

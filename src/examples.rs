@@ -119,6 +119,12 @@ Examples:
   apkscope frida app.apk com.example.Api login > hook.js; frida -U -f com.example -l hook.js
   apkscope frida app.apk com.example.Api          every method of the class";
 
+pub const INSTALL: &str = "Examples:
+  apkscope install app.xapk                 base + the ABI split the device needs + density/language splits
+  apkscope install app.apk -D emulator-5554
+  apkscope install app.xapk --abi arm64-v8a   force an ABI (an arm64-only app on an x86_64 emulator)
+It prints the primaryCpuAbi the package manager chose.";
+
 pub const NOTE: &str = "\
 Examples:
   apkscope rename app.apk a.b.c com.example.LoginActivity

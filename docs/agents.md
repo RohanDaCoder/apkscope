@@ -39,6 +39,7 @@ an MCP tool (`apkscope mcp`, see the README) and has examples under `apkscope <c
 | Search one package only | `search app.apk code "token" --in a.b.net.*` (`--impl T` for subtypes of T) |
 | Which layout uses an id | `search app.apk res "@id/login_button"` (file:line) |
 | Read a resource | `resource app.apk res/layout/main.xml` |
+| Run it on a device (split bundle, ABI) | `install app.xapk` (MCP `install_apk`): picks the splits and `--abi`, prints the ABI the device chose |
 | What changed between versions / did my patch land | `diff old.apk new.apk --strings` |
 
 ## Patching and rebuilding

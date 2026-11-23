@@ -3335,6 +3335,10 @@ impl eframe::App for App {
                             ui.close_menu();
                             self.cli_report("Size", vec!["size".into(), path.clone()]);
                         }
+                        if ui.button("Install on device").on_hover_text("adb install with the splits and ABI the device needs (arm64-only apps on x86_64 emulators get --abi arm64-v8a); shows the ABI the package manager chose").clicked() {
+                            ui.close_menu();
+                            self.cli_report("Install", vec!["install".into(), path.clone()]);
+                        }
                         ui.separator();
                         if ui.button("Unity IL2CPP").on_hover_text("Unity games: C# methods with their native addresses").clicked() {
                             ui.close_menu();

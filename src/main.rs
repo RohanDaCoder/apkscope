@@ -24,6 +24,7 @@ mod gui;
 mod il2cpp;
 mod imports;
 mod index;
+mod install;
 mod ir;
 mod java;
 mod live;
