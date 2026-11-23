@@ -134,15 +134,21 @@ try {
 # The preview is the ci run of the PR's head commit; pull_request-event runs
 # live in the base repo even for fork PRs, which is exactly why their
 # artifacts are downloadable by anyone with a GitHub login.
+#
+# NB: PowerShell variable names are CASE-INSENSITIVE, so the result below must
+# NOT be named $pr: that would overwrite the [string]$Pr parameter, whose type
+# constraint stringifies the JSON object to '@{...}' (killing .head.sha).
+# Also, '?' is a legal variable-name character, so the error message uses
+# ${Repo}? - a bare "$Repo?" would look up a variable named 'Repo?' (empty).
 Write-Step "resolving PR #$Pr"
-$pr = Get-ApiJson "pulls/$Pr"
-if (-not $pr -or -not $pr.head.sha) { Die "Could not read PR #$Pr - is it open on github.com/$Repo?" }
-$headSha = $pr.head.sha
+$pull = Get-ApiJson "pulls/$Pr"
+if (-not $pull -or -not $pull.head.sha) { Die "Could not read PR #$Pr - is it open on github.com/${Repo}?" }
+$headSha = $pull.head.sha
 $shortSha = $headSha.Substring(0, 7)
 
 # a specific commit was requested: accept it as a full sha or a short prefix
 if ($Commit -ne '') {
-    if (-not $headSha.StartsWith($Commit)) {
+    if (-not $headSha.StartsWith($Commit, [System.StringComparison]::OrdinalIgnoreCase)) {
         Die "PR #$Pr's latest build is $shortSha, not $Commit - drop -Commit, or update it after pushing."
     }
 }
@@ -176,7 +182,7 @@ try {
         $artifact = if ($arts) { $arts.artifacts | Where-Object { $_.name -eq $Asset } | Select-Object -First 1 } else { $null }
         if (-not $artifact) {
             if ($arts) {
-                Write-Host 'warning: available artifacts on this run:' 
+                Write-Host 'warning: available artifacts on this run:'
                 $arts.artifacts | ForEach-Object { Write-Host "    $($_.name)" }
             }
             Die "Artifact '$Asset' not found on run $($run.id)."
