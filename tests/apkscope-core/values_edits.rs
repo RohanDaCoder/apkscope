@@ -134,3 +134,48 @@ fn edits_through_values_files() {
     let back = crate::table::read(&crate::table::write(&t)).unwrap();
     assert_eq!(back, t);
 }
+
+#[test]
+fn sets_one_resource() {
+    // a value that is there is set as a values file with its element would set it
+    let mut t = sample();
+    assert!(
+        set(
+            &mut t,
+            "string",
+            "hello",
+            "",
+            Body::Text("Tap  \"here\""),
+            21
+        )
+        .unwrap()
+    );
+    let mut applied = sample();
+    let strings = r#"<resources><string name="hello">Tap  "here"</string></resources>"#;
+    apply(&mut applied, &files(&[("values/strings.xml", strings)]), 21).unwrap();
+    assert_eq!(t, applied);
+
+    // one that is not there is added: in a new configuration, and an array by its items
+    assert!(!set(&mut t, "bool", "dark", "night", Body::Text("true"), 21).unwrap());
+    let items = ["1".to_owned(), "2".to_owned()];
+    assert!(
+        !set(
+            &mut t,
+            "integer-array",
+            "modes",
+            "",
+            Body::Items(&items),
+            21
+        )
+        .unwrap()
+    );
+    let decoded = res::decode_table(&t, &Names::new(&t)).values;
+    assert!(decoded["values-night/bools.xml"].contains(r#"<bool name="dark">true</bool>"#));
+    let arrays = &decoded["values/arrays.xml"];
+    assert!(
+        arrays.contains("<integer-array name=\"modes\">\n        <item>1</item>"),
+        "{arrays}"
+    );
+    // and nothing else changed
+    assert!(decoded["values/strings.xml"].contains(r#"<string name="hello">Tap here</string>"#));
+}
