@@ -41,11 +41,11 @@ pub fn export_class(path: &str, class: &str) -> Result<String> {
 /// [`export_class`] from an APK already open.
 pub fn export_class_from<R: Read + Seek>(apk: &mut Apk<R>, class: &str) -> Result<String> {
     let desc = crate::dex::descriptor(class);
-    for (name, bytes) in &apk.dex {
-        if let Ok(Some(i)) = crate::dex::Dex::parse(bytes).map(|dx| dx.find_class(&desc)) {
-            let class = Source::new(bytes.clone())
+    for (name, bytes) in apk.dex()? {
+        if let Ok(Some(i)) = crate::dex::Dex::parse(&bytes).map(|dx| dx.find_class(&desc)) {
+            let class = Source::new(bytes)
                 .and_then(|src| Ok(text::print(&src, &read::Reader::new(&src)?.class(&src, i)?)));
-            return class.map_err(|e| e.at(name));
+            return class.map_err(|e| e.at(&name));
         }
     }
     Err(Error::ClassNotFound(class.to_owned()))
@@ -68,7 +68,7 @@ pub fn inject_into<R: Read + Seek>(
     sources: &[String],
     edits: &mut crate::rebuild::Edits,
 ) -> Result<Vec<String>> {
-    let mut classes = Classes::new(apk.dex.clone());
+    let mut classes = Classes::new(apk.dex()?);
     for source in sources {
         classes.set_text(source)?;
     }

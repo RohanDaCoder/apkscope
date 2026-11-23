@@ -55,9 +55,8 @@ fn class_path(desc: &str, taken: &Mutex<HashSet<String>>) -> PathBuf {
 }
 
 /// Decompile every class into `src_dir`, in parallel. Returns (classes written, classes failed).
-pub fn sources(apk: &Apk, src_dir: &Path, deobf: bool) -> (usize, usize) {
-    let dexes: Vec<Dex> = apk
-        .dex
+pub fn sources(dex: &[(String, Vec<u8>)], src_dir: &Path, deobf: bool) -> (usize, usize) {
+    let dexes: Vec<Dex> = dex
         .iter()
         .filter_map(|(n, b)| Dex::parse(b).map_err(|e| eprintln!("{n}: {e}")).ok())
         .collect();

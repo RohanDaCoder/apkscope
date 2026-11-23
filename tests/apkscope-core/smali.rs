@@ -341,7 +341,7 @@ fn edits_an_apk_in_memory() {
     let (out, _) = crate::rebuild::rebuild_from(Cursor::new(&apk), &edits).unwrap();
 
     let mut rebuilt = Apk::new(Cursor::new(out)).unwrap();
-    assert_eq!(rebuilt.dex.len(), 1);
+    assert_eq!(rebuilt.dex().unwrap().len(), 1);
     assert!(
         export_class_from(&mut rebuilt, "Lcom/ex/M;")
             .unwrap()
