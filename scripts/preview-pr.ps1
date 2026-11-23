@@ -251,5 +251,5 @@ Write-Host ''
 & (Join-Path $Dest $InstalledName) --version
 Write-Host ''
 Write-Host 'note: this preview is UNREVIEWED PR code, not a release. It replaced nothing:' -ForegroundColor DarkGray
-Write-Host "note: the real apkscope is untouched; remove the preview with: Remove-Item '$(Join-Path $Dest $InstalledName)'" -ForegroundColor DarkGray
+Write-Host "note: the real apkscope is untouched; remove this preview with: ./scripts/preview-pr.ps1 -Pr $Pr -Uninstall" -ForegroundColor DarkGray
 Write-Host ''
