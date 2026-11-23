@@ -30,6 +30,9 @@ pub(crate) fn xml_entries(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// (class, key, fallback) of one config read in code
+type ConfigRead = (String, String, String);
+
 /// Reads of Firebase Remote Config / SharedPreferences with their fallback values, from the
 /// decompiled call sites. Heuristic — labelled `inferred` in the output: the first argument
 /// is the key, the second (when a literal) the fallback. The caller classes are collected
@@ -68,7 +71,10 @@ pub(crate) fn config_reads(st: &State) -> Vec<(String, String, String)> {
     // parallel decompile of the candidates, the scan way
     let reader = st.cache.read().unwrap().clone();
     let next = AtomicUsize::new(0);
-    let found: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
+    // tagged with the position in `list`, cut by a shared count: the same reads every run (see
+    // `scan` in indexed.rs)
+    let found: Mutex<Vec<(usize, ConfigRead)>> = Mutex::new(Vec::new());
+    let count = AtomicUsize::new(0);
     let full = AtomicBool::new(false);
     std::thread::scope(|s| {
         for _ in 0..threads() {
@@ -89,16 +95,21 @@ pub(crate) fn config_reads(st: &State) -> Vec<(String, String, String)> {
                         };
                         if let Some(text) = text {
                             let class = &st.classes[k].0;
+                            let before = mine.len();
                             for cap in call.captures_iter(&text) {
                                 mine.push((
-                                    class.clone(),
-                                    cap[1].to_string(),
-                                    cap.get(2)
-                                        .map(|x| x.as_str().to_string())
-                                        .unwrap_or_default(),
+                                    n,
+                                    (
+                                        class.clone(),
+                                        cap[1].to_string(),
+                                        cap.get(2)
+                                            .map(|x| x.as_str().to_string())
+                                            .unwrap_or_default(),
+                                    ),
                                 ));
                             }
-                            if mine.len() >= LIMIT {
+                            let added = mine.len() - before;
+                            if count.fetch_add(added, Ordering::Relaxed) + added >= LIMIT {
                                 full.store(true, Ordering::Relaxed);
                             }
                         }
@@ -107,7 +118,12 @@ pub(crate) fn config_reads(st: &State) -> Vec<(String, String, String)> {
                 });
         }
     });
-    let mut out = found.into_inner().unwrap();
+    let mut tagged = found.into_inner().unwrap();
+    if full.load(Ordering::Relaxed) {
+        tagged.sort_by_key(|r| r.0);
+        tagged.truncate(LIMIT);
+    }
+    let mut out: Vec<(String, String, String)> = tagged.into_iter().map(|r| r.1).collect();
     out.sort();
     out.dedup();
     out
