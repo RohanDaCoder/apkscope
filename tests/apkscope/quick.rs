@@ -168,3 +168,127 @@ fn diff_reports_rotated_constants_and_near_pairs() {
     let _ = std::fs::remove_dir_all(std::path::Path::new(&old).parent().unwrap());
     let _ = std::fs::remove_dir_all(std::path::Path::new(&new).parent().unwrap());
 }
+
+/// A Flutter XAPK keeps `libapp.so` / `libflutter.so` in `config.<abi>.apk` splits, not in
+/// `base.apk`, so flattening a bundle to its base split (what `search::prepare` does) hides
+/// them: `flutter` used to report "no" on a valid Flutter bundle. Build a bundle the way real
+/// bundle tools write them — splits stored in place, one per ABI — and check that `so_entries`,
+/// `read_entry` and `flutter` all reach the config splits while non-`lib` entries still come
+/// from `base.apk` first; a deflated bundle (the buffered path) answers the same.
+#[test]
+fn flutter_sees_libs_in_xapk_splits() {
+    use std::io::Write as _;
+    let (libapp, libflutter) = (b"libapp-bytes", b"libflutter-bytes");
+    let stored = zip::CompressionMethod::Stored;
+    let deflated = zip::CompressionMethod::Deflated;
+    // inner APK: (name, bytes, method)
+    let apk = |entries: &[(&str, &[u8], zip::CompressionMethod)]| -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(&mut out);
+        for (n, b, m) in entries {
+            let opts = zip::write::SimpleFileOptions::default().compression_method(*m);
+            w.start_file(*n, opts).unwrap();
+            w.write_all(b).unwrap();
+        }
+        w.finish().unwrap();
+        out.into_inner()
+    };
+    // bundle of inner APKs, each stored (real bundles) or deflated (the buffered path)
+    let bundle = |splits: &[(&str, Vec<u8>)], stored: bool| -> String {
+        let path = std::env::temp_dir().join(format!(
+            "apkscope_xapk_splits_{}_{}.xapk",
+            if stored { "stored" } else { "deflated" },
+            std::process::id()
+        ));
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(if stored {
+            zip::CompressionMethod::Stored
+        } else {
+            zip::CompressionMethod::Deflated
+        });
+        for (n, b) in splits {
+            w.start_file(*n, opts).unwrap();
+            w.write_all(b).unwrap();
+        }
+        w.finish().unwrap();
+        path.display().to_string()
+    };
+
+    // the realistic case: code and manifest in base, ABI libs in config splits, all stored
+    let xapk = bundle(
+        &[
+            (
+                "base.apk",
+                apk(&[
+                    ("classes.dex", b"dex-bytes", stored),
+                    ("AndroidManifest.xml", b"manifest-of-base", stored),
+                ]),
+            ),
+            (
+                "config.arm64_v8a.apk",
+                apk(&[
+                    ("lib/arm64-v8a/libapp.so", libapp, deflated),
+                    ("lib/arm64-v8a/libflutter.so", libflutter, stored),
+                ]),
+            ),
+            (
+                "config.armeabi_v7a.apk",
+                apk(&[("lib/armeabi-v7a/libapp.so", b"32-bit-libapp", stored)]),
+            ),
+        ],
+        true,
+    );
+    // so_entries lists the libs of every config split, not just base.apk
+    let libs = so_entries(&xapk).unwrap();
+    let names: Vec<&str> = libs.iter().map(|(n, _)| n.as_str()).collect();
+    for want in [
+        "lib/arm64-v8a/libapp.so",
+        "lib/arm64-v8a/libflutter.so",
+        "lib/armeabi-v7a/libapp.so",
+    ] {
+        assert!(names.contains(&want), "{want} missing from {names:?}");
+    }
+    // read_entry reads entries out of the splits: a deflated lib, and the second config split
+    assert_eq!(
+        read_entry(&xapk, "lib/arm64-v8a/libapp.so").unwrap(),
+        Some(libapp.to_vec())
+    );
+    assert_eq!(
+        read_entry(&xapk, "lib/armeabi-v7a/libapp.so").unwrap(),
+        Some(b"32-bit-libapp".to_vec())
+    );
+    // non-lib entries still come from base.apk first
+    assert_eq!(
+        read_entry(&xapk, "AndroidManifest.xml").unwrap(),
+        Some(b"manifest-of-base".to_vec())
+    );
+    // flutter reports yes (decided from the lib list before libapp.so is parsed)
+    let out = flutter(&xapk, None, false, false).unwrap();
+    assert_eq!(out[0], "Flutter app: yes", "got {out:?}");
+    let _ = std::fs::remove_file(&xapk);
+
+    // a stale copy of the same lib in base.apk loses to the config split, which is searched
+    // first for lib/ — and a deflated bundle (the buffered path) gives the same answer
+    let xapk = bundle(
+        &[
+            (
+                "base.apk",
+                apk(&[
+                    ("classes.dex", b"dex-bytes", stored),
+                    ("lib/arm64-v8a/libapp.so", b"stale-base-libapp", stored),
+                ]),
+            ),
+            (
+                "config.arm64_v8a.apk",
+                apk(&[("lib/arm64-v8a/libapp.so", libapp, stored)]),
+            ),
+        ],
+        false,
+    );
+    assert_eq!(
+        read_entry(&xapk, "lib/arm64-v8a/libapp.so").unwrap(),
+        Some(libapp.to_vec()),
+        "the config split should win over base.apk"
+    );
+    let _ = std::fs::remove_file(&xapk);
+}

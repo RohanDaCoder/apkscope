@@ -388,53 +388,259 @@ pub fn scan_each<T: Send>(
     Ok(())
 }
 
-/// One file out of an APK, without indexing the whole archive (big apps have 10k+ entries).
+/// One file out of an APK (or out of any split of a bundle), without indexing the whole archive
+/// (big apps have 10k+ entries). A bundle's splits are searched one at a time — each is opened,
+/// checked, and dropped before the next — and the first split with the entry wins; `lib/`
+/// lookups try the config splits before `base.apk`, which is where a bundle keeps its native
+/// libraries. `read_entry` returning `Some` for `lib/<abi>/libapp.so` of a `.xapk` is what makes
+/// `flutter` work on bundles.
 pub fn read_entry(path: &str, want: &str) -> Result<Option<Vec<u8>>, String> {
     use std::io::{Seek, SeekFrom};
-    let mut f = std::fs::File::open(search::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
-    let Some((_, local, csize, size, method)) = central_dir(&mut f, &|n| n == want.as_bytes())?
-        .into_iter()
-        .next()
-    else {
-        return Ok(None);
-    };
-    let err = |e: std::io::Error| format!("{want}: {e}");
-    let mut h = [0u8; 30];
-    f.seek(SeekFrom::Start(local)).map_err(err)?;
-    f.read_exact(&mut h).map_err(err)?;
-    if h[..4] != [0x50, 0x4b, 3, 4] {
-        return Err(format!("{want}: bad local header"));
-    }
-    f.seek(SeekFrom::Current(
-        u16::from_le_bytes([h[26], h[27]]) as i64 + u16::from_le_bytes([h[28], h[29]]) as i64,
-    ))
-    .map_err(err)?;
-    let mut raw = vec![0; csize];
-    f.read_exact(&mut raw).map_err(err)?;
-    match method {
-        0 => Ok(Some(raw)),
-        8 => {
-            let mut out = vec![0; size];
-            let k = libdeflater::Decompressor::new()
-                .deflate_decompress(&raw, &mut out)
-                .map_err(|e| format!("{want}: inflate failed: {e}"))?;
-            out.truncate(k);
-            Ok(Some(out))
+    for a in apks(path, want.starts_with("lib/"))? {
+        let mut f = a?;
+        let Some((_, local, csize, size, method)) = central_dir(&mut f, &|n| n == want.as_bytes())?
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let err = |e: std::io::Error| format!("{want}: {e}");
+        let mut h = [0u8; 30];
+        f.seek(SeekFrom::Start(local)).map_err(err)?;
+        f.read_exact(&mut h).map_err(err)?;
+        if h[..4] != [0x50, 0x4b, 3, 4] {
+            return Err(format!("{want}: bad local header"));
         }
-        m => Err(format!("{want}: unsupported compression {m}")),
+        f.seek(SeekFrom::Current(
+            u16::from_le_bytes([h[26], h[27]]) as i64 + u16::from_le_bytes([h[28], h[29]]) as i64,
+        ))
+        .map_err(err)?;
+        let mut raw = vec![0; csize];
+        f.read_exact(&mut raw).map_err(err)?;
+        return match method {
+            0 => Ok(Some(raw)),
+            8 => {
+                let mut out = vec![0; size];
+                let k = libdeflater::Decompressor::new()
+                    .deflate_decompress(&raw, &mut out)
+                    .map_err(|e| format!("{want}: inflate failed: {e}"))?;
+                out.truncate(k);
+                Ok(Some(out))
+            }
+            m => Err(format!("{want}: unsupported compression {m}")),
+        };
+    }
+    Ok(None)
+}
+
+/// Native `lib/<abi>/*.so` entries of an APK or split bundle: (name, uncompressed size), sorted
+/// by name. A bundle's libs live in its config splits (e.g. `config.arm64_v8a.apk`), so every
+/// split is scanned — one at a time, so only one is ever open — not just `base.apk`; otherwise
+/// a Flutter `.xapk` reports no `libapp.so` even though the app is Flutter.
+fn so_entries(path: &str) -> Result<Vec<(String, usize)>, String> {
+    let mut v: Vec<(String, usize)> = Vec::new();
+    for a in apks(path, true)? {
+        let mut f = a?;
+        v.extend(
+            central_dir(&mut f, &|n| n.starts_with(b"lib/") && n.ends_with(b".so"))?
+                .into_iter()
+                .map(|(n, _, _, us, _)| (n, us)),
+        );
+    }
+    v.sort();
+    Ok(v)
+}
+
+/// One APK for `central_dir` to scan: a plain file, an in-place view of a stored split inside
+/// its bundle file, or a buffered deflated split — the only case that needs a copy.
+enum Apk {
+    File(std::fs::File),
+    InPlace(Bounded),
+    Mem(std::io::Cursor<Vec<u8>>),
+}
+impl std::io::Read for Apk {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Apk::File(f) => f.read(b),
+            Apk::InPlace(v) => v.read(b),
+            Apk::Mem(c) => c.read(b),
+        }
+    }
+}
+impl std::io::Seek for Apk {
+    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Apk::File(f) => f.seek(p),
+            Apk::InPlace(v) => v.seek(p),
+            Apk::Mem(c) => c.seek(p),
+        }
     }
 }
 
-/// Native `lib/<abi>/*.so` entries of an APK: (name, uncompressed size), sorted by name.
-fn so_entries(path: &str) -> Result<Vec<(String, usize)>, String> {
-    let mut f = std::fs::File::open(search::prepare(path)?).map_err(|e| format!("{path}: {e}"))?;
-    let mut v: Vec<(String, usize)> =
-        central_dir(&mut f, &|n| n.starts_with(b"lib/") && n.ends_with(b".so"))?
-            .into_iter()
-            .map(|(n, _, _, us, _)| (n, us))
-            .collect();
-    v.sort();
-    Ok(v)
+/// A seekable read-only view of the `base..base+len` range of a file. `central_dir` runs on this
+/// when a bundle stores its split uncompressed (the normal case — bundle tools store splits), so
+/// the inner APK is read where it sits in the bundle, with no copy. Positions are relative to
+/// `base` and clamped to the range, so the split behaves exactly like a standalone file.
+struct Bounded {
+    f: std::fs::File,
+    base: u64,
+    len: u64,
+    pos: u64,
+}
+impl Bounded {
+    fn new(f: std::fs::File, base: u64, len: u64) -> Bounded {
+        Bounded {
+            f,
+            base,
+            len,
+            pos: 0,
+        }
+    }
+}
+impl std::io::Read for Bounded {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        let max = (self.len - self.pos).min(b.len() as u64) as usize;
+        if max == 0 {
+            return Ok(0);
+        }
+        let k = self.f.read(&mut b[..max])?;
+        self.pos += k as u64;
+        Ok(k)
+    }
+}
+impl std::io::Seek for Bounded {
+    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+        let to = match p {
+            std::io::SeekFrom::Start(n) => n as i128,
+            std::io::SeekFrom::Current(d) => self.pos as i128 + d as i128,
+            std::io::SeekFrom::End(d) => self.len as i128 + d as i128,
+        }
+        .clamp(0, self.len as i128) as u64;
+        self.f.seek(std::io::SeekFrom::Start(self.base + to))?;
+        self.pos = to;
+        Ok(to)
+    }
+}
+
+/// The APKs to scan for `path`, yielded one at a time so a query never holds more than one
+/// (and, for stored splits, none at all): a plain `.apk` / `.jar` / `.dex` resolves to a single
+/// file through `search::prepare`, while a `.apks` / `.xapk` / `.apkm` bundle yields each inner
+/// `.apk` split lazily — one is opened, searched, and dropped before the next is opened. `lib`
+/// orders the config splits before `base.apk` (native libraries live there, and `base.apk` is
+/// the biggest split); everything else starts at `base.apk`, where the manifest and resources
+/// are. First match wins, so `read_entry` stops at the first split that has the entry.
+fn apks(path: &str, lib: bool) -> Result<Apks, String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "apks" | "xapk" | "apkm" => Ok(Apks {
+            one: None,
+            splits: Some(Splits::new(path, lib)?),
+        }),
+        _ => {
+            // plain .apk / .jar / .dex-wrapped: `prepare` resolves to a single APK file
+            let p = search::prepare(path)?;
+            let f = std::fs::File::open(&p).map_err(|e| format!("{path}: {e}"))?;
+            Ok(Apks {
+                one: Some(Ok(Apk::File(f))),
+                splits: None,
+            })
+        }
+    }
+}
+
+/// Iterator behind [`apks`]: the single prepared APK of a plain input, or a bundle's splits in
+/// visiting order.
+struct Apks {
+    one: Option<Result<Apk, String>>,
+    splits: Option<Splits>,
+}
+
+impl Iterator for Apks {
+    type Item = Result<Apk, String>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(a) = self.one.take() {
+            return Some(a);
+        }
+        let s = self.splits.as_mut()?;
+        let i = *s.order.get(s.next)?;
+        s.next += 1;
+        Some(s.open(i))
+    }
+}
+
+/// A bundle opened once: its central directory (through `zip`) plus the file itself, for
+/// in-place reads of stored splits.
+struct Splits {
+    f: std::fs::File,
+    zip: zip::ZipArchive<std::fs::File>,
+    /// entry indices into `zip`, in visiting order
+    order: Vec<usize>,
+    next: usize,
+}
+
+impl Splits {
+    fn new(path: &str, lib: bool) -> Result<Splits, String> {
+        let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let mut zip = zip::ZipArchive::new(f.try_clone().map_err(|e| format!("{path}: {e}"))?)
+            .map_err(|e| format!("{path}: {e}"))?;
+        // (index, name, size) of every inner APK; `base` is `base.apk` or, failing that, the
+        // largest split — the same one `search::prepare` would extract
+        let mut splits: Vec<(usize, String, u64)> = Vec::new();
+        for i in 0..zip.len() {
+            let e = zip.by_index_raw(i).map_err(|e| e.to_string())?;
+            let n = e.name().map_err(|e| e.to_string())?.into_owned();
+            if n.ends_with(".apk") {
+                splits.push((i, n, e.size()));
+            }
+        }
+        let base = splits
+            .iter()
+            .find(|(_, n, _)| n.rsplit('/').next() == Some("base.apk"))
+            .or_else(|| splits.iter().max_by_key(|(_, _, s)| *s))
+            .map(|(i, _, _)| *i)
+            .ok_or("no APK inside this bundle")?;
+        // visiting order: `lib` puts the config splits first and `base.apk` last; anything else
+        // starts at `base.apk`. Stable sort keeps archive order within each group.
+        splits.sort_by_key(|(i, _, _)| if lib { *i == base } else { *i != base });
+        Ok(Splits {
+            f,
+            zip,
+            order: splits.into_iter().map(|(i, _, _)| i).collect(),
+            next: 0,
+        })
+    }
+
+    /// Split `i` as a reader: in place through [`Bounded`] when the bundle stores it (no copy),
+    /// buffered only when it is deflated — the one case a seekable view can't cover.
+    fn open(&mut self, i: usize) -> Result<Apk, String> {
+        let (name, method, start, len) = {
+            let e = self.zip.by_index_raw(i).map_err(|e| e.to_string())?;
+            (
+                e.name().map_err(|e| e.to_string())?.into_owned(),
+                e.compression(),
+                e.data_start(),
+                e.compressed_size(),
+            )
+        };
+        match method {
+            zip::CompressionMethod::Stored => Ok(Apk::InPlace(Bounded::new(
+                self.f.try_clone().map_err(|e| format!("{name}: {e}"))?,
+                start.ok_or_else(|| format!("{name}: no data offset"))?,
+                len,
+            ))),
+            zip::CompressionMethod::Deflated => {
+                let mut e = self.zip.by_index(i).map_err(|e| format!("{name}: {e}"))?;
+                let mut buf = Vec::with_capacity(e.size() as usize);
+                e.read_to_end(&mut buf)
+                    .map_err(|e| format!("{name}: {e}"))?;
+                Ok(Apk::Mem(std::io::Cursor::new(buf)))
+            }
+            m => Err(format!("{name}: unsupported compression {m:?}")),
+        }
+    }
 }
 
 /// A route-like token: `/seg/seg...`, 2-6 word segments, no base64 / binary noise. The AOT
@@ -620,10 +826,14 @@ pub fn flutter(
 type Entry = (String, u64, usize, usize, u16);
 
 /// (name, local header offset, compressed size, size, method) of the zip entries whose raw name
-/// passes `keep`, from the central directory. Zip64 archives go through the zip crate instead.
+/// passes `keep`, from the central directory of any APK reader — a file, an in-place split, a
+/// buffered split. Zip64 archives go through the zip crate instead.
 /// Big apps have 40k+ entries and a query wants a handful: names are only copied for those.
-fn central_dir(f: &mut std::fs::File, keep: &dyn Fn(&[u8]) -> bool) -> Result<Vec<Entry>, String> {
-    use std::io::{Seek, SeekFrom};
+fn central_dir<R: std::io::Read + std::io::Seek>(
+    f: &mut R,
+    keep: &dyn Fn(&[u8]) -> bool,
+) -> Result<Vec<Entry>, String> {
+    use std::io::SeekFrom;
     let len = f.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     let tail_len = len.min(65_557);
     let mut tail = vec![0; tail_len as usize];
@@ -681,12 +891,11 @@ fn central_dir(f: &mut std::fs::File, keep: &dyn Fn(&[u8]) -> bool) -> Result<Ve
     Ok(out)
 }
 
-fn zip_crate_dir(
-    f: &mut std::fs::File,
+fn zip_crate_dir<R: std::io::Read + std::io::Seek>(
+    f: &mut R,
     keep: &dyn Fn(&[u8]) -> bool,
 ) -> Result<Vec<Entry>, String> {
-    let mut zip = zip::ZipArchive::new(f.try_clone().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for i in 0..zip.len() {
         let e = zip.by_index_raw(i).map_err(|e| e.to_string())?;
