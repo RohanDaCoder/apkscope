@@ -462,3 +462,67 @@ fn explain(log: String) -> String {
 #[cfg(test)]
 #[path = "../tests/apkscope/live.rs"]
 mod tests;
+
+/// Built-in hook sets, by name: (description, raw script).
+pub const PRESETS: [(&str, &str, &str); 1] = [(
+    "http",
+    "every HTTP request and response: OkHttp 3/4 (method, URL, headers, body up to 64 KB, status, response body) and HttpURLConnection (method, URL, status)",
+    HTTP_PRESET,
+)];
+
+/// A hook body as a script `frida -l` runs on its own: the helpers it reports through, then it.
+pub fn standalone(js: &str) -> String {
+    format!("{PRELUDE}{js}")
+}
+
+pub fn preset(name: &str) -> Option<&'static str> {
+    PRESETS.iter().find(|p| p.0 == name).map(|p| p.2)
+}
+
+/// OkHttp: the call that runs the interceptor chain sees the final request and response, so
+/// one hook gives both (OkHttp 4 renamed it, both names are tried). Bodies are copied, not
+/// consumed: the request through an okio Buffer, the response with peekBody. Classes R8 renamed
+/// are skipped and the skip is reported, so an empty log never looks like "no traffic".
+const HTTP_PRESET: &str = r#"Java.perform(() => {
+  const MAX = 65536;
+  const hooked = [];
+  const head = h => { const o = {}; try { for (let i = 0; i < h.size(); i++) o[h.name(i)] = h.value(i); } catch (e) {} return o; };
+  const reqBody = r => { try { const b = r.body(); if (b === null) return null; const buf = Java.use("okio.Buffer").$new(); b.writeTo(buf); const n = buf.size(); return buf.readUtf8(Math.min(n, MAX)); } catch (e) { return "<" + e + ">"; } };
+  const resBody = r => { try { return r.peekBody(MAX).string(); } catch (e) { return "<" + e + ">"; } };
+  const ok = (cls, m) => {
+    let C; try { C = Java.use(cls); } catch (e) { return; }
+    if (!C[m]) return;
+    C[m].overloads.forEach(o => {
+      o.implementation = function () {
+        let req = null; try { req = this.request ? this.request() : this.originalRequest.value; } catch (e) {}
+        const t = Date.now();
+        try {
+          const res = o.apply(this, arguments);
+          try {
+            const q = res.request();
+            __ev("http", q.method() + " " + q.url().toString(), JSON.stringify({ status: res.code(), ms: Date.now() - t, request_headers: head(q.headers()), request_body: reqBody(q), response_headers: head(res.headers()), response_body: resBody(res) }));
+          } catch (e) { __ev("error", "http", String(e)); }
+          return res;
+        } catch (err) {
+          if (req) __ev("http", req.method() + " " + req.url().toString(), JSON.stringify({ error: String(err) }));
+          throw err;
+        }
+      };
+    });
+    hooked.push(cls + "." + m);
+  };
+  ok("okhttp3.internal.connection.RealCall", "getResponseWithInterceptorChain$okhttp");
+  ok("okhttp3.RealCall", "getResponseWithInterceptorChain");
+  // the platform's HttpURLConnection is these classes; the abstract base is never what runs
+  ["com.android.okhttp.internal.huc.HttpURLConnectionImpl", "com.android.okhttp.internal.huc.DelegatingHttpsURLConnection"].forEach(cls => {
+    let U; try { U = Java.use(cls); } catch (e) { return; }
+    U.getResponseCode.implementation = function () {
+      const code = this.getResponseCode();
+      __ev("http", this.getRequestMethod() + " " + this.getURL().toString(), JSON.stringify({ status: code, via: "HttpURLConnection" }));
+      return code;
+    };
+    hooked.push(cls + ".getResponseCode");
+  });
+  __ev("log", "http preset", hooked.length ? "hooked " + hooked.join(", ") : "no OkHttp or HttpURLConnection class found (renamed by R8? hook the client with frida_hook)");
+});
+"#;

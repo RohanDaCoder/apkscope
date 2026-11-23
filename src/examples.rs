@@ -117,7 +117,14 @@ Examples:
 pub const FRIDA: &str = "\
 Examples:
   apkscope frida app.apk com.example.Api login > hook.js; frida -U -f com.example -l hook.js
-  apkscope frida app.apk com.example.Api          every method of the class";
+  apkscope frida app.apk com.example.Api          every method of the class
+  apkscope frida --preset http > http.js; frida -U -f com.example -l http.js   all HTTP traffic";
+
+pub const FRIDA_SERVER: &str = "Examples:
+  apkscope frida-server                        what the device has and which frida-server file it needs
+  apkscope frida-server --push frida-server-17.2.15-android-arm64   push, start and check it
+  apkscope frida-server -D emulator-5554
+apkscope downloads nothing: it prints the file name and release URL to fetch yourself.";
 
 pub const NOTE: &str = "\
 Examples:

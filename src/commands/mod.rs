@@ -50,6 +50,7 @@ fn dispatch(cmd: Cmd, deobf: bool) -> Result<(), String> {
         Callgraph(a) => recon::callgraph(&a),
         Access(a) => recon::access(&a),
         Frida(a) => recon::frida(&a),
+        FridaServer(a) => recon::frida_server(&a),
         Dump(a) => misc::dump(&a),
         Il2cpp(a) => il2cpp::il2cpp(&a),
         Flutter(a) => flutter::flutter(&a),

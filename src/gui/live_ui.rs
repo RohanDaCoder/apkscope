@@ -64,6 +64,9 @@ pub struct LiveUi {
     paused: bool,
     script: String,
     script_name: String,
+    /// `frida-server` check / push running in the background, and its last report
+    setup: Option<mpsc::Receiver<Result<String, String>>>,
+    setup_out: String,
 }
 
 impl LiveUi {
@@ -88,6 +91,20 @@ impl LiveUi {
         let key = method.map_or(java.clone(), |m| format!("{java}#{m}"));
         live.hook(&key, &js, false)?;
         Ok(format!("hooked {key} live"))
+    }
+
+    /// Check the device for Frida, or push `push` (an unpacked frida-server) and start it.
+    fn setup(&mut self, push: Option<String>) {
+        let (tx, rx) = mpsc::channel();
+        let device = Some(self.device.trim().to_string()).filter(|d| !d.is_empty());
+        self.setup_out = "checking the device…".into();
+        std::thread::spawn(move || {
+            _ = tx.send(crate::frida_setup::setup(
+                device.as_deref(),
+                push.as_deref(),
+            ))
+        });
+        self.setup = Some(rx);
     }
 
     fn start(&mut self, target: String) {
@@ -244,12 +261,24 @@ impl LiveUi {
             });
             egui::CollapsingHeader::new("device").default_open(false).show(ui, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.device).hint_text("frida device id (empty = USB)"));
-                if ui.button("Start frida-server").on_hover_text("adb shell su -c /data/local/tmp/frida-server -D (rooted device or emulator)").clicked() {
-                    // -D daemonizes; adb returns once it has
-                    self.err = match std::process::Command::new("adb").args(["shell", "su -c '/data/local/tmp/frida-server -D'"]).stdin(std::process::Stdio::null()).spawn() {
-                        Ok(_) => None,
-                        Err(e) => Some(format!("cannot run adb: {e}")),
-                    };
+                if let Some(rx) = &self.setup
+                    && let Ok(r) = rx.try_recv()
+                {
+                    self.setup_out = r.unwrap_or_else(|e| e);
+                    self.setup = None;
+                }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(self.setup.is_none(), egui::Button::new("Check device")).on_hover_text("ABIs, SDK, frida versions here and on the device, and which frida-server file it needs").clicked() {
+                        self.setup(None);
+                    }
+                    if ui.add_enabled(self.setup.is_none(), egui::Button::new("Push frida-server…")).on_hover_text("Pick a downloaded, unpacked frida-server: pushed over adb, started as root and checked").clicked()
+                        && let Some(f) = rfd::FileDialog::new().set_title("frida-server (unpacked)").pick_file()
+                    {
+                        self.setup(Some(f.display().to_string()));
+                    }
+                });
+                if !self.setup_out.is_empty() {
+                    ui.add(egui::TextEdit::multiline(&mut self.setup_out.as_str()).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                 }
                 ui.label(RichText::new("Needs `pip install frida-tools` here and frida-server on the device. MuMu: adb connect 127.0.0.1:16384").small().color(DIM));
             });
@@ -294,6 +323,16 @@ impl LiveUi {
                 }
             }
             Tab::Hooks => {
+                if let Some(l) = &mut self.live
+                    && !l.hook_keys().iter().any(|k| k == "http")
+                    && ui
+                        .button("+ HTTP traffic")
+                        .on_hover_text("Built-in preset: every OkHttp request and response (method, URL, headers, bodies) and HttpURLConnection status, as http events")
+                        .clicked()
+                    && let Some(js) = crate::live::preset("http")
+                {
+                    self.err = l.hook("http", js, true).err();
+                }
                 let keys = self.live.as_ref().map(Live::hook_keys).unwrap_or_default();
                 if keys.is_empty() {
                     ui.label(RichText::new("No hooks yet.\n\nRight-click a method or class in the code and pick Hook live: its calls, arguments and results show up under Activity.").color(DIM));

@@ -20,6 +20,7 @@ mod dex;
 mod elf;
 mod examples;
 mod export;
+mod frida_setup;
 #[cfg(feature = "gui")]
 mod gui;
 mod il2cpp;
