@@ -158,27 +158,48 @@ impl Document {
         {
             return Ok(dex);
         }
-        // the file's classes in their order, each read as it is written, then the new ones
-        let count = self.reader.class_count();
-        let new: Vec<&Class> = (self.edited.values())
-            .filter(|c| !self.index.contains_key(&c.name))
-            .collect();
-        let class = |i: usize| -> Result<Cow<'_, Class>> {
-            if i >= count {
-                return Ok(Cow::Borrowed(new[i - count]));
-            }
-            Ok(
-                match self.edited.get(&self.reader.class_name(&self.src, i)?) {
-                    Some(c) => Cow::Borrowed(c),
-                    None => Cow::Owned(self.reader.class(&self.src, i)?),
-                },
-            )
-        };
         let version = match self.src.bytes().is_empty() {
             true => *b"035",
             false => version(self.src.bytes()),
         };
-        write::write_each(&self.src, count + new.len(), &class, version)
+        write::write_each(&self.src, &Edited(self), version)
+    }
+}
+
+/// A document's classes as it is written again: the file's in their order, each read from the
+/// file as it is asked for unless an edit changed it, then the new ones.
+struct Edited<'a>(&'a Document);
+
+impl Edited<'_> {
+    /// Class `i` if an edit changed it or it is new, or its place in the file.
+    fn edited(&self, i: usize) -> Result<std::result::Result<&Class, usize>> {
+        let doc = self.0;
+        let count = doc.reader.class_count();
+        if i >= count {
+            let mut new = (doc.edited.values()).filter(|c| !doc.index.contains_key(&c.name));
+            return Ok(Ok(new.nth(i - count).expect("counted")));
+        }
+        Ok((doc.edited.get(&doc.reader.class_name(&doc.src, i)?)).ok_or(i))
+    }
+}
+
+impl write::Classes for Edited<'_> {
+    fn count(&self) -> usize {
+        let doc = self.0;
+        let new = (doc.edited.values()).filter(|c| !doc.index.contains_key(&c.name));
+        doc.reader.class_count() + new.count()
+    }
+    fn class(&self, i: usize) -> Result<Cow<'_, Class>> {
+        Ok(match self.edited(i)? {
+            Ok(class) => Cow::Borrowed(class),
+            Err(i) => Cow::Owned(self.0.reader.class(&self.0.src, i)?),
+        })
+    }
+    fn outline(&self, i: usize, used: &mut dyn FnMut(read::Part<'_>)) -> Result<Cow<'_, Class>> {
+        Ok(match self.edited(i)? {
+            Ok(class) => Cow::Borrowed(class),
+            Err(i) => Cow::Owned(self.0.reader.outline(&self.0.src, i, used)?),
+        })
     }
 }
 

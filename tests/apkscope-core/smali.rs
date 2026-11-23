@@ -417,6 +417,62 @@ fn edits_classes_of_open_documents() {
 }
 
 #[test]
+fn writes_a_file_again_from_outlines() {
+    // a class with all a method's code can refer to: a string, a method, a caught type, a
+    // parameter name, a local with its type
+    let kept = r#".class public La/Kept;
+.super Ljava/lang/Object;
+
+.method public static f(I)I
+    .locals 1
+    .param p0, "which"
+    .line 10
+    :try_start_0
+    const-string v0, "kept"
+    invoke-static {v0}, Ljava/lang/Integer;->parseInt(Ljava/lang/String;)I
+    move-result v0
+    .local v0, "n":I
+    :try_end_0
+    .catch Ljava/lang/NumberFormatException; {:try_start_0 .. :try_end_0} :catch_0
+    return v0
+    :catch_0
+    const/4 v0, 0x0
+    return v0
+.end method
+"#;
+    let edited = |s: &str| {
+        format!(
+            ".class public La/Edited;\n.super Ljava/lang/Object;\n\
+             .method public static g()Ljava/lang/String;\n    .registers 1\n\
+             \x20   const-string v0, \"{s}\"\n    return-object v0\n.end method\n"
+        )
+    };
+    let mut classes = Classes::new(vec![(
+        "classes.dex".into(),
+        assemble(&[kept, &edited("old")], *b"035"),
+    )]);
+    // the edit adds a string, so the file is written again: La/Kept; is read from the file
+    // without its code for what it refers to, and with it to be written
+    classes.set_text(&edited("new")).unwrap();
+    let mut edits = crate::rebuild::Edits::new();
+    assert_eq!(classes.write(&mut edits).unwrap(), ["classes.dex"]);
+    let written = edits["classes.dex"].clone().unwrap();
+    // it is the file both classes write as models, so nothing the unedited one refers to is
+    // lost or kept without need
+    assert_eq!(written, assemble(&[kept, &edited("new")], *b"035"));
+    let back = &smali(&written)[0];
+    for part in [
+        "const-string v0, \"kept\"",
+        "Ljava/lang/Integer;->parseInt(Ljava/lang/String;)I",
+        ".catch Ljava/lang/NumberFormatException;",
+        ".param p0, \"which\"",
+        ".local v0, \"n\":I",
+    ] {
+        assert!(back.contains(part), "{part} is missing from\n{back}");
+    }
+}
+
+#[test]
 fn patches_instruction_in_place() {
     let text = ".class public Lcom/ex/P;\n.super Ljava/lang/Object;\n\
                    .method public static f()I\n    .registers 1\n    const/16 v0, 0x64\n    return v0\n.end method\n";

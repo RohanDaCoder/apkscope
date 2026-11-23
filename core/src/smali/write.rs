@@ -7,6 +7,7 @@ use super::read;
 use super::source::{FieldRef, MethodRef, Proto, cmp_str};
 use crate::bytecode::{self, Fmt};
 use crate::{Error, Result};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -156,35 +157,45 @@ impl<'s> Collect<'s> {
                     .filter_map(|h| h.0.as_ref())
                     .for_each(|x| self.ty(x));
             }
-            for it in &code.items {
-                match it {
-                    Item::Ins(i) => match &i.operand {
-                        Operand::None | Operand::Lit(_) | Operand::Label(_) => {}
-                        Operand::Str(x) => self.str(x),
-                        Operand::Type(t) => self.ty(t),
-                        Operand::Field(f) => self.field(f),
-                        Operand::Method(m) => self.method(m),
-                        Operand::Proto(p) => self.proto(p),
-                        Operand::CallSite(cs) => {
-                            cs.iter().for_each(|v| self.value(v));
-                            if self.site_set.insert(cs.clone()) {
-                                self.sites.push(cs.clone());
-                            }
-                        }
-                        Operand::Handle(h) => self.handle(h),
-                        Operand::Polymorphic(m, p) => {
-                            self.method(m);
-                            self.proto(p);
-                        }
-                    },
-                    Item::Local { name, ty, sig, .. } => {
-                        [name, sig].into_iter().flatten().for_each(|x| self.str(x));
-                        ty.iter().for_each(|t| self.ty(t));
+            code.items.iter().for_each(|it| self.item(it));
+        }
+    }
+    /// What an instruction or a debug entry refers to.
+    fn item(&mut self, it: &Item) {
+        match it {
+            Item::Ins(i) => match &i.operand {
+                Operand::None | Operand::Lit(_) | Operand::Label(_) => {}
+                Operand::Str(x) => self.str(x),
+                Operand::Type(t) => self.ty(t),
+                Operand::Field(f) => self.field(f),
+                Operand::Method(m) => self.method(m),
+                Operand::Proto(p) => self.proto(p),
+                Operand::CallSite(cs) => {
+                    cs.iter().for_each(|v| self.value(v));
+                    if self.site_set.insert(cs.clone()) {
+                        self.sites.push(cs.clone());
                     }
-                    Item::SetFile(Some(x)) => self.str(x),
-                    _ => {}
                 }
+                Operand::Handle(h) => self.handle(h),
+                Operand::Polymorphic(m, p) => {
+                    self.method(m);
+                    self.proto(p);
+                }
+            },
+            Item::Local { name, ty, sig, .. } => {
+                [name, sig].into_iter().flatten().for_each(|x| self.str(x));
+                ty.iter().for_each(|t| self.ty(t));
             }
+            Item::SetFile(Some(x)) => self.str(x),
+            _ => {}
+        }
+    }
+    /// Something a method's code refers to, from a class read without its code.
+    fn part(&mut self, part: read::Part<'_>) {
+        match part {
+            read::Part::Str(x) => self.str(&x),
+            read::Part::Type(t) => self.ty(&t),
+            read::Part::Item(it) => self.item(it),
         }
     }
 }
@@ -934,14 +945,36 @@ fn write_code(out: &mut Out, a: &Assembled) {
     out.buf.extend_from_slice(&list);
 }
 
+/// The classes a file is written from, given one at a time, so that a caller that reads them
+/// from a DEX file never holds more than one as a model. Each is asked for twice: once for what
+/// it refers to, which the id tables hold, and once to be written.
+pub trait Classes {
+    fn count(&self) -> usize;
+
+    /// Class `i`, to write.
+    fn class(&self, i: usize) -> R<Cow<'_, Class>>;
+
+    /// Class `i`, for what it refers to. A method of it may lack its code, if what that code
+    /// refers to is given to `used` instead: a class read from a file need not be built whole
+    /// for this.
+    fn outline(&self, i: usize, used: &mut dyn FnMut(read::Part<'_>)) -> R<Cow<'_, Class>> {
+        let _ = used;
+        self.class(i)
+    }
+}
+
+impl Classes for [Class] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn class(&self, i: usize) -> R<Cow<'_, Class>> {
+        Ok(Cow::Borrowed(&self[i]))
+    }
+}
+
 /// `version` is the 3-digit DEX version to write (raised to 038 when the code needs it).
 pub fn write(src: &Source, classes: &[Class], version: [u8; 3]) -> R<Vec<u8>> {
-    write_each(
-        src,
-        classes.len(),
-        &|i| Ok(std::borrow::Cow::Borrowed(&classes[i])),
-        version,
-    )
+    write_each(src, classes, version)
 }
 
 /// (field_idx, access, hiddenapi flags)
@@ -964,20 +997,14 @@ struct Written {
     methods: [Vec<MethodDef>; 2],
 }
 
-/// [`write`] `n` classes that `class` gives one at a time, so a caller that reads them from a
-/// DEX file never holds more than one as a model. It is called twice for each: once to collect
-/// what the id tables hold, once to write the class.
-pub fn write_each<'c>(
-    src: &Source,
-    n: usize,
-    class: &dyn Fn(usize) -> R<std::borrow::Cow<'c, Class>>,
-    version: [u8; 3],
-) -> R<Vec<u8>> {
+/// [`write`] classes given one at a time.
+pub fn write_each(src: &Source, classes: &(impl Classes + ?Sized), version: [u8; 3]) -> R<Vec<u8>> {
+    let n = classes.count();
     let mut col = Collect::new(src);
     // name, then superclass and interfaces, of each class
     let mut shells: Vec<Vec<TypeId>> = Vec::with_capacity(n);
     for i in 0..n {
-        let c = class(i)?;
+        let c = classes.outline(i, &mut |part| col.part(part))?;
         col.class(&c);
         let mut shell = vec![c.name];
         shell.extend(c.sup.iter().chain(&c.ifaces).cloned());
@@ -1136,7 +1163,7 @@ pub fn write_each<'c>(
     let mut written: Vec<Written> = Vec::with_capacity(nc);
 
     for &i in &order {
-        let c = class(i)?;
+        let c = classes.class(i)?;
         let c: &Class = &c;
         let fid = |f: &Field| p.fi[&f.id];
         let mid = |m: &Method| p.mi[&m.id];

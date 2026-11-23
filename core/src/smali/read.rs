@@ -76,10 +76,24 @@ impl Reader {
         View { s, t: self }.class(i)
     }
 
+    /// Class `i` of the file without its methods' code, for what it refers to: what the code
+    /// refers to is given to `used`, in no order, and the code is not built.
+    pub fn outline(&self, s: &Source, i: usize, used: &mut dyn FnMut(Part<'_>)) -> R<Class> {
+        View { s, t: self }.outline(i, used)
+    }
+
     /// The file's method handles and call sites, in the order of their ids.
     pub(super) fn handles(&self) -> (&[Handle], &[Arc<Vec<Value>>]) {
         (&self.handles, &self.call_sites)
     }
+}
+
+/// Something a method's code refers to.
+pub enum Part<'a> {
+    Str(StrId),
+    Type(TypeId),
+    /// An instruction, or a debug entry.
+    Item(&'a Item),
 }
 
 /// A reader with the source it reads.
@@ -266,7 +280,24 @@ impl View<'_> {
             .collect()
     }
 
-    pub fn class(&self, i: usize) -> R<Class> {
+    fn class(&self, i: usize) -> R<Class> {
+        self.class_with(i, &mut |co, nparams| self.code(co, nparams).map(Some))
+    }
+
+    /// Class `i` without its methods' code, what the code refers to given to `used` instead.
+    fn outline(&self, i: usize, used: &mut dyn FnMut(Part<'_>)) -> R<Class> {
+        self.class_with(i, &mut |co, nparams| {
+            self.code_refs(co, nparams, used)?;
+            Ok(None)
+        })
+    }
+
+    /// Class `i`, the code item at an offset, of a method of so many parameters, read by `code`.
+    fn class_with(
+        &self,
+        i: usize,
+        code: &mut dyn FnMut(usize, usize) -> R<Option<Code>>,
+    ) -> R<Class> {
         let d = self.s.bytes();
         let o = self.t.class_defs + i * 32;
         let name = self.ty(u32_at(d, o)?)?;
@@ -399,10 +430,8 @@ impl View<'_> {
                         }
                     }
                     if code_off != 0 {
-                        method.code = Some(
-                            self.code(code_off, nparams)
-                                .map_err(|e| e.at(format!("method {idx}")))?,
-                        );
+                        method.code =
+                            code(code_off, nparams).map_err(|e| e.at(format!("method {idx}")))?;
                     }
                     c.methods.push(method);
                 }
@@ -411,10 +440,134 @@ impl View<'_> {
         Ok(c)
     }
 
+    /// A decoded instruction as the model has it: its operand what the file's index of it
+    /// names, or the address it branches to.
+    fn instruction(&self, i: &bytecode::Insn) -> R<Ins> {
+        let (_, f, kind) = bytecode::info(i.op).ok_or_else(|| Error::dex("unknown opcode"))?;
+        let operand = match (f, kind) {
+            (f, _) if f.has_target() => Operand::Label((i.off as i64 + i.lit) as u32),
+            (Fmt::F45cc | Fmt::F4rcc, _) => Operand::Polymorphic(self.me(i.idx)?, self.pr(i.idx2)?),
+            (_, bytecode::Ref::String) => Operand::Str(self.st(i.idx)?),
+            (_, bytecode::Ref::Type) => Operand::Type(self.ty(i.idx)?),
+            (_, bytecode::Ref::Field) => Operand::Field(self.fl(i.idx)?),
+            (_, bytecode::Ref::Method) => Operand::Method(self.me(i.idx)?),
+            (_, bytecode::Ref::Proto) => Operand::Proto(self.pr(i.idx)?),
+            (_, bytecode::Ref::CallSite) => Operand::CallSite(
+                (self.t.call_sites.get(i.idx as usize).cloned())
+                    .ok_or_else(|| Error::dex("bad call site id"))?,
+            ),
+            (_, bytecode::Ref::MethodHandle) => Operand::Handle(
+                (self.t.handles.get(i.idx as usize).copied())
+                    .ok_or_else(|| Error::dex("bad method handle id"))?,
+            ),
+            (f, bytecode::Ref::None) if f.has_literal() => Operand::Lit(i.lit),
+            (_, bytecode::Ref::None) => Operand::None,
+        };
+        Ok(Ins {
+            op: i.op,
+            regs: i.regs,
+            n: i.nregs,
+            operand,
+        })
+    }
+
+    /// The try blocks of the code item at `co`, each with the types it catches.
+    fn tries(&self, co: usize, units: usize) -> R<Vec<Try>> {
+        let mut tries = vec![];
+        for t in crate::dex::parse_tries(self.s.bytes(), co, units)? {
+            let handlers = (t.handlers.into_iter())
+                .map(|(ty, a)| Ok((ty.map(|x| self.ty(x)).transpose()?, a)))
+                .collect::<R<Vec<_>>>()?;
+            tries.push(Try {
+                start: t.start,
+                end: t.start + t.count,
+                handlers,
+            });
+        }
+        Ok(tries)
+    }
+
+    /// The debug info at `debug_off`, if there is any: each event with its address given to
+    /// `event`, in address order; the parameter names it has.
+    fn debug(&self, debug_off: usize, event: &mut dyn FnMut(u32, Item)) -> R<Vec<Option<StrId>>> {
+        let d = self.s.bytes();
+        let mut param_names = vec![];
+        if debug_off != 0 {
+            let mut o = debug_off;
+            let mut line = uleb128(d, &mut o)?;
+            let n = uleb128(d, &mut o)? as usize;
+            for _ in 0..n {
+                param_names.push(self.p1(&mut o)?);
+            }
+            let mut addr = 0u32;
+            loop {
+                let op = *d.get(o).ok_or_else(|| Error::dex("debug info past end"))?;
+                o += 1;
+                let ev = match op {
+                    0 => break,
+                    1 => {
+                        addr += uleb128(d, &mut o)?;
+                        continue;
+                    }
+                    2 => {
+                        line = line.wrapping_add(sleb128(d, &mut o)? as u32);
+                        continue;
+                    }
+                    3 | 4 => {
+                        let reg = uleb128(d, &mut o)? as u16;
+                        let name = self.p1(&mut o)?;
+                        // the type is an index into type_ids, not string_ids
+                        let ty = match uleb128(d, &mut o)? {
+                            0 => None,
+                            v => Some(self.ty(v - 1)?),
+                        };
+                        let sig = if op == 4 { self.p1(&mut o)? } else { None };
+                        Item::Local { reg, name, ty, sig }
+                    }
+                    5 => Item::EndLocal(uleb128(d, &mut o)? as u16),
+                    6 => Item::Restart(uleb128(d, &mut o)? as u16),
+                    7 => Item::Prologue,
+                    8 => Item::Epilogue,
+                    9 => Item::SetFile(self.p1(&mut o)?),
+                    _ => {
+                        let adj = (op - 0x0a) as i32;
+                        line = line.wrapping_add((adj % 15 - 4) as u32);
+                        addr += (adj / 15) as u32;
+                        Item::Line(line)
+                    }
+                };
+                event(addr, ev);
+            }
+        }
+        Ok(param_names)
+    }
+
+    /// What the code item at `co` refers to, given to `used` in no order, without the code
+    /// being built: what [`View::code`] would keep of it, and no more.
+    fn code_refs(&self, co: usize, nparams: usize, used: &mut dyn FnMut(Part<'_>)) -> R<()> {
+        let d = self.s.bytes();
+        let debug_off = u32_at(d, co + 8)? as usize;
+        let units = u32_at(d, co + 12)? as usize;
+        let insns = d
+            .get(co + 16..co + 16 + units * 2)
+            .ok_or_else(|| Error::dex("code past end"))?;
+        for i in &bytecode::decode(insns)? {
+            used(Part::Item(&Item::Ins(self.instruction(i)?)));
+        }
+        if u16_at(d, co + 6)? != 0 {
+            let tries = self.tries(co, units)?;
+            let caught = tries.iter().flat_map(|t| &t.handlers);
+            caught.filter_map(|h| h.0).for_each(|t| used(Part::Type(t)));
+        }
+        let names = self.debug(debug_off, &mut |_, ev| used(Part::Item(&ev)))?;
+        // a name past the parameters is not kept
+        (names.iter().take(nparams).flatten()).for_each(|n| used(Part::Str(*n)));
+        Ok(())
+    }
+
     fn code(&self, co: usize, nparams: usize) -> R<Code> {
         let d = self.s.bytes();
         let registers = u16_at(d, co)?;
-        let ntries = u16_at(d, co + 6)? as usize;
         let debug_off = u32_at(d, co + 8)? as usize;
         let units = u32_at(d, co + 12)? as usize;
         let insns = d
@@ -435,41 +588,13 @@ impl View<'_> {
         let mut body: Vec<(u32, Item)> = Vec::with_capacity(decoded.len());
         let mut payload_users: BTreeMap<u32, u32> = BTreeMap::new();
         for i in &decoded {
-            let (_, f, kind) = bytecode::info(i.op).unwrap();
-            let operand = match (f, kind) {
-                (Fmt::F10t | Fmt::F20t | Fmt::F30t | Fmt::F21t | Fmt::F22t | Fmt::F31t, _) => {
-                    let t = (i.off as i64 + i.lit) as u32;
-                    labels.push(t);
-                    if f == Fmt::F31t {
-                        payload_users.insert(t, i.off);
-                    }
-                    Operand::Label(t)
+            let ins = self.instruction(i)?;
+            if let Operand::Label(t) = ins.operand {
+                labels.push(t);
+                if bytecode::info(i.op).is_some_and(|x| x.1 == Fmt::F31t) {
+                    payload_users.insert(t, i.off);
                 }
-                (Fmt::F45cc | Fmt::F4rcc, _) => {
-                    Operand::Polymorphic(self.me(i.idx)?, self.pr(i.idx2)?)
-                }
-                (_, bytecode::Ref::String) => Operand::Str(self.st(i.idx)?),
-                (_, bytecode::Ref::Type) => Operand::Type(self.ty(i.idx)?),
-                (_, bytecode::Ref::Field) => Operand::Field(self.fl(i.idx)?),
-                (_, bytecode::Ref::Method) => Operand::Method(self.me(i.idx)?),
-                (_, bytecode::Ref::Proto) => Operand::Proto(self.pr(i.idx)?),
-                (_, bytecode::Ref::CallSite) => Operand::CallSite(
-                    (self.t.call_sites.get(i.idx as usize).cloned())
-                        .ok_or_else(|| Error::dex("bad call site id"))?,
-                ),
-                (_, bytecode::Ref::MethodHandle) => Operand::Handle(
-                    (self.t.handles.get(i.idx as usize).copied())
-                        .ok_or_else(|| Error::dex("bad method handle id"))?,
-                ),
-                (f, bytecode::Ref::None) if f.has_literal() => Operand::Lit(i.lit),
-                (_, bytecode::Ref::None) => Operand::None,
-            };
-            let ins = Ins {
-                op: i.op,
-                regs: i.regs,
-                n: i.nregs,
-                operand,
-            };
+            }
             body.push((i.off, Item::Ins(ins)));
         }
         let mut payloads: Vec<(u32, Item)> = vec![];
@@ -532,76 +657,15 @@ impl View<'_> {
             body.sort_by_key(|x| x.0);
         }
 
-        let mut tries = Vec::with_capacity(ntries);
-        for t in crate::dex::parse_tries(d, co, units)? {
-            let end = t.start + t.count;
-            labels.push(t.start);
-            labels.push(end);
-            let handlers = t
-                .handlers
-                .into_iter()
-                .map(|(ty, a)| {
-                    labels.push(a);
-                    Ok((ty.map(|x| self.ty(x)).transpose()?, a))
-                })
-                .collect::<R<Vec<_>>>()?;
-            tries.push(Try {
-                start: t.start,
-                end,
-                handlers,
-            });
+        let tries = self.tries(co, units)?;
+        for t in &tries {
+            labels.extend([t.start, t.end]);
+            labels.extend(t.handlers.iter().map(|h| h.1));
         }
 
         // debug events by address
         let mut events: Vec<(u32, Item)> = vec![];
-        let mut param_names = vec![];
-        if debug_off != 0 {
-            let mut o = debug_off;
-            let mut line = uleb128(d, &mut o)?;
-            let n = uleb128(d, &mut o)? as usize;
-            for _ in 0..n {
-                param_names.push(self.p1(&mut o)?);
-            }
-            let mut addr = 0u32;
-            loop {
-                let op = *d.get(o).ok_or_else(|| Error::dex("debug info past end"))?;
-                o += 1;
-                let ev = match op {
-                    0 => break,
-                    1 => {
-                        addr += uleb128(d, &mut o)?;
-                        continue;
-                    }
-                    2 => {
-                        line = line.wrapping_add(sleb128(d, &mut o)? as u32);
-                        continue;
-                    }
-                    3 | 4 => {
-                        let reg = uleb128(d, &mut o)? as u16;
-                        let name = self.p1(&mut o)?;
-                        // the type is an index into type_ids, not string_ids
-                        let ty = match uleb128(d, &mut o)? {
-                            0 => None,
-                            v => Some(self.ty(v - 1)?),
-                        };
-                        let sig = if op == 4 { self.p1(&mut o)? } else { None };
-                        Item::Local { reg, name, ty, sig }
-                    }
-                    5 => Item::EndLocal(uleb128(d, &mut o)? as u16),
-                    6 => Item::Restart(uleb128(d, &mut o)? as u16),
-                    7 => Item::Prologue,
-                    8 => Item::Epilogue,
-                    9 => Item::SetFile(self.p1(&mut o)?),
-                    _ => {
-                        let adj = (op - 0x0a) as i32;
-                        line = line.wrapping_add((adj % 15 - 4) as u32);
-                        addr += (adj / 15) as u32;
-                        Item::Line(line)
-                    }
-                };
-                events.push((addr, ev));
-            }
-        }
+        let mut param_names = self.debug(debug_off, &mut |addr, ev| events.push((addr, ev)))?;
         // debug info with no events and no names says nothing; the text form cannot carry it
         param_names.resize(nparams, None);
         let debug =
