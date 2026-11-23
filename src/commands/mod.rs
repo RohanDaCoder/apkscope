@@ -51,6 +51,8 @@ fn dispatch(cmd: Cmd, deobf: bool) -> Result<(), String> {
         Access(a) => recon::access(&a),
         Frida(a) => recon::frida(&a),
         FridaServer(a) => recon::frida_server(&a),
+        Install(a) => crate::install::install(&a.apk, a.device.as_deref(), a.abi.as_deref())
+            .and_then(|t| crate::cli::emit(&t)),
         Dump(a) => misc::dump(&a),
         Il2cpp(a) => il2cpp::il2cpp(&a),
         Flutter(a) => flutter::flutter(&a),

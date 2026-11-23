@@ -390,6 +390,9 @@ pub enum Cmd {
     /// check the device for Frida: which frida-server file it needs, push and start one
     #[command(name = "frida-server", after_help = crate::examples::FRIDA_SERVER)]
     FridaServer(FridaServerArgs),
+    /// install an APK or split bundle on a device: right splits, right ABI, result checked
+    #[command(name = "install", after_help = crate::examples::INSTALL)]
+    Install(InstallArgs),
     /// run under Frida, save unpacked DEX and decrypted scripts
     #[command(name = "dump")]
     Dump(DumpArgs),
@@ -620,6 +623,18 @@ pub struct FridaServerArgs {
     /// push this frida-server file (unpacked) to the device, start it and check it
     #[arg(long, value_name = "FILE")]
     pub push: Option<String>,
+}
+
+#[derive(Args)]
+pub struct InstallArgs {
+    /// .apk, or a .xapk / .apks / .apkm bundle
+    pub apk: String,
+    /// adb device serial (default: the only device)
+    #[arg(long = "device", short = 'D', value_name = "ID")]
+    pub device: Option<String>,
+    /// ABI to install with (default auto: the first device ABI the app ships code for)
+    #[arg(long, value_name = "ABI")]
+    pub abi: Option<String>,
 }
 
 #[derive(Args)]

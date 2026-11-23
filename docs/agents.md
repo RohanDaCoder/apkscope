@@ -50,6 +50,7 @@ native code from the splits too, `size` reads the outer file.
 | What changed between versions / did my patch land | `diff old.apk new.apk --strings` (`--app-only` hides SDK churn) |
 | Get Frida working on a device | `frida-server` (MCP `frida_setup`): names the exact frida-server file to download, `--push FILE` pushes, starts and checks it |
 | See the app's HTTP traffic live | MCP `frida_start`, then `frida_hook preset=http`, then `frida_events filter=http`; CLI: `frida --preset http > http.js` |
+| Run it on a device (split bundle, ABI) | `install app.xapk` (MCP `install_apk`): picks the splits and `--abi`, prints the ABI the device chose |
 
 ## Patching and rebuilding
 
