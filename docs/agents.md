@@ -31,7 +31,9 @@ an MCP tool (`apkscope mcp`, see the README) and has examples under `apkscope <c
 | Who implements an interface | `refs app.apk impl a.b.IProto` (direct), `returns`/`search --impl` (indirect too) |
 | Read code | `decompile app.apk a.b.C [--method m]`; many classes: `--classes-file list.txt --out-dir src/` |
 | The app's HTTP API | `search app.apk api` (Retrofit endpoints, params, curl lines; works on obfuscated Retrofit) |
-| Endpoints, keys, HTTP calls | `search app.apk urls`, `search app.apk secrets`, `search app.apk http` |
+| Endpoints, keys, HTTP calls | `search app.apk urls`, `search app.apk secrets`, `search app.apk http` (code, resources, native libs, text assets, Hermes bundles) |
+| React Native app (logic in a JS / Hermes bundle) | `info` names the bundle; `search app.apk urls` / `secrets` / `string "api/"` read its string table |
+| Big files, assets, duplicates | `size app.apk` |
 | What the server can change | `search app.apk config` |
 | Message ids / opcodes per class | `returns app.apk uri --impl a.b.IProtocol` |
 | What is the number 405 / 0xB8D0AFDF? | `consts app.apk --value 405` |

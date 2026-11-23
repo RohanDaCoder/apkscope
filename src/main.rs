@@ -10,6 +10,7 @@ macro_rules! note {
 }
 pub(crate) use note;
 
+mod assets;
 mod cache;
 mod cfg;
 mod cli;
