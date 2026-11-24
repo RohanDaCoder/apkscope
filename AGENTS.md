@@ -20,7 +20,9 @@ cargo clippy --release -- -D warnings                          # with the viewer
 cargo clippy --release --no-default-features --tests -- -D warnings
 cargo test --release --no-default-features
 cargo bench --no-default-features -- --compare main --compare HEAD --apk <apk>
-# ^ the bench harness (#64): --hash also fails (exit 3) when outputs differ across refs
+cargo bench --no-default-features -- --pr <N> --apk <apk>
+# ^ the bench harness (#64): --pr fetches the PR's merge ref vs origin/main, --bin <path>
+# benches given binaries, and --hash fails (exit 3) when outputs differ across columns
 ```
 
 ## Layout
@@ -43,10 +45,9 @@ cargo bench --no-default-features -- --compare main --compare HEAD --apk <apk>
 - `src/upgrade/`: self-update
 - `core/`: the `apkscope-core` library (DEX, smali, resources, signing, rebuild)
 - `tests/`: unit tests, wired in with `#[cfg(test)] #[path = "..."] mod tests;` (see `tests/README.md`)
-- `bench/`: the legacy PowerShell/Python benchmark scripts (Windows-first), to retire as the
-  `BENCHMARKS.md` numbers move to the harness above
-- `benches/`: the `cargo bench` target that replaces them: builds refs into worktrees, measures
-  the subprocess cases, prints the PR table; `--hash` diffs output across refs
+- `benches/`: the `cargo bench` target that measures everything: builds `--compare` refs into
+  worktrees, fetches `--pr` merge refs, takes `--bin` binaries as given, races `--tool` columns,
+  prints the PR table; `--hash` diffs output across columns (`BENCHMARKS.md` documents it)
 
 ## Rules
 

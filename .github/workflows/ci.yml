@@ -14,7 +14,6 @@ on:
     # markdown: skipping the 3-OS matrix for them saves the full run.
     paths-ignore:
       - "docs/**"
-      - "bench/**"
       - "*.md"
       - "assets/logo.py"
       - ".gitignore"
@@ -27,7 +26,6 @@ on:
     # mixed docs+code PR still runs the full matrix.
     paths-ignore:
       - "docs/**"
-      - "bench/**"
       - "*.md"
       - "assets/logo.py"
       - ".gitignore"

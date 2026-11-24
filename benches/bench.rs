@@ -93,9 +93,10 @@ struct Opts {
     #[arg(long, value_name = "FMT", default_value = "markdown")]
     format: Format,
 
-    /// digest every run's output with SHA-256 and, across the --compare refs, report
-    /// (and exit 3 on) any case whose output differs between builds. The `build` case
-    /// hashes the rebuilt APK's entry list and CRCs instead of stdout.
+    /// digest every run's output with SHA-256 and, across the apkscope columns
+    /// (--compare, --pr, --bin alike), report (and exit 3 on) any case whose output
+    /// differs between builds. The `build` case hashes the rebuilt APK's entry list
+    /// and CRCs instead of stdout.
     #[arg(long)]
     hash: bool,
 

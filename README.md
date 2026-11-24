@@ -10,7 +10,7 @@
 <p align="center">
   <a href="#get-started"><img src="https://img.shields.io/badge/Get_started-30_seconds-f0883e?style=for-the-badge" alt="Get started"></a>
   <a href="#what-it-found"><img src="https://img.shields.io/badge/Real_findings-5_apps-db2777?style=for-the-badge" alt="Real findings in 5 apps"></a>
-  <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-10_popular_apps-2ea44f?style=for-the-badge" alt="Benchmarks: 10 popular apps"></a>
+  <a href="BENCHMARKS.md"><img src="https://img.shields.io/badge/Benchmarks-cargo_bench-2ea44f?style=for-the-badge" alt="Benchmarks: the cargo bench harness"></a>
   <a href="https://github.com/suffixing/apkscope/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/suffixing/apkscope/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"></a>
 </p>
 
@@ -210,7 +210,8 @@ guessing. ECB on one block is the spec. Knowing which flags to drop is half the 
 | **Typed Java**, not pseudocode | a reviewer, or an agent, can trust it |
 | **One tool**: decompiler, xrefs, recon, diff, Frida, unpacking, re-signing, GUI, MCP | instead of five |
 
-Every number comes from a script in [`bench/`](bench). [All results →](BENCHMARKS.md)
+Every number is measured by the [`cargo bench` harness](BENCHMARKS.md); the pre-harness cross-tool
+runs live in git history.
 
 **For** security researchers, mobile pentesters, privacy researchers, developers checking what a
 library really does, and anyone who hands APKs to an AI agent.
