@@ -25,8 +25,12 @@ cargo test --release --no-default-features
 
 - `src/cli.rs`, `src/commands/`: CLI (clap), one file per command family
 - `src/mcp.rs`: MCP server; each tool maps to CLI arguments
-- `src/gui.rs`, `src/gui/`: the viewer (behind the `gui` feature)
-- `src/session.rs`: opened APK, reference index, scoped searches (being split into `session/` + `search/`, see #50)
+- `src/gui.rs`: the viewer's state and actions (behind the `gui` feature); `src/gui/`: one file per part:
+  `frame` (what each update draws), `side` (side panel), `search_ui` (search + results), `windows`
+  (build / export / start / settings), `menu` (line menu), `nav` (finding things in Java text),
+  `highlight`, `tree`, `theme`, `live_ui` (Frida)
+- `src/session/`: the opened APK and its reference index; `src/search/`: the search scopes
+- `src/input.rs`: an APK read in place (a bundle's stored base split needs no copy)
 - `src/quick.rs`: stateless queries (no index, no cache)
 - `src/java.rs`, `src/ir.rs`, `src/opt.rs`, `src/cfg.rs`: the decompiler
 - `src/re.rs`: xrefs, call graphs, Frida scripts, scan
