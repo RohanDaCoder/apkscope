@@ -157,42 +157,40 @@ arm); the run loop, the digests and the other formats pick it up on their own.
 ## Reference run: Telegram
 
 Measured with the harness itself on Telegram's direct download
-(`https://telegram.org/dl/android/apk`, 81.7 MB, 4 DEX files), 2026-11-24:
+(`https://telegram.org/dl/android/apk`, 81.7 MB, 4 DEX files, 22,204 classes), 2026-11-24:
 
 - machine: an Intel Xeon cloud VM (2 cores, 4 GB RAM), Linux 5.10
-- command: `cargo bench --no-default-features -- --pr 79 --hash --apk Telegram.apk`
-- columns: `origin/main` at `a401b62` · `pr-79` (the PR that added this harness, fetched
-  as GitHub's merge ref) at `b9d7f73`
+- command: `cargo bench --no-default-features -- --compare origin/main --compare HEAD --hash --runs 5 --apk Telegram.apk`
+- columns: `origin/main` at `a401b62` · `HEAD` — this PR's tree, the one-file-per-stage
+  harness included
 
 ### Telegram.apk
 
-|  | origin/main | pr-79 |
+|  | origin/main | HEAD |
 | --- | --- | --- |
-| `apkscope info` | 211 ms, 86 MB | 211 ms, 86 MB |
-| `apkscope classes` | 34.1 ms, 60 MB | 32.9 ms, 58 MB |
-| `apkscope strings` | 58.8 ms, 77 MB | 42.8 ms, 73 MB |
-| `apkscope decompile` (one class) | 55.0 ms, 65 MB | 54.9 ms, 61 MB |
+| `apkscope info` | 211 ms, 88 MB | 210 ms, 86 MB |
+| `apkscope classes` | 34.1 ms, 58 MB | 33.0 ms, 58 MB |
+| `apkscope strings` | 43.5 ms, 77 MB | 59.6 ms, 75 MB |
+| `apkscope decompile` (one class) | 54.9 ms, 65 MB | 54.8 ms, 65 MB |
 | `apkscope smali` (one class) | 105 ms, 52 MB | 106 ms, 52 MB |
-| `apkscope build` | 837 ms, 113 MB | 836 ms, 113 MB |
-| the whole APK | 12.8 s, 138 MB | 12.8 s, 138 MB |
+| `apkscope build` | 856 ms, 113 MB | 871 ms, 113 MB |
+| the whole APK | 12.9 s, 138 MB | 12.8 s, 138 MB |
 
-Columns: `origin/main` = apkscope `a401b62` · `pr-79` = apkscope `b9d7f73` (the merge
-ref of [#79](https://github.com/suffixing/apkscope/pull/79) at bench time). Median of
-3 cold runs; every digest under `--hash` was identical across the two columns (exit 0).
+Columns: `origin/main` = apkscope `a401b62` · `HEAD` = this PR's tree. Median of
+5 cold runs; every digest under `--hash` was identical across the two columns (exit 0);
+a pass of the same command with `--format svg` wrote the two charts below.
 
 <p>
-  <img src="docs/bench-telegram-time.svg" alt="Telegram wall-time bar chart: every case level between origin/main and pr-79, from 34 ms (classes) to 12.8 s (whole APK)" width="760">
-  <img src="docs/bench-telegram-ram.svg" alt="Telegram peak-RSS bar chart: every case level between origin/main and pr-79, from 52 MB (smali) to 138 MB (whole APK)" width="760">
+  <img src="docs/bench-telegram-time.svg" alt="Telegram wall-time bar chart: every case level between origin/main and HEAD, from 33 ms (classes) to 12.9 s (whole APK)" width="760">
+  <img src="docs/bench-telegram-ram.svg" alt="Telegram peak-RSS bar chart: every case level between origin/main and HEAD, from 53 MB (smali) to 138 MB (whole APK)" width="760">
 </p>
 
-The two columns sit within noise of each other — this PR adds a bench target and docs,
-no apkscope code — which is exactly what the table should show.
-
-After the harness was split into one file per stage under `benches/bench/` (same PR),
-the run was repeated at the new HEAD — same machine, same APK,
-`--compare origin/main --compare HEAD --hash`: every cell within noise of the table
-above, and every `--hash` digest identical across the two columns (exit 0). The split
-changes no measured code; the numbers say so.
+The columns are level — this PR adds a bench target and docs, no apkscope code, and
+every `--hash` digest is identical, which is exactly what the table should show. One
+row carries its own caveat: on this shared VM, `strings` is position-sensitive —
+whichever column is measured first lands near 45 ms and the second near 60 ms, and
+re-running with the columns swapped turns the row around (46.5 ms / 60.6 ms). Read
+that row as "~45-60 ms, either mode", not as a regression.
 
 ## History
 
@@ -200,7 +198,7 @@ Until this page was rewritten, it carried the cross-tool races (JADX, rust_ASC) 
 10- and 14-app cold-query tables measured by the PowerShell/Python scripts under
 `bench/` — Windows-first, and a JDK for some cases. [#64](https://github.com/suffixing/apkscope/issues/64)
 replaced them with the harness and retired the scripts; their tables and scripts live on
-in git history, and that era's `docs/bench-*.svg` charts (TikTok, still embedded in the
-README's Speed section) remain as they were measured.
+in git history, along with that era's `docs/bench-*.svg` charts (TikTok) — kept as they
+were measured, and superseded in the README by the harness's Telegram charts.
 
 [Back to the README](README.md)
