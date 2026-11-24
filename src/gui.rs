@@ -289,6 +289,10 @@ impl Open {
     }
 }
 
+/// What a laid-out text was made for (colour, font size, marked line, highlighted word):
+/// the layout is redone only when one of them changes.
+type JobKey = (Color32, u32, Option<usize>, Option<String>);
+
 struct Doc {
     open: Open,
     view: View,
@@ -299,7 +303,7 @@ struct Doc {
     mark: Option<usize>,
     scroll_pending: bool,
     /// highlighted text and what it was built for: (background, font size x10, marked line, selected word)
-    job: Option<((Color32, u32, Option<usize>, Option<String>), LayoutJob)>,
+    job: Option<(JobKey, LayoutJob)>,
     /// identifier clicked in the code, marked everywhere in the file
     sel: Option<String>,
     find: String,
@@ -423,7 +427,10 @@ fn indent(s: &str) -> usize {
 /// What sits on line `at` of decompiled Java: the chain of enclosing classes (as shown) and the
 /// member declared there, as (is_method, shown name). A comment above a declaration (such as a
 /// WARNING) points at that declaration.
-fn member_at(text: &str, at: usize) -> Option<(Vec<String>, Option<(bool, String)>)> {
+/// (class chain, member: (is a method, name)) under a position in Java text
+type MemberAt = (Vec<String>, Option<(bool, String)>);
+
+fn member_at(text: &str, at: usize) -> Option<MemberAt> {
     let [class_re, method_re, field_re] = java_res();
     let lines: Vec<&str> = text.lines().collect();
     let mut at = at.min(lines.len().checked_sub(1)?);
@@ -438,10 +445,11 @@ fn member_at(text: &str, at: usize) -> Option<(Vec<String>, Option<(bool, String
         (None, c[1].len() + 4)
     } else if let Some(c) = method_re.captures(l).filter(|c| is_decl(l, c)) {
         (Some((true, c[2].to_string())), c[1].len())
-    } else if let Some(c) = field_re.captures(l).filter(|c| !NOT_DECL.contains(&&c[2])) {
-        (Some((false, c[2].to_string())), c[1].len())
     } else {
-        return None;
+        let c = field_re
+            .captures(l)
+            .filter(|c| !NOT_DECL.contains(&&c[2]))?;
+        (Some((false, c[2].to_string())), c[1].len())
     };
     // enclosing classes, innermost last
     let mut chain = Vec::new();
@@ -913,7 +921,7 @@ fn line_menu(ui: &mut egui::Ui, doc: &Doc, text: &str, st: Option<&State>) -> Op
 }
 
 enum Msg {
-    Loaded(Result<State, String>),
+    Loaded(Result<Box<State>, String>),
     Text(Open, View, String),
     Report(Open, Vec<Line>),
     Hits(u64, Vec<Hit>, usize),
@@ -1142,7 +1150,7 @@ impl App {
         self.path = path.clone();
         let (tx, deobf) = (self.tx.clone(), self.set.deobf);
         spawn(&self.tx, "load", move || {
-            let _ = tx.send(Msg::Loaded(session::load(&path, deobf)));
+            let _ = tx.send(Msg::Loaded(session::load(&path, deobf).map(Box::new)));
         });
     }
 
@@ -1584,7 +1592,7 @@ impl App {
         while let Ok(m) = self.rx.try_recv() {
             match m {
                 Msg::Loaded(Ok(st)) => {
-                    let st: &'static State = Box::leak(Box::new(st));
+                    let st: &'static State = Box::leak(st);
                     for (k, o) in [Origin::App, Origin::Other, Origin::Library]
                         .into_iter()
                         .enumerate()
@@ -1786,16 +1794,15 @@ impl App {
                     .button("Extract all…")
                     .on_hover_text("Write every file of the APK to a folder")
                     .clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        let tx = self.tx.clone();
-                        spawn(&self.tx, "save", move || {
-                            let r = st
-                                .extract_all(&dir)
-                                .map(|n| format!("Extracted {n} files to {}", dir.display()));
-                            let _ = tx.send(Msg::Saved(r));
-                        });
-                    }
+                    let tx = self.tx.clone();
+                    spawn(&self.tx, "save", move || {
+                        let r = st
+                            .extract_all(&dir)
+                            .map(|n| format!("Extracted {n} files to {}", dir.display()));
+                        let _ = tx.send(Msg::Saved(r));
+                    });
                 }
                 if ui
                     .button("Decode resources…")
@@ -1803,31 +1810,30 @@ impl App {
                         "Write the manifest and res/ as editable files, like `apkscope res`",
                     )
                     .clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        let (tx, file) = (self.tx.clone(), st.file());
-                        spawn(&self.tx, "save", move || {
-                            let r = (|| -> Result<String, String> {
-                                let mut apk = apkscope_core::apk::open(&file)?;
-                                let files = apkscope_core::resources::decode(&mut apk)?;
-                                for (path, data) in &files {
-                                    let to = std::path::Path::new(&dir).join(path);
-                                    if let Some(parent) = to.parent() {
-                                        std::fs::create_dir_all(parent)
-                                            .map_err(|e| format!("{}: {e}", parent.display()))?;
-                                    }
-                                    std::fs::write(&to, data)
-                                        .map_err(|e| format!("{}: {e}", to.display()))?;
+                    let (tx, file) = (self.tx.clone(), st.file());
+                    spawn(&self.tx, "save", move || {
+                        let r = (|| -> Result<String, String> {
+                            let mut apk = apkscope_core::apk::open(&file)?;
+                            let files = apkscope_core::resources::decode(&mut apk)?;
+                            for (path, data) in &files {
+                                let to = std::path::Path::new(&dir).join(path);
+                                if let Some(parent) = to.parent() {
+                                    std::fs::create_dir_all(parent)
+                                        .map_err(|e| format!("{}: {e}", parent.display()))?;
                                 }
-                                Ok(format!(
-                                    "Decoded {} resource file(s) to {}",
-                                    files.len(),
-                                    dir.display()
-                                ))
-                            })();
-                            let _ = tx.send(Msg::Saved(r));
-                        });
-                    }
+                                std::fs::write(&to, data)
+                                    .map_err(|e| format!("{}: {e}", to.display()))?;
+                            }
+                            Ok(format!(
+                                "Decoded {} resource file(s) to {}",
+                                files.len(),
+                                dir.display()
+                            ))
+                        })();
+                        let _ = tx.send(Msg::Saved(r));
+                    });
                 }
             });
             let mut verify = false;
@@ -1836,8 +1842,7 @@ impl App {
                     .button("Add file…")
                     .on_hover_text("Put a new file into the APK when you build")
                     .clicked()
-                {
-                    if let Some(f) = rfd::FileDialog::new().pick_file() {
+                    && let Some(f) = rfd::FileDialog::new().pick_file() {
                         match std::fs::read(&f) {
                             Ok(b) => {
                                 let name = f
@@ -1853,22 +1858,19 @@ impl App {
                             }
                         }
                     }
-                }
                 if ui
                     .button("Resources folder…")
                     .on_hover_text(
                         "Apply a folder of edited resources (from Decode resources) on build, like `build --res`",
                     )
                     .clicked()
-                {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         self.res_dir = Some(dir.display().to_string());
                         self.toast = Some((
                             "Resources folder staged — use Build & sign to apply it".into(),
                             std::time::Instant::now(),
                         ));
                     }
-                }
                 let n = self.edits.len() + self.smali_edits.len() + self.res_dir.is_some() as usize;
                 let build = ui.add_enabled(
                     n > 0,
@@ -2196,11 +2198,11 @@ impl App {
                         "Other code (unknown or obfuscated packages)".to_string(),
                         "Libraries & SDKs".to_string(),
                     ];
-                    for k in 0..3 {
+                    for (k, name) in names.iter().enumerate() {
                         if self.counts[k] == 0 || (k == 2 && !self.show_libs) {
                             continue;
                         }
-                        let head = RichText::new(format!("{}  ({})", names[k], self.counts[k]))
+                        let head = RichText::new(format!("{name}  ({})", self.counts[k]))
                             .strong()
                             .color(if k == 0 { p.accent } else { p.text });
                         egui::CollapsingHeader::new(head)
@@ -2417,7 +2419,7 @@ impl App {
                             "▼ "
                         };
                         job.append(arrow, 0.0, TextFormat::simple(mono.clone(), p.dim));
-                        let (pkg, name) = t.rsplit_once(['.', '/']).map_or(("", t.as_str()), |x| x);
+                        let (pkg, name) = t.rsplit_once(['.', '/']).unwrap_or(("", t.as_str()));
                         job.append(name, 0.0, TextFormat::simple(mono.clone(), p.accent));
                         if !pkg.is_empty() {
                             job.append(
@@ -2498,10 +2500,10 @@ impl App {
                     }
                 }
             });
-        if let Some(c) = fold {
-            if !self.folded.remove(&c) {
-                self.folded.insert(c);
-            }
+        if let Some(c) = fold
+            && !self.folded.remove(&c)
+        {
+            self.folded.insert(c);
         }
         if let Some((t, ln)) = go {
             let o = match self.st {
@@ -2513,15 +2515,14 @@ impl App {
             self.open(o, Some(View::Java), (ln > 0).then_some(ln));
             // mark the searched name in the opened code
             let q = self.query.clone();
-            if let Some(d) = self.docs.get_mut(self.active) {
-                if !self.use_regex
-                    && !q.is_empty()
-                    && q.chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                {
-                    d.sel = Some(q);
-                    d.job = None;
-                }
+            if let Some(d) = self.docs.get_mut(self.active)
+                && !self.use_regex
+                && !q.is_empty()
+                && q.chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+            {
+                d.sel = Some(q);
+                d.job = None;
             }
         }
     }
@@ -2700,11 +2701,10 @@ impl App {
                 for (label, field, ext) in [("Private key (PKCS#8 .pk8 / .pem)", &mut dlg.key, ["pk8", "pem", "der"]), ("Certificate (.crt / .pem / .der)", &mut dlg.cert, ["crt", "pem", "der"])] {
                     ui.horizontal(|ui| {
                         ui.label(label);
-                        if ui.button("Choose…").clicked() {
-                            if let Some(f) = rfd::FileDialog::new().add_filter(label, &ext).pick_file() {
+                        if ui.button("Choose…").clicked()
+                            && let Some(f) = rfd::FileDialog::new().add_filter(label, &ext).pick_file() {
                                 *field = f.display().to_string();
                             }
-                        }
                     });
                     if !field.is_empty() {
                         ui.label(RichText::new(field.as_str()).small().color(p.dim));
@@ -2874,14 +2874,13 @@ impl App {
             ui.add_space(22.0);
             ui.label(RichText::new("Decompile to Java  ·  find URLs, API calls and keys  ·  inspect native libraries  ·  export a Gradle project").color(p.dim));
         });
-        if pick {
-            if let Some(f) = rfd::FileDialog::new()
+        if pick
+            && let Some(f) = rfd::FileDialog::new()
                 .add_filter("APK, split bundle or DEX", &session::INPUTS)
                 .pick_file()
-            {
-                self.err = None;
-                self.start_load(f.display().to_string());
-            }
+        {
+            self.err = None;
+            self.start_load(f.display().to_string());
         }
     }
 
@@ -3246,12 +3245,11 @@ impl eframe::App for App {
         // Escape cancels a running search, else clears the marked word
         if self.prog.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.cancel_search();
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if let Some(d) = self.docs.get_mut(self.active) {
-                if d.sel.take().is_some() {
-                    d.job = None;
-                }
-            }
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && let Some(d) = self.docs.get_mut(self.active)
+            && d.sel.take().is_some()
+        {
+            d.job = None;
         }
         // Ctrl+Tab / Ctrl+Shift+Tab switch tabs, Ctrl+O opens an APK
         let (next_tab, prev_tab, open_apk) = ctx.input(|i| {
@@ -3273,18 +3271,17 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("apkscope").strong().size(16.0).color(p.accent));
                 ui.add_space(6.0);
-                if ui.button("Open…").on_hover_text("Open an APK, split bundle or DEX (Ctrl+O)").clicked() || open_apk {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("APK, split bundle or DEX", &session::INPUTS).pick_file() {
+                if (ui.button("Open…").on_hover_text("Open an APK, split bundle or DEX (Ctrl+O)").clicked() || open_apk)
+                    && let Some(f) = rfd::FileDialog::new().add_filter("APK, split bundle or DEX", &session::INPUTS).pick_file() {
                         self.start_load(f.display().to_string());
                     }
-                }
                 // one-off jobs live in a menu so the bar stays readable
                 ui.add_enabled_ui(self.st.is_some(), |ui| {
                     ui.menu_button("Tools", |ui| {
                         if ui.button("Export Gradle project…").on_hover_text("Write a Gradle project (runs in the background)").clicked() {
                             ui.close_menu();
-                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                                if let Ok(exe) = std::env::current_exe() {
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder()
+                                && let Ok(exe) = std::env::current_exe() {
                                     let mut cmd = std::process::Command::new(exe);
                                     cmd.arg("export").arg(&self.path).arg(&dir);
                                     if !self.set.deobf {
@@ -3293,7 +3290,6 @@ impl eframe::App for App {
                                     let _ = cmd.spawn();
                                     self.toast(format!("Exporting to {} in the background", dir.display()));
                                 }
-                            }
                         }
                         if ui.button("Security scan").on_hover_text("Manifest flags, exported components, risky APIs, weak crypto, TLS overrides, keys and URLs").clicked() {
                             self.report("Security scan".into(), |st| crate::re::scan(st).lines().map(|l| (l.to_string(), None)).collect());
@@ -3676,14 +3672,13 @@ impl eframe::App for App {
                     if ui.button("Extract…").on_hover_text("Save this file from the APK").clicked() {
                         extract = Some(path.clone());
                     }
-                    if ui.button("Replace…").on_hover_text("Use another file in its place when you build").clicked() {
-                        if let Some(f) = rfd::FileDialog::new().pick_file() {
+                    if ui.button("Replace…").on_hover_text("Use another file in its place when you build").clicked()
+                        && let Some(f) = rfd::FileDialog::new().pick_file() {
                             match std::fs::read(&f) {
                                 Ok(b) => change = Some((path.clone(), Some(b))),
                                 Err(e) => toast_msg = Some(format!("Can't read {}: {e}", f.display())),
                             }
                         }
-                    }
                     if ui.button("Delete").on_hover_text("Leave this file out when you build").clicked() {
                         change = Some((path.clone(), None));
                     }
@@ -3752,12 +3747,11 @@ impl eframe::App for App {
             }
             let job = doc.job.as_ref().unwrap().1.clone();
             let mut area = egui::ScrollArea::both().id_salt(doc.open.name()).auto_shrink(false);
-            if std::mem::take(&mut doc.scroll_pending) {
-                if let Some(ln) = doc.mark {
+            if std::mem::take(&mut doc.scroll_pending)
+                && let Some(ln) = doc.mark {
                     let row = ui.fonts(|f| f.row_height(&FontId::monospace(size)));
                     area = area.vertical_scroll_offset(((ln as f32 - 6.0).max(0.0)) * row);
                 }
-            }
             let row = ui.fonts(|f| f.row_height(&FontId::monospace(size)));
             let glyph = ui.fonts(|f| f.glyph_width(&FontId::monospace(size), 'M'));
             let is_report = matches!(doc.open, Open::Report(_));
@@ -3771,8 +3765,8 @@ impl eframe::App for App {
                 if r.secondary_clicked() {
                     doc.menu_at = at;
                 }
-                if r.clicked() {
-                    if let Some((l, c)) = at {
+                if r.clicked()
+                    && let Some((l, c)) = at {
                         let ctrl = ui.input(|i| i.modifiers.command);
                         if is_report {
                             // a click on a linked report line jumps to that code
@@ -3787,7 +3781,6 @@ impl eframe::App for App {
                         doc.sel = if doc.sel == w { None } else { w };
                         doc.job = None;
                     }
-                }
                 r.context_menu(|ui| {
                     if let Some(a) = line_menu(ui, doc, &text, st_now) {
                         act = Some(a);

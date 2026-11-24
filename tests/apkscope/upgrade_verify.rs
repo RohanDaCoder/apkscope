@@ -1,8 +1,11 @@
 use super::*;
+#[cfg(unix)]
 use crate::upgrade::Channel;
+#[cfg(unix)]
 use crate::upgrade::manifest::{Asset, Manifest};
 use crate::upgrade::platform::plausible_executable;
 
+#[cfg(unix)]
 fn manifest(commit: &str, version: &str, channel: Channel) -> Manifest {
     Manifest {
         channel,

@@ -284,7 +284,7 @@ fn installed_label_falls_back_to_the_manifest() {
     let m = Manifest {
         channel: Channel::Canary,
         version: "0.10.1".into(),
-        commit: "e".repeat(40).into(),
+        commit: "e".repeat(40),
         asset: Asset {
             platform: "test".into(),
             name: "apkscope_test".into(),

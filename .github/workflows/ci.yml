@@ -105,6 +105,9 @@ jobs:
           shared-key: lint-clippy
           cache-on-failure: true
       - run: cargo clippy --release --no-default-features -- -D warnings
+      # the viewer build and the tests are linted too, so neither collects warnings again
+      - run: cargo clippy --release -- -D warnings
+      - run: cargo clippy --release --no-default-features --tests -- -D warnings
 
   build:
     strategy:

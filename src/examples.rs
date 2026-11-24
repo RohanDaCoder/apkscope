@@ -176,3 +176,63 @@ Examples:
 pub const DISASM: &str = "\
 Examples:
   apkscope disasm app.apk com.example.Main";
+
+pub const MANIFEST: &str = "\
+Examples:
+  apkscope manifest app.apk                      the decoded AndroidManifest.xml
+  apkscope manifest app.xapk -o manifest.xml     of a bundle's base split, to a file";
+
+pub const DUMP: &str = "\
+Examples:
+  apkscope dump app.apk out/                    start it under Frida, save the DEX it unpacks
+  apkscope dump com.example out/ --attach        join the running app
+  apkscope dump app.apk out/ --wait 30           packers that unpack late
+Needs frida-tools here and frida-server on a rooted device (see apkscope frida-server).";
+
+pub const IL2CPP: &str = "\
+Examples:
+  apkscope il2cpp game.apk                          C# methods with their native addresses
+  apkscope il2cpp game.apk --uses \"api.example.com\"   which methods use a string
+  apkscope il2cpp game.apk --method Login            strings and calls inside a method
+  apkscope il2cpp base.apk config.arm64_v8a.apk      a split game: base plus its ABI split";
+
+pub const FLUTTER: &str = "\
+Examples:
+  apkscope flutter app.apk                   Dart version, native libs, recovered library tree
+  apkscope flutter app.apk --api             hosts, routes and model fields
+  apkscope flutter app.xapk --strings        every string of libapp.so (bundles read their splits)";
+
+pub const SCAN: &str = "\
+Examples:
+  apkscope scan app.apk                       endpoints, secrets, HTTP calls, weak crypto: leads to check
+  apkscope scan app.apk --filter firebase     only findings that mention firebase
+  apkscope scan app.apk --limit 50 --offset 50   page through a big report";
+
+pub const DECRYPT: &str = "\
+Examples:
+  apkscope decrypt app.apk                    every string-decryptor call with constant arguments, run
+  apkscope decrypt app.apk --json";
+
+pub const MAP: &str = "\
+Examples:
+  apkscope map app.apk export names.jobf         the renames, for JADX
+  apkscope map app.apk export mapping.txt        as a ProGuard / R8 mapping
+  apkscope map app.apk import mapping.txt        names from the app's own R8 mapping";
+
+pub const MCP: &str = "\
+Examples:
+  apkscope mcp                                  serve the MCP tools over stdio
+Claude Code:  claude mcp add apkscope -- apkscope mcp
+Other clients: command \"apkscope\", args [\"mcp\"]. Tools take apk_path; see docs/agents.md.";
+
+pub const GUI: &str = "\
+Examples:
+  apkscope gui app.apk
+  apkscope app.apk                              the same: a file alone opens the viewer";
+
+pub const UPGRADE: &str = "\
+Examples:
+  apkscope upgrade                              the latest stable build
+  apkscope upgrade --check                      only say whether there is one
+  apkscope upgrade --canary                     the build of the latest commit on main
+  apkscope upgrade --version 0.12.0             a given release";

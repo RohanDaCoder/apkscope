@@ -425,18 +425,15 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         .map(|x| x.0)
         .collect();
     roots.dedup();
-    let mut seen = HashSet::new();
-    fn walk(
-        dexes: &[Dex],
-        m: &str,
-        parent: Option<&str>,
-        prefix: &str,
-        last: bool,
-        d: usize,
+    /// The callee tree being printed: what every level shares.
+    struct Tree<'a, 'd> {
+        dexes: &'a [Dex<'d>],
         max: usize,
-        seen: &mut HashSet<String>,
-        out: &mut Vec<Line>,
-    ) {
+        seen: HashSet<String>,
+        out: Vec<Line>,
+    }
+    fn walk(t: &mut Tree, m: &str, parent: Option<&str>, prefix: &str, last: bool, d: usize) {
+        let (dexes, max) = (t.dexes, t.max);
         let (c, sig, _) = pretty(m);
         let branch = if parent.is_none() {
             ""
@@ -460,14 +457,15 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         let code = find_code(dexes, m);
         let tag = if code.is_none() {
             "   [lib]"
-        } else if seen.contains(m) {
+        } else if t.seen.contains(m) {
             "   ↺"
         } else {
             ""
         };
-        out.push((format!("{prefix}{branch}{c}.{sig}{tag}"), link));
+        t.out
+            .push((format!("{prefix}{branch}{c}.{sig}{tag}"), link));
         let Some((dx, _, insns)) = code else { return };
-        if !seen.insert(m.to_string()) || d >= max {
+        if !t.seen.insert(m.to_string()) || d >= max {
             return;
         }
         let mut kids = Vec::new();
@@ -485,24 +483,20 @@ pub fn graph_report(dexes: &[Dex], class: &str, name: Option<&str>, depth: usize
         };
         let n = kids.len();
         for (k, kid) in kids.iter().enumerate() {
-            walk(
-                dexes,
-                kid,
-                Some(m),
-                &child_prefix,
-                k + 1 == n,
-                d + 1,
-                max,
-                seen,
-                out,
-            );
+            walk(t, kid, Some(m), &child_prefix, k + 1 == n, d + 1);
         }
     }
+    let mut t = Tree {
+        dexes,
+        max: depth,
+        seen: HashSet::new(),
+        out,
+    };
     for r in &roots {
-        out.push((String::new(), None));
-        walk(dexes, r, None, "", true, 0, depth, &mut seen, &mut out);
+        t.out.push((String::new(), None));
+        walk(&mut t, r, None, "", true, 0);
     }
-    out
+    t.out
 }
 
 #[cfg(feature = "gui")]
