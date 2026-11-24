@@ -814,7 +814,7 @@ pub fn scan(st: &crate::session::State) -> String {
         .collect();
     let mut crypto: Vec<(String, &str, String)> = Vec::new();
     let mut trust: Vec<(String, &str)> = Vec::new();
-    for dx in dexes {
+    for dx in dexes.iter() {
         let risky: HashMap<u32, usize> = (0..dx.counts()[3] as u32)
             .filter_map(|id| {
                 let r = dx.method_ref(id).ok()?;
@@ -1621,18 +1621,23 @@ thread_local! {
     static DECRYPTED: RefCell<HashMap<(usize, u32, String), Option<String>>> = RefCell::new(HashMap::new());
 }
 
-static DEXES: std::sync::OnceLock<&'static [Dex<'static>]> = std::sync::OnceLock::new();
+/// The opened APK's DEX files, shared with its session (not a second parse); replaced when
+/// another APK is opened, so the viewer never evaluates against the previous one.
+static DEXES: std::sync::RwLock<Option<std::sync::Arc<Vec<Dex<'static>>>>> =
+    std::sync::RwLock::new(None);
 
 /// Make the APK's DEX files available to inline decryption (once, after loading).
-pub fn set_dexes(d: &'static [Dex<'static>]) {
-    let _ = DEXES.set(d);
+pub fn set_dexes(d: std::sync::Arc<Vec<Dex<'static>>>) {
+    if let Ok(mut g) = DEXES.write() {
+        *g = Some(d);
+    }
 }
 
 /// Plaintext of `m(args)` when `m` is a string decryptor and every argument is a constant;
 /// rendered by the Java printer as a comment next to the call.
 pub fn decrypt_call(dx: &Dex, m: u32, args: &[crate::ir::Expr]) -> Option<String> {
     use crate::ir::Expr;
-    let dexes = *DEXES.get()?;
+    let dexes = DEXES.read().ok()?.clone()?;
     if !decryptor_shape(dx, m) {
         return None;
     }
@@ -1655,7 +1660,7 @@ pub fn decrypt_call(dx: &Dex, m: u32, args: &[crate::ir::Expr]) -> Option<String
     if let Some(r) = DECRYPTED.with(|c| c.borrow().get(&k).cloned()) {
         return r;
     }
-    let r = eval_string(dexes, &mref, vals)
+    let r = eval_string(&dexes, &mref, vals)
         .filter(|p| !args.iter().any(|a| matches!(a, Expr::Str(s) if s == p)));
     DECRYPTED.with(|c| c.borrow_mut().insert(k, r.clone()));
     r

@@ -9,9 +9,9 @@ use crate::session::{Hit, Matcher, Progress, State, threads};
 
 pub fn xml_hits(st: &State, m: &Matcher, prog: &Progress) -> Vec<Hit> {
     let list: Vec<&String> = st
-        .files
+        .files()
         .keys()
-        .filter(|p| p.ends_with(".xml") && !st.texts.contains_key(*p))
+        .filter(|p| p.ends_with(".xml") && !st.texts().contains_key(*p))
         .collect();
     let next = AtomicUsize::new(0);
     let found = Mutex::new(Vec::new());

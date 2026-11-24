@@ -146,7 +146,7 @@ pub fn config_sheet(st: &State, m: &Matcher) -> Vec<Hit> {
             hits.push((c.class.clone(), 0, line));
         }
     }
-    for (p, t) in &st.texts {
+    for (p, t) in st.texts() {
         if !p.starts_with("res/xml")
             || !(p.contains("remote_config") || p.contains("firebase_config"))
         {

@@ -231,7 +231,7 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
         m.scope,
         Scope::Res | Scope::Urls | Scope::Secrets | Scope::Usages
     ) {
-        for (p, t) in &st.texts {
+        for (p, t) in st.texts() {
             // translations repeat the default strings; API scopes only need res/values
             if m.scope != Scope::Res && p.starts_with("res/values-") {
                 continue;
@@ -245,7 +245,7 @@ pub fn search_stats(st: &State, m: &Matcher, prog: &Progress) -> (Vec<Hit>, usiz
         if m.scope == Scope::Res {
             hits.extend(crate::res_search::xml_hits(st, m, prog));
             hits.extend(
-                st.files
+                st.files()
                     .keys()
                     .filter(|p| m.line(p))
                     .map(|p| (p.clone(), 0, String::new())),

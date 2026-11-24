@@ -24,7 +24,7 @@ impl State {
     pub fn native_methods(&self) -> &[(String, String)] {
         self.natives.get_or_init(|| {
             let mut v = Vec::new();
-            for dx in &self.dexes {
+            for dx in self.dexes.iter() {
                 for c in 0..dx.class_count {
                     let Ok(data) = dx.class_data(c) else { continue };
                     for m in data.methods.iter().filter(|m| m.access & 0x100 != 0) {

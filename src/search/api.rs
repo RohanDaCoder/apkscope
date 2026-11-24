@@ -257,7 +257,7 @@ fn split_args(s: &str) -> Vec<String> {
 fn const_value(st: &State, expr: &str) -> Option<String> {
     let (cls, field) = expr.rsplit_once('.')?;
     let short = format!(".{}", cls.rsplit('.').next().unwrap_or(cls));
-    for dx in &st.dexes {
+    for dx in st.dexes.iter() {
         for c in 0..dx.class_count {
             let Ok(desc) = dx.class_descriptor(c) else {
                 continue;

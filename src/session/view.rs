@@ -65,7 +65,7 @@ impl State {
     }
 
     pub fn min_sdk(&self) -> Option<u32> {
-        let m = self.texts.get("AndroidManifest.xml")?;
+        let m = self.texts().get("AndroidManifest.xml")?;
         let at = m.find("<uses-sdk")?;
         attr(&m[at..], "android:minSdkVersion")?.parse().ok()
     }
