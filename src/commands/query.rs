@@ -238,7 +238,7 @@ pub fn decompile(a: &DecompileArgs, deobf: bool) -> Result<(), String> {
     if names.is_empty() {
         if a.out_dir.is_some() {
             return Err(
-                "--out-dir needs class names (or --classes-file); for every class use `apkscope export`"
+                "--out-dir needs class names (or --classes-file); for every class as Java use `apkscope export`, as editable smali `apkscope smali APK --out-dir DIR`"
                     .into(),
             );
         }

@@ -229,6 +229,8 @@ pub struct App {
     edits: rebuild::Edits,
     /// edited Smali class sources, assembled into DEX at build time
     smali_edits: Vec<String>,
+    /// a folder from Decode smali, applied on build (only its changed classes)
+    smali_dir: Option<String>,
     /// a folder of edited resources (the `apkscope res` layout), applied at build time
     res_dir: Option<String>,
     /// "Add file" dialog: (path inside the APK, content)
@@ -328,6 +330,7 @@ impl App {
             files: None,
             edits: rebuild::Edits::new(),
             smali_edits: vec![],
+            smali_dir: None,
             res_dir: None,
             adding: None,
             build: None,

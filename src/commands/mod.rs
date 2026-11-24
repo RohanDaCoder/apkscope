@@ -79,7 +79,7 @@ fn dispatch(cmd: Cmd, deobf: bool) -> Result<(), String> {
 }
 
 mod build;
-mod edit;
+pub(crate) mod edit;
 mod flutter;
 mod il2cpp;
 mod lookup;

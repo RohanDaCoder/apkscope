@@ -166,9 +166,16 @@ impl App {
         egui::Window::new("Build & sign").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             let smali_n = self.smali_edits.len();
             let smali_note = if smali_n > 0 { format!(" (incl. {smali_n} edited smali class(es), assembled on build)") } else { String::new() };
-            ui.label(format!("{} change(s){smali_note}. The new APK is zipaligned and signed with APK Signature Scheme v2 + v3.", self.edits.len() + smali_n));
+            ui.label(format!("{} change(s){smali_note}. The new APK is zipaligned and signed with APK Signature Scheme v2 + v3{}.", self.edits.len() + smali_n, match st.min_sdk() {
+                Some(m) if m >= 24 => String::new(),
+                Some(m) => format!(", and v1 (JAR) for Android 5-6 (minSdk {m})"),
+                None => ", and v1 (JAR): the app sets no minSdk".into(),
+            }));
             if let Some(dir) = &self.res_dir {
                 ui.label(format!("Applying edited resources from {dir}."));
+            }
+            if let Some(dir) = &self.smali_dir {
+                ui.label(format!("Applying the changed classes of the smali folder {dir}."));
             }
             ui.add_space(6.0);
             ui.radio_value(&mut dlg.own_key, false, "apkscope's key (created on first use)");
@@ -190,9 +197,6 @@ impl App {
             ui.add_space(6.0);
             let warn = Color32::from_rgb(230, 160, 60);
             ui.colored_label(warn, "A different signature means it won't install as an update over the original app: uninstall that first.");
-            if st.min_sdk().is_some_and(|m| m < 24) {
-                ui.colored_label(warn, format!("This app supports Android below 7.0 (minSdk {}). v2/v3-only APKs install on Android 7.0+.", st.min_sdk().unwrap_or(0)));
-            }
             ui.add_space(6.0);
             let ready = !dlg.own_key || (!dlg.key.is_empty() && !dlg.cert.is_empty());
             go = ui.add_enabled(ready, egui::Button::new(RichText::new("Build…").strong()).fill(p.accent.gamma_multiply(0.55))).clicked();
@@ -208,8 +212,8 @@ impl App {
             {
                 let own = dlg.own_key.then(|| (dlg.key.clone(), dlg.cert.clone()));
                 let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file());
-                let smali_srcs = self.smali_edits.clone();
-                let res_dir = self.res_dir.clone();
+                let mut smali_srcs = self.smali_edits.clone();
+                let (res_dir, smali_dir) = (self.res_dir.clone(), self.smali_dir.clone());
                 spawn(&self.tx, "save", move || {
                     let r = (|| {
                         let key = match own {
@@ -223,6 +227,9 @@ impl App {
                             let files = crate::read_tree(std::path::Path::new(dir))?;
                             let mut apk = apkscope_core::apk::open(&file)?;
                             edits.extend(apkscope_core::resources::edits(&mut apk, &files, true)?);
+                        }
+                        if let Some(dir) = smali_dir {
+                            smali_srcs.extend(crate::commands::edit::smali_sources(&file, &[dir])?);
                         }
                         if !smali_srcs.is_empty() {
                             smali::inject(&file, &smali_srcs, &mut edits)?;

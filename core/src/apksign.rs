@@ -1,5 +1,5 @@
 //! Signing with APK Signature Scheme v2 + v3 (RSA-2048, PKCS#1 v1.5, SHA-256), key and
-//! self-signed certificate generation, and verification of v2/v3 signatures.
+//! self-signed certificate generation, and verification of v1/v2/v3 signatures.
 //! Format: https://source.android.com/docs/security/features/apksigning/v2 (and /v3)
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -550,29 +550,31 @@ fn verify_scheme(value: &[u8], v3: bool, digest: &[u8]) -> Result<Option<u32>> {
     Ok(None)
 }
 
-/// Verify v2 and v3 signatures of an APK file: one line per scheme.
+/// Verify the v1 (JAR), v2 and v3 signatures of an APK file: one line per scheme.
 pub fn verify(path: &str) -> Result<Vec<String>> {
     let apk = std::fs::read(path).map_err(Error::io(path))?;
     let eocd = eocd_at(&apk)?;
     let cd = u32::from_le_bytes(apk[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
-    let Some(block) = crate::sign::signing_block(path) else {
-        let v1 = zip::ZipArchive::new(std::io::Cursor::new(&apk))
-            .is_ok_and(|mut z| z.by_name("META-INF/MANIFEST.MF").is_ok());
-        return Ok(vec![
-            if v1 {
-                "v1 (JAR) signature only: v2/v3 not present, v1 not checked here"
-            } else {
-                "unsigned: no v1, v2 or v3 signature"
-            }
-            .to_string(),
-        ]);
+    let v1 = v1::verify(&mut zip::ZipArchive::new(std::io::Cursor::new(&apk))?)?;
+    let block = crate::sign::signing_block(path);
+    let mut out = Vec::new();
+    match (&v1, &block) {
+        (None, None) => return Ok(vec!["unsigned: no v1, v2 or v3 signature".to_string()]),
+        (None, Some(_)) => out.push("v1: not present (Android 7+ does not need it)".to_string()),
+        (Some((line, _)), _) => out.push(line.clone()),
+    }
+    let Some(block) = block else {
+        out.push(match v1 {
+            Some((_, true)) => "v2 / v3: FAILED: the v1 .SF says the APK had a v2 / v3 signature, and it was removed".to_string(),
+            _ => "v2 / v3: not present (v1 only: Android 11+ refuses this for apps targeting SDK 30+)".to_string(),
+        });
+        return Ok(out);
     };
     let size = u64::from_le_bytes(apk[cd - 24..cd - 16].try_into().unwrap()) as usize;
     let start = cd - size - 8;
     let mut e = apk[eocd..].to_vec();
     e[16..20].copy_from_slice(&(start as u32).to_le_bytes());
     let digest = content_digest(&[&apk[..start], &apk[cd..eocd], &e]);
-    let mut out = Vec::new();
     for (id, name) in [(V2_ID, "v2"), (V3_ID, "v3")] {
         match block.iter().find(|b| b.0 == id) {
             Some((_, v)) => out.push(match verify_scheme(v, id == V3_ID, &digest) {

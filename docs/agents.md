@@ -1,7 +1,8 @@
 # Using apkscope from an AI agent
 
 apkscope is one binary for Android reverse engineering: reading, searching, decompiling,
-patching, rebuilding and signing an APK. This page is for agents (and people scripting it):
+patching, rebuilding, signing and installing an APK. You do not need apktool, smali.jar /
+baksmali, jadx, zipalign or apksigner next to it: each step below has an apkscope command. This page is for agents (and people scripting it):
 which command answers which question, and how to read the output. Every command here is also
 an MCP tool (`apkscope mcp`, see the README) and has examples under `apkscope <command> --help`.
 
@@ -54,12 +55,26 @@ native code from the splits too, `size` reads the outer file.
 
 ## Patching and rebuilding
 
+| Step | apkscope (CLI / MCP) | Instead of |
+|---|---|---|
+| Smali of the class to change | `smali app.apk a.b.C > C.smali` / `get_smali class` | baksmali, apktool d |
+| Smali of the whole app, one file per class | `smali app.apk --out-dir decoded/` / `get_smali out_dir` (`decoded/smali/`, `decoded/smali_classes2/`...) | baksmali, apktool d |
+| Resources and manifest as files | `res app.apk decoded/` / `decode_resources` | apktool d |
+| Edited smali into the right `classesN.dex` | `build ... --smali C.smali` or `--smali decoded/` (only changed classes) / `build_apk smali` | smali.jar, apktool b |
+| Zipalign and sign (v1 when minSdk < 24, v2, v3) | `build` / `build_apk` (no edits = re-sign only) | zipalign, apksigner |
+| Check the signature | `verify out.apk` / `verify_signature` (v1, v2, v3) | apksigner verify |
+| Install (splits, ABI) | `install out.apk` / `install_apk` (calls adb for you) | adb install |
+| See it work | `frida_start` + `frida_hook` | |
+
+Use `smali` / `get_smali` for smali you will edit: it prints the format `build`
+assembles. `decompile --smali` is for reading.
+
 ```
 apkscope smali app.apk a.b.C > C.smali          # edit C.smali
 apkscope res app.apk decoded/                   # edit decoded/res/..., decoded/AndroidManifest.xml
 apkscope build app.apk out.apk --smali C.smali --res decoded/ --ks release.jks --ks-pass env:KS_PASS
 apkscope diff app.apk out.apk --strings         # check the change is there
-adb install -r out.apk
+apkscope install out.apk                        # adb install -r, with the right splits
 ```
 
 - `build` signs with v2 + v3, and v1 (JAR) too when `minSdkVersion` is below 24. Without a key it uses apkscope's own debug key; `--ks` takes a
@@ -68,6 +83,10 @@ adb install -r out.apk
 - `--res` also takes a folder decoded by apktool (`apktool.yml` + `res/`) or APKEditor
   (`resources/package_1/res/`). From those, changed and new files are applied and nothing is
   removed.
+- `--smali DIR` compares every file with the APK's own class and assembles only the ones that
+  differ (or are new), each into the DEX that defines it. Deleting a file does not remove its
+  class. A nested class is a file of its own (`C$Inner.smali`). `smali --out-dir` and `res` can
+  write into the same folder: `build --res` skips its `smali*/` folders.
 - `--put classes7.dex=my.dex` adds or replaces any file; `--delete name` leaves one out.
 
 ## Reading the output

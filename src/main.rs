@@ -95,7 +95,13 @@ fn read_tree(dir: &std::path::Path) -> Result<std::collections::BTreeMap<String,
         for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
             let path = e.map_err(|e| e.to_string())?.path();
             if path.is_dir() {
-                todo.push(path);
+                // smali/, smali_classes2/... next to res/ are code for `build --smali`, not files
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                let code =
+                    d == dir && name.is_some_and(|n| n == "smali" || n.starts_with("smali_"));
+                if !code {
+                    todo.push(path);
+                }
                 continue;
             }
             let rel = path.strip_prefix(dir).map_err(|e| e.to_string())?;

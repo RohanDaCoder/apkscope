@@ -206,12 +206,16 @@ Reverse engineering (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   apkscope rename    <apk> <Class|member> <new>  saved in <apk>.apkscope.json (empty name removes it)
   apkscope comment   <apk> <Class|member> <text>
   apkscope map <apk> export <out.jobf|out.mapping|out.txt>  |  map <apk> import <file>   JADX / Enigma / ProGuard names
-Editing: apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
+Editing (no apktool, smali.jar, zipalign, apksigner needed):
+         apkscope smali <apk> <Class>      editable smali of one class (edit, then build --smali)
+         apkscope smali <apk> --out-dir DIR  every class as DIR/smali*/a/b/C.smali (then build --smali DIR)
          apkscope res <apk> <out-dir>      the manifest and res/ as editable files (edit, then build --res)
          apkscope build <in.apk> <out.apk> [--put name=file]... [--delete name]... [--manifest x.xml]
                   [--res dir] [--string name[@config]=value]... [--smali edited.smali]...
-                  [--key k.pk8 --cert c.crt | --no-sign]   a .jar is never signed
-         apkscope verify <apk>
+                  [--key k.pk8 --cert c.crt | --ks x.jks --ks-pass pass:P | --no-sign]
+                  assembles smali, zipaligns, signs (no edits = re-sign); a .jar is never signed
+         apkscope verify <apk>             v1 / v2 / v3 signatures
+         apkscope install <apk|xapk>       install on a device (drives adb)
 Agents:  apkscope mcp                      MCP server over stdio (see README)
 Other:   apkscope disasm <apk> [Class]     apkscope gui [apk]
          apkscope upgrade [--stable | --canary] [--check] [--version X.Y.Z]
@@ -269,7 +273,7 @@ pub fn num(v: Option<String>, name: &str) -> Result<Option<usize>, String> {
 #[command(
     name = "apkscope",
     disable_version_flag = true,
-    about = "Android APK decompiler, xref engine and MCP server for AI agents",
+    about = "Android APK decompiler, xref engine, patcher and signer, and MCP server for AI agents",
     long_about = None,
     after_help = crate::examples::TOP,
 )]
@@ -357,7 +361,7 @@ pub enum Cmd {
     /// cross-references
     #[command(name = "refs", alias = "findrefs", after_help = crate::examples::REFS)]
     Refs(RefsArgs),
-    /// decompile classes
+    /// decompile classes to Java (or read-only smali)
     #[command(name = "decompile", alias = "getclass", after_help = crate::examples::DECOMPILE)]
     Decompile(DecompileArgs),
     /// print the AndroidManifest.xml
@@ -390,7 +394,7 @@ pub enum Cmd {
     /// check the device for Frida: which frida-server file it needs, push and start one
     #[command(name = "frida-server", after_help = crate::examples::FRIDA_SERVER)]
     FridaServer(FridaServerArgs),
-    /// install an APK or split bundle on a device: right splits, right ABI, result checked
+    /// install an APK or split bundle on a device (drives adb): right splits, right ABI, result checked
     #[command(name = "install", after_help = crate::examples::INSTALL)]
     Install(InstallArgs),
     /// run under Frida, save unpacked DEX and decrypted scripts
@@ -432,22 +436,22 @@ pub enum Cmd {
     /// disassemble bytecode
     #[command(name = "disasm", after_help = crate::examples::DISASM)]
     Disasm(DisasmArgs),
-    /// editable smali of one class
+    /// editable smali of one class or the whole app (--out-dir), for `build --smali`
     #[command(name = "smali", after_help = crate::examples::SMALI)]
     Smali(SmaliArgs),
     /// export a Gradle project
     #[command(name = "export", after_help = crate::examples::EXPORT)]
     Export(ExportArgs),
-    /// the manifest and res/ as editable files
+    /// the manifest and res/ as editable files, for `build --res`
     #[command(name = "res", after_help = crate::examples::RES)]
     Res(ResArgs),
     /// indexed + cached search
     #[command(name = "search", after_help = crate::examples::SEARCH)]
     Search(SearchArgs),
-    /// apply edits, zipalign, sign (v1 when minSdk < 24, v2, v3)
+    /// patch, rebuild and sign: assemble smali, apply resources, zipalign, sign v1/v2/v3 (or just re-sign)
     #[command(name = "build", after_help = crate::examples::BUILD)]
     Build(BuildArgs),
-    /// verify a signature
+    /// verify v1 / v2 / v3 signatures (to sign: build)
     #[command(name = "verify", after_help = crate::examples::VERIFY)]
     Verify(VerifyArgs),
     /// native viewer
@@ -790,8 +794,13 @@ pub struct DisasmArgs {
 pub struct SmaliArgs {
     /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
-    /// class (a.b.C); its nested classes come with it
-    pub class: String,
+    /// classes (a.b.C); nested classes are classes of their own (a.b.C$Inner). Without --out-dir:
+    /// exactly one. With --out-dir: these, or every class when none is given
+    pub classes: Vec<String>,
+    /// write one .smali file per class into this folder, as smali/ (classes.dex),
+    /// smali_classes2/ (classes2.dex)... with a/b/C.smali paths; edit, then `build --smali DIR`
+    #[arg(long = "out-dir", value_name = "DIR")]
+    pub out_dir: Option<String>,
 }
 
 #[derive(Args)]
@@ -875,7 +884,8 @@ pub struct BuildArgs {
     /// set one string resource (repeatable)
     #[arg(long = "string", value_name = "name[@config]=value")]
     pub string: Vec<String>,
-    /// an edited class from `apkscope smali` (repeatable)
+    /// an edited class from `apkscope smali`, or a folder from `smali --out-dir` (only the
+    /// classes that differ from the APK are applied); repeatable
     #[arg(long = "smali", value_name = "file")]
     pub smali: Vec<String>,
     /// an edited AndroidManifest.xml (text)
@@ -903,7 +913,7 @@ pub struct BuildArgs {
 
 #[derive(Args)]
 pub struct VerifyArgs {
-    /// the APK whose v2 / v3 signatures to check
+    /// the APK whose v1 / v2 / v3 signatures to check
     pub apk: String,
 }
 

@@ -55,11 +55,11 @@ fn tools() -> Value {
             "with_java": {"type": "boolean", "description": "Also return the decompiled Java lines of each referencing class that mention the query"},
             "json": {"type": "boolean", "description": "Return a JSON array instead of text lines"},
             "cache": cache}))}},
-        {"name": "decompile", "description": "Decompile one or more classes to readable Java (or Smali), or just one method of them. Stateless by default (only the needed DEX files are touched).",
+        {"name": "decompile", "description": "Decompile one or more classes to readable Java (or Smali), or just one method of them. Stateless by default (only the needed DEX files are touched). For smali you will edit, use get_smali (the format build_apk assembles).",
          "inputSchema": {"type": "object", "required": ["apk_path", "classes"], "properties": page(json!({"apk_path": apk,
             "classes": {"type": "array", "items": {"type": "string"}, "description": "Class names, e.g. com.example.Main"},
             "method": {"type": "string", "description": "Only return the method(s) with this name"},
-            "smali": {"type": "boolean"},
+            "smali": {"type": "boolean", "description": "Smali instead of Java (for reading; to patch, use get_smali)"},
             "full": {"type": "boolean", "description": "Also decompile methods the deobfuscator would leave out (synthetic / bridge)"},
             "out_dir": {"type": "string", "description": "Write one file per class (a.b.C.java) to this folder instead of returning the text"},
             "cache": cache,
@@ -85,7 +85,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path", "path"], "properties": {"apk_path": apk, "path": {"type": "string"}, "cache": cache}}},
         {"name": "export_project", "description": "Write a full Gradle project (all classes decompiled on all cores, decoded resources, assets, native libs) to a directory.",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
-        {"name": "verify_signature", "description": "Check the APK's v1 / v2 / v3 signatures and print the signer certificate.",
+        {"name": "verify_signature", "description": "Check the APK's v1 (JAR: every entry's digest, the manifest, the RSA signature), v2 and v3 signatures, one line each: verified, not present or FAILED with the reason (e.g. an entry changed after signing). To sign or re-sign, use build_apk.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk}}},
         {"name": "diff_apks", "description": "What changed between two versions of an app: added / removed classes, methods of classes both have, permissions, changed named constants (a rotated key shows its new value), and optionally strings (new URLs, keys) with likely rotated/renamed pairs. Lines start with + or -.",
          "inputSchema": {"type": "object", "required": ["apk_path", "new_apk_path"], "properties": {"apk_path": apk, "new_apk_path": {"type": "string", "description": "the newer APK"}, "strings": {"type": "boolean", "description": "also diff string-pool values"}, "app_only": {"type": "boolean", "description": "leave out classes of known libraries (SDK churn), with their methods and constants"}, "limit": {"type": "integer"}, "offset": {"type": "integer"}}}},
@@ -113,17 +113,20 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path", "target", "text"], "properties": {"apk_path": apk, "target": {"type": "string"}, "text": {"type": "string"}}}},
         {"name": "mapping", "description": "Exchange names with other tools: export the renames to, or import them from, a JADX (.jobf), Enigma (.mapping) or ProGuard/R8 (mapping.txt) file. The format follows the file name.",
          "inputSchema": {"type": "object", "required": ["apk_path", "direction", "file"], "properties": {"apk_path": apk, "direction": {"type": "string", "enum": ["import", "export"]}, "file": {"type": "string"}}}},
-        {"name": "get_smali", "description": "Editable smali of one class (with its nested classes). Edit it, then pass the file to build_apk's smali list.",
-         "inputSchema": {"type": "object", "required": ["apk_path", "class"], "properties": {"apk_path": apk, "class": {"type": "string"}}}},
+        {"name": "get_smali", "description": "Editable smali, in the format build_apk assembles (no baksmali or apktool needed). With class: that one class as text (a nested class is its own: a.b.C$Inner); save it to a file, edit, pass the file to build_apk's smali list. With out_dir: one .smali file per class (every class, or those in classes) written as apktool lays them out, smali/ for classes.dex, smali_classes2/ for classes2.dex..., a/b/C.smali; edit any of them, then pass the folder to build_apk's smali list (only changed classes are applied).",
+         "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk,
+            "class": {"type": "string", "description": "one class to return as text"},
+            "out_dir": {"type": "string", "description": "write .smali files to this folder instead (every class unless classes is given)"},
+            "classes": {"type": "array", "items": {"type": "string"}, "description": "with out_dir: only these classes"}}}},
         {"name": "disassemble", "description": "Raw Dalvik bytecode listing of one class, or of every class when class is omitted.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "class": {"type": "string"}}))}},
         {"name": "decode_resources", "description": "Write the manifest and res/ as editable files to a folder. Edit them, then pass the folder to build_apk's res_dir.",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
-        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v2+v3, plus v1 when minSdkVersion < 24; apkscope's debug key unless a keystore or key/cert is given).",
+        {"name": "build_apk", "description": "Patch, rebuild, zipalign and sign in one step (no smali.jar, apktool, zipalign or apksigner needed). Assembles edited smali files (from get_smali) into the right classesN.dex, applies an edited manifest, a decoded resources folder (decode_resources, apktool or APKEditor) or single string values, replaces / adds / deletes files, then zipaligns and signs (v2+v3, plus v1 when minSdkVersion < 24; apkscope's debug key unless a keystore or key/cert is given). With no edits it just re-signs and re-aligns the APK. Then install_apk.",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_path"], "properties": {"apk_path": apk, "out_path": {"type": "string"},
             "put": {"type": "array", "items": {"type": "string"}, "description": "name=file: store this local file under that entry name"},
             "delete": {"type": "array", "items": {"type": "string"}, "description": "entry names to leave out"},
-            "smali": {"type": "array", "items": {"type": "string"}, "description": "edited .smali files"},
+            "smali": {"type": "array", "items": {"type": "string"}, "description": "edited .smali files, or folders from get_smali out_dir (only classes that differ from the APK are applied)"},
             "manifest": {"type": "string", "description": "edited AndroidManifest.xml (text)"},
             "res_dir": {"type": "string", "description": "a folder from decode_resources"},
             "strings": {"type": "array", "items": {"type": "string"}, "description": "name[@config]=value string-resource edits"},
@@ -139,7 +142,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "method": {"type": "string", "description": "method name (omitted = any)"}, "impl": {"type": "string"}, "in": {"type": "array", "items": {"type": "string"}}, "value": {"type": "string"}}))}},
         {"name": "size", "description": "Where the APK's size goes: share per kind (dex, native libs per ABI, res, assets), the biggest entries and duplicate files (same CRC and size).",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "top": {"type": "integer", "description": "how many biggest entries (default 25)"}}}},
-        {"name": "install_apk", "description": "Install an APK or a split bundle (.xapk/.apks/.apkm) on a device over adb: the ABI split the device needs (first device ABI the app ships code for, passed as --abi, so arm64-only apps on x86_64 emulators with ARM translation get arm64), all density and language splits, then reports the primaryCpuAbi the package manager chose. Says when the app cannot run on the device's ABIs.",
+        {"name": "install_apk", "description": "Install an APK (e.g. build_apk's output) or a split bundle (.xapk/.apks/.apkm) on a device. Drives adb for you (adb must be on PATH), picking the ABI split the device needs (first device ABI the app ships code for, passed as --abi, so arm64-only apps on x86_64 emulators with ARM translation get arm64), all density and language splits, then reports the primaryCpuAbi the package manager chose. Says when the app cannot run on the device's ABIs.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": {"apk_path": apk, "device": {"type": "string", "description": "adb serial (default: the only device)"}, "abi": {"type": "string", "description": "force an ABI (default: auto)"}}}},
         {"name": "frida_start", "description": "Start a live Frida session on a device (needs frida-tools on this machine and frida-server on the device). Spawns the app (or attaches to it), then hooks are added with frida_hook and their calls read with frida_events. One session at a time; starting again replaces it.",
          "inputSchema": {"type": "object", "properties": {"apk_path": {"type": "string", "description": "APK to take the package name from"}, "package": {"type": "string", "description": "app id, instead of apk_path"}, "attach": {"type": "boolean", "description": "attach to the running app instead of spawning it"}, "device": {"type": "string", "description": "frida device id (default: USB)"}}}},
@@ -612,11 +615,19 @@ fn call(
             workers.retain(|k, _| !k.starts_with(&prefix));
             run_cli(&args)
         }
-        "get_smali" => run_cli(&[
-            "smali".into(),
-            apk,
-            s(a, "class").ok_or("class is required")?,
-        ]),
+        "get_smali" => {
+            args.extend(["smali".into(), apk]);
+            args.extend(s(a, "class"));
+            if let Some(dir) = s(a, "out_dir") {
+                if let Some(Value::Array(v)) = a.get("classes") {
+                    args.extend(v.iter().filter_map(|x| x.as_str().map(str::to_string)));
+                }
+                args.extend(["--out-dir".into(), dir]);
+            } else if s(a, "class").is_none() {
+                return Err("class is required (or out_dir to write files)".into());
+            }
+            run_cli(&args)
+        }
         "disassemble" => {
             args.extend(["disasm".into(), apk]);
             args.extend(s(a, "class"));
@@ -868,7 +879,7 @@ pub fn serve() -> Result<(), String> {
                 "protocolVersion": params["protocolVersion"].as_str().unwrap_or(PROTOCOL),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "apkscope", "version": crate::upgrade::identity().version},
-                "instructions": "apkscope analyzes Android APKs. Start with apk_info, then find_refs / list_classes / search to locate code, then decompile only the classes (or one method) you need. Calls on the same APK get faster after the first ones: a warm session loads in the background (pass cache: false to opt out)."
+                "instructions": "apkscope reads, patches, rebuilds, signs and installs Android APKs by itself: no apktool, smali.jar, baksmali, jadx, zipalign or apksigner needed. Read: start with apk_info, then find_refs / list_classes / search to locate code, then decompile only the classes (or one method) you need. Patch: get_smali (one class as text, or out_dir for the whole app as .smali files) and/or decode_resources, edit, then build_apk (smali files or the folder) (assembles the smali into the right DEX, zipaligns, signs; with no edits it re-signs), verify_signature, install_apk. Check it live: frida_setup, frida_start, frida_hook. Also built in: security scan (scan), the app's HTTP API / URLs / secrets / server config (search scopes api, urls, secrets, config), constants and message ids (consts, returns), callers / call graphs / field access, string decryption (decrypt_strings), version diffs (diff_apks), size, Unity IL2CPP and Flutter apps, React Native / Hermes bundle strings, packed apps (dump_app), renames and comments with JADX / Enigma / ProGuard mappings (rename, comment, mapping), a full Gradle export (export_project). Before reaching for another tool, check this list and the tool descriptions. Calls on the same APK get faster after the first ones: a warm session loads in the background (pass cache: false to opt out)."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tools()})),

@@ -13,8 +13,16 @@ Recipes (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   decode a number             apkscope consts app.apk --value 405
   search one package          apkscope search app.apk code \"token\" --in com.example.net.*
   patch and rebuild           apkscope smali app.apk a.b.C > C.smali; (edit); apkscope build app.apk out.apk --smali C.smali
-  sign with a keystore        apkscope build app.apk out.apk --ks my.jks --ks-pass pass:secret
+  whole app as smali          apkscope smali app.apk --out-dir decoded/; (edit); apkscope build app.apk out.apk --smali decoded/
+  edit resources / manifest   apkscope res app.apk decoded/; (edit); apkscope build app.apk out.apk --res decoded/
+  re-sign / zipalign only     apkscope build app.apk out.apk --ks my.jks --ks-pass pass:secret
+  check the signature         apkscope verify out.apk      (v1, v2, v3)
+  install on a device         apkscope install out.apk
   check a patch landed        apkscope diff app.apk out.apk --strings
+
+Patching needs no other tool: `smali` writes smali (one class or the whole app, like apktool d /
+baksmali), `build` assembles it into the right classesN.dex, zipaligns and signs (like apktool b,
+smali.jar, zipalign, apksigner), `verify` checks v1/v2/v3, `install` drives adb.
 
 For scripts and agents: -q drops progress lines from stderr, --json gives JSON where a command
 lists items, --limit/--offset page long lists. Exit code 0 = ran fine (even with no results),
@@ -53,7 +61,8 @@ Examples:
   apkscope decompile app.apk a.b.C a.b.D --out-dir src/        one file per class
   apkscope decompile app.apk --classes-file list.txt --out-dir src/
   apkscope decompile app.apk com.example.Main --smali
-Class names work in the shown (deobfuscated) form and in the original obfuscated form.";
+Class names work in the shown (deobfuscated) form and in the original obfuscated form.
+To patch a class, take its smali from `apkscope smali` (the format build assembles), not --smali here.";
 
 pub const DIFF: &str = "\
 Examples:
@@ -143,7 +152,15 @@ pub const SMALI: &str = "\
 Examples:
   apkscope smali app.apk com.example.Main > Main.smali
   (edit Main.smali)
-  apkscope build app.apk out.apk --smali Main.smali";
+  apkscope build app.apk out.apk --smali Main.smali
+  apkscope install out.apk
+  apkscope smali app.apk --out-dir decoded/            every class: decoded/smali/a/b/C.smali,
+                                                       decoded/smali_classes2/... (one folder per DEX)
+  apkscope smali app.apk a.b.C a.b.D --out-dir decoded/
+  apkscope build app.apk out.apk --smali decoded/      applies only the classes you changed
+build assembles each class into the classesN.dex it came from: no baksmali, smali.jar or apktool
+needed. A nested class is a class of its own (a.b.C$Inner). Deleting a file does not remove its
+class. `apkscope res app.apk decoded/` can write the resources into the same folder.";
 
 pub const RES: &str = "\
 Examples:
@@ -155,7 +172,9 @@ nothing is removed.";
 
 pub const BUILD: &str = "\
 Examples:
-  apkscope build app.apk out.apk --smali Main.smali
+  apkscope build app.apk out.apk --smali Main.smali --smali Login.smali
+  apkscope build app.apk out.apk --smali decoded/ --res decoded/   folders from `smali --out-dir` and `res`
+  apkscope build app.apk out.apk                   re-sign and zipalign only (debug key)
   apkscope build app.apk out.apk --res decoded/ --string app_name=Patched
   apkscope build app.apk out.apk --put classes7.dex=my.dex --delete META-INF/old.SF
   apkscope build app.apk out.apk --ks release.jks --ks-pass pass:secret --ks-alias key0
@@ -163,11 +182,14 @@ Examples:
   apkscope build app.apk out.apk --key k.pk8 --cert c.crt
 Without a key it signs with apkscope's own debug key. --ks-pass takes pass:TEXT, env:VAR or
 file:PATH. Keystores: JKS and PKCS#12 (.jks, .keystore, .p12, .pfx).
-Then: adb install -r out.apk";
+No zipalign or apksigner needed: build does both. Then: apkscope verify out.apk;
+apkscope install out.apk";
 
 pub const VERIFY: &str = "\
 Examples:
-  apkscope verify out.apk     signature schemes and signer certificate";
+  apkscope verify out.apk     v1 (JAR), v2 and v3: verified, not present, or FAILED and why
+v1 is checked as Android 5-6 check it: every entry's digest, the manifest, the RSA signature
+(a DSA / EC v1 signature: digests only). To sign or re-sign: apkscope build app.apk out.apk.";
 
 pub const EXPORT: &str = "\
 Examples:

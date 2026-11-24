@@ -136,7 +136,7 @@ pub fn setup(device: Option<&str>, push: Option<&str>) -> Result<String, String>
     }
     if abi == "x86_64" || abi == "x86" {
         o.push(format!(
-            "note: this device is {abi}. An app that ships arm64-only code runs here only through ARM translation; install it with adb install-multiple --abi arm64-v8a, or use an arm64 image"
+            "note: this device is {abi}. An app that ships arm64-only code runs here only through ARM translation; install it with apkscope install --abi arm64-v8a, or use an arm64 image"
         ));
     }
     Ok(o.join("\n"))
