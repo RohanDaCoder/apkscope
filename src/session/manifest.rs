@@ -197,7 +197,12 @@ pub fn overview(st: &State) -> String {
         "
 // signature"
     );
-    o += &crate::sign::summary(&st.file, &st.entries, |p| st.read_entry(p));
+    let block = st
+        .input()
+        .ok()
+        .and_then(|mut i| apkscope_core::sign::signing_block_from(&mut i))
+        .unwrap_or_default();
+    o += &apkscope_core::sign::summary_of(block, &st.entries, |p| st.read_entry(p));
     let libs: Vec<&String> = st
         .entries
         .iter()

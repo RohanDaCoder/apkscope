@@ -306,7 +306,7 @@ pub fn decompile(a: &DecompileArgs, deobf: bool) -> Result<(), String> {
 }
 
 fn decompile_all(path: &str, class: Option<&str>, deobf: bool) -> Result<(), String> {
-    let mut apk = crate::export::open(&session::prepare(path)?)?;
+    let mut apk = crate::export::Apk::new(crate::input::Input::open(path)?)?;
     // 'static so inline string decryption can reach every DEX
     let raw: &'static [Vec<u8>] = Box::leak(
         apk.dex()?

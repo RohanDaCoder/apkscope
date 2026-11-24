@@ -50,8 +50,10 @@ use crate::res;
 
 pub struct State {
     pub path: String,
-    /// the APK actually read (differs from `path` for bundles and .dex)
-    pub file: String,
+    /// a file holding the APK on its own, made only when a command needs one (build, verify,
+    /// decoding resources to a folder); reads go through `apk`, in place inside a bundle
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    file: OnceLock<String>,
     /// shared with inline string decryption (`re::set_dexes`): one parse, one set of tables
     pub dexes: Arc<Vec<Dex<'static>>>,
     /// top-level classes: (java name, dex, class index); the position is the class id
@@ -62,7 +64,7 @@ pub struct State {
     /// decoded from the resource table the first time a command reads resources
     res: OnceLock<Resources>,
     names: Option<res::Names>,
-    pub(crate) apk: Mutex<Apk>,
+    pub(crate) apk: Mutex<Apk<crate::input::Input>>,
     /// every zip entry name, for the overview
     pub entries: Vec<String>,
     pub package: String,
@@ -81,6 +83,20 @@ pub struct State {
 type Resources = (BTreeMap<String, String>, BTreeMap<String, String>);
 
 impl State {
+    /// The APK as a file of its own, for the commands that write or verify it: the input itself,
+    /// or for a bundle a copy of its base split (made once, then kept by `search::prepare`).
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub fn file(&self) -> String {
+        self.file
+            .get_or_init(|| prepare(&self.path).unwrap_or_else(|_| self.path.clone()))
+            .clone()
+    }
+
+    /// The APK's bytes again, in place: for readers that need their own handle.
+    pub fn input(&self) -> Result<crate::input::Input, String> {
+        crate::input::Input::open(&self.path)
+    }
+
     /// Every decoded text resource by res path: the manifest and the values XML of every
     /// configuration. Decoded from the table on first use, so commands that never read resources
     /// (smali, classes, decompile, …) never pay for 80 languages of strings.
@@ -135,8 +151,7 @@ impl State {
 }
 
 pub fn load(path: &str, deobf: bool) -> Result<State, String> {
-    let real = prepare(path)?;
-    let mut apk = crate::export::open(&real)?;
+    let mut apk = Apk::new(crate::input::Input::open(path)?)?;
     // a session lives until the process exits, so the DEX bytes can be 'static
     let raw: Vec<&'static [u8]> = apk
         .dex()?
@@ -187,12 +202,12 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
         .and_then(|t| attr(t, "package"))
         .unwrap_or_default();
     let origin = classes.iter().map(|c| origin(&c.0, &package)).collect();
-    let cache_dir = cache::dir_for(&real, deobf, tag);
+    let cache_dir = cache::dir_for(path, deobf, tag);
     let reader = cache::Reader::open(&cache_dir, classes.len()).map(Arc::new);
     cache::prune(&cache_dir);
     Ok(State {
         path: path.to_string(),
-        file: real.clone(),
+        file: OnceLock::new(),
         dexes,
         classes,
         manifest,

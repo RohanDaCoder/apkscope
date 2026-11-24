@@ -1,7 +1,6 @@
 //! Editing commands: rename, comment, smali, res, verify.
 
 use crate::cli::{self, NoteArgs, ResArgs, SmaliArgs, VerifyArgs};
-use crate::session;
 
 pub fn rename(a: &NoteArgs) -> Result<(), String> {
     note(a, false)
@@ -39,7 +38,7 @@ pub fn smali(a: &SmaliArgs) -> Result<(), String> {
 
 /// `apkscope res`: the manifest and `res/` of an APK as files, for `build --res`.
 fn res_cmd(apk: &str, out: &str) -> Result<(), String> {
-    let mut a = crate::export::open(&session::prepare(apk)?)?;
+    let mut a = crate::export::Apk::new(crate::input::Input::open(apk)?)?;
     let files = apkscope_core::resources::decode(&mut a)?;
     for (path, data) in &files {
         let to = std::path::Path::new(out).join(path);

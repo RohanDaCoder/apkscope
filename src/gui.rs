@@ -1805,7 +1805,7 @@ impl App {
                     .clicked()
                 {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        let (tx, file) = (self.tx.clone(), st.file.clone());
+                        let (tx, file) = (self.tx.clone(), st.file());
                         spawn(&self.tx, "save", move || {
                             let r = (|| -> Result<String, String> {
                                 let mut apk = apkscope_core::apk::open(&file)?;
@@ -1893,7 +1893,7 @@ impl App {
                     .clicked();
             });
             if verify {
-                let (tx, file) = (self.tx.clone(), st.file.clone());
+                let (tx, file) = (self.tx.clone(), st.file());
                 spawn(&self.tx, "save", move || {
                     let r = apksign::verify(&file).map(|l| l.join(", "));
                     let _ = tx.send(Msg::Saved(
@@ -2731,7 +2731,7 @@ impl App {
                 .save_file()
             {
                 let own = dlg.own_key.then(|| (dlg.key.clone(), dlg.cert.clone()));
-                let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file.clone());
+                let (tx, mut edits, file) = (self.tx.clone(), self.edits.clone(), st.file());
                 let smali_srcs = self.smali_edits.clone();
                 let res_dir = self.res_dir.clone();
                 spawn(&self.tx, "save", move || {
@@ -3649,7 +3649,7 @@ impl eframe::App for App {
                         None => {
                             if ui.button("Edit smali").on_hover_text("Edit as round-trippable Smali; Apply stages it for the next Build & sign").clicked() {
                                 let cls = doc.open.name().to_string();
-                                match st_now.map(|st| smali::export_class(&st.file, &cls)) {
+                                match st_now.map(|st| smali::export_class(&st.file(), &cls)) {
                                     Some(Ok(t)) => {
                                         doc.editing = Some(t);
                                         doc.view = View::Smali;

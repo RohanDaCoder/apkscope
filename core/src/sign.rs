@@ -177,7 +177,7 @@ pub fn pkcs7_cert(d: &[u8]) -> Option<Vec<u8>> {
 // ---------- APK signing block ----------
 
 /// Offset of the central directory, from the end-of-central-directory record.
-pub fn central_dir(f: &mut File) -> Option<u64> {
+pub fn central_dir<R: Read + Seek>(f: &mut R) -> Option<u64> {
     let len = f.seek(SeekFrom::End(0)).ok()?;
     let tail = len.min(65_557);
     f.seek(SeekFrom::Start(len - tail)).ok()?;
@@ -191,8 +191,12 @@ pub fn central_dir(f: &mut File) -> Option<u64> {
 
 /// The APK Signing Block's (id, value) pairs, if the APK has one.
 pub fn signing_block(path: &str) -> Option<Vec<(u32, Vec<u8>)>> {
-    let mut f = File::open(path).ok()?;
-    let cd = central_dir(&mut f)?;
+    signing_block_from(&mut File::open(path).ok()?)
+}
+
+/// [`signing_block`] of an APK in any reader (a split read in place inside its bundle).
+pub fn signing_block_from<R: Read + Seek>(f: &mut R) -> Option<Vec<(u32, Vec<u8>)>> {
+    let cd = central_dir(f)?;
     if cd < 32 {
         return None;
     }
@@ -251,10 +255,18 @@ pub fn scheme_cert(value: &[u8]) -> Option<Vec<u8>> {
 pub fn summary(
     apk_path: &str,
     entries: &[String],
+    read: impl FnMut(&str) -> Option<Vec<u8>>,
+) -> String {
+    summary_of(signing_block(apk_path).unwrap_or_default(), entries, read)
+}
+
+/// [`summary`] from an already-read signing block.
+pub fn summary_of(
+    block: Vec<(u32, Vec<u8>)>,
+    entries: &[String],
     mut read: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> String {
     let mut o = String::new();
-    let block = signing_block(apk_path).unwrap_or_default();
     let has = |id| block.iter().any(|b| b.0 == id);
     let v1 = entries.iter().find(|e| {
         e.starts_with("META-INF/")
