@@ -93,7 +93,7 @@ pub struct Lazy {
     /// compressed bytes, only the first `got` read yet; the rest waits in `file` for an inflate
     raw: Vec<u8>,
     got: usize,
-    file: Option<std::fs::File>,
+    file: Option<crate::input::Input>,
     /// full-size buffer; only `have` bytes are real yet (the rest is left over from another DEX)
     pub buf: Vec<u8>,
     have: usize,
@@ -317,8 +317,8 @@ pub fn scan_each<T: Send>(
 ) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
     let mut sink = sink;
-    let real = search::prepare(path)?;
-    let mut file = std::fs::File::open(&real).map_err(|e| format!("{path}: {e}"))?;
+    // in place: a bundle's stored base split is read inside the bundle, no copy
+    let mut file = crate::input::Input::open(path)?;
     // root-level classes*.dex only
     let dex = |n: &[u8]| n.starts_with(b"classes") && n.ends_with(b".dex") && !n.contains(&b'/');
     let mut entries = central_dir(&mut file, &dex).map_err(|e| format!("{path}: {e}"))?;
@@ -340,7 +340,7 @@ pub fn scan_each<T: Send>(
         |k| -> Result<T, String> {
             let (name, local, csize, size, method) = &entries[k];
             let err = |e: std::io::Error| format!("{name}: {e}");
-            let mut fh = std::fs::File::open(&real).map_err(err)?;
+            let mut fh = file.reopen().map_err(err)?;
             let mut h = [0u8; 30];
             fh.seek(SeekFrom::Start(*local)).map_err(err)?;
             fh.read_exact(&mut h).map_err(err)?;
@@ -454,14 +454,12 @@ fn so_entries(path: &str) -> Result<Vec<(String, usize)>, String> {
 /// One APK for `central_dir` to scan: a plain file, an in-place view of a stored split inside
 /// its bundle file, or a buffered deflated split — the only case that needs a copy.
 enum Apk {
-    File(std::fs::File),
-    InPlace(Bounded),
+    InPlace(crate::input::Input),
     Mem(std::io::Cursor<Vec<u8>>),
 }
 impl std::io::Read for Apk {
     fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Apk::File(f) => f.read(b),
             Apk::InPlace(v) => v.read(b),
             Apk::Mem(c) => c.read(b),
         }
@@ -470,55 +468,9 @@ impl std::io::Read for Apk {
 impl std::io::Seek for Apk {
     fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
         match self {
-            Apk::File(f) => f.seek(p),
             Apk::InPlace(v) => v.seek(p),
             Apk::Mem(c) => c.seek(p),
         }
-    }
-}
-
-/// A seekable read-only view of the `base..base+len` range of a file. `central_dir` runs on this
-/// when a bundle stores its split uncompressed (the normal case — bundle tools store splits), so
-/// the inner APK is read where it sits in the bundle, with no copy. Positions are relative to
-/// `base` and clamped to the range, so the split behaves exactly like a standalone file.
-struct Bounded {
-    f: std::fs::File,
-    base: u64,
-    len: u64,
-    pos: u64,
-}
-impl Bounded {
-    fn new(f: std::fs::File, base: u64, len: u64) -> Bounded {
-        Bounded {
-            f,
-            base,
-            len,
-            pos: 0,
-        }
-    }
-}
-impl std::io::Read for Bounded {
-    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
-        let max = (self.len - self.pos).min(b.len() as u64) as usize;
-        if max == 0 {
-            return Ok(0);
-        }
-        let k = self.f.read(&mut b[..max])?;
-        self.pos += k as u64;
-        Ok(k)
-    }
-}
-impl std::io::Seek for Bounded {
-    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
-        let to = match p {
-            std::io::SeekFrom::Start(n) => n as i128,
-            std::io::SeekFrom::Current(d) => self.pos as i128 + d as i128,
-            std::io::SeekFrom::End(d) => self.len as i128 + d as i128,
-        }
-        .clamp(0, self.len as i128) as u64;
-        self.f.seek(std::io::SeekFrom::Start(self.base + to))?;
-        self.pos = to;
-        Ok(to)
     }
 }
 
@@ -540,11 +492,9 @@ fn apks(path: &str, lib: bool) -> Result<Apks, String> {
             splits: Some(Splits::new(path, lib)?),
         }),
         _ => {
-            // plain .apk / .jar / .dex-wrapped: `prepare` resolves to a single APK file
-            let p = search::prepare(path)?;
-            let f = std::fs::File::open(&p).map_err(|e| format!("{path}: {e}"))?;
+            // plain .apk / .jar / .dex-wrapped: one APK, read in place
             Ok(Apks {
-                one: Some(Ok(Apk::File(f))),
+                one: Some(crate::input::Input::open(path).map(Apk::InPlace)),
                 splits: None,
             })
         }
@@ -575,6 +525,7 @@ impl Iterator for Apks {
 /// in-place reads of stored splits.
 struct Splits {
     f: std::fs::File,
+    path: std::path::PathBuf,
     zip: zip::ZipArchive<std::fs::File>,
     /// entry indices into `zip`, in visiting order
     order: Vec<usize>,
@@ -607,13 +558,14 @@ impl Splits {
         splits.sort_by_key(|(i, _, _)| if lib { *i == base } else { *i != base });
         Ok(Splits {
             f,
+            path: path.into(),
             zip,
             order: splits.into_iter().map(|(i, _, _)| i).collect(),
             next: 0,
         })
     }
 
-    /// Split `i` as a reader: in place through [`Bounded`] when the bundle stores it (no copy),
+    /// Split `i` as a reader: in place through [`crate::input::Input`] when the bundle stores it (no copy),
     /// buffered only when it is deflated — the one case a seekable view can't cover.
     fn open(&mut self, i: usize) -> Result<Apk, String> {
         let (name, method, start, len) = {
@@ -626,11 +578,14 @@ impl Splits {
             )
         };
         match method {
-            zip::CompressionMethod::Stored => Ok(Apk::InPlace(Bounded::new(
+            zip::CompressionMethod::Stored => crate::input::Input::region(
                 self.f.try_clone().map_err(|e| format!("{name}: {e}"))?,
+                &self.path,
                 start.ok_or_else(|| format!("{name}: no data offset"))?,
                 len,
-            ))),
+            )
+            .map(Apk::InPlace)
+            .map_err(|e| format!("{name}: {e}")),
             zip::CompressionMethod::Deflated => {
                 let mut e = self.zip.by_index(i).map_err(|e| format!("{name}: {e}"))?;
                 let mut buf = Vec::with_capacity(e.size() as usize);

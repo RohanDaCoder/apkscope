@@ -3,11 +3,10 @@
 use crate::cli::{self, ConstsArgs, ReturnsArgs};
 use crate::dex::Dex;
 use crate::lookup::{self, NameFilter, Row, ValueFilter};
-use crate::session;
 
 /// Every DEX of the APK, whole, with the deobfuscator's names when it is on.
 pub fn load_dexes(apk: &str, deobf: bool) -> Result<Vec<Dex<'static>>, String> {
-    let mut apk = crate::export::open(&session::prepare(apk)?)?;
+    let mut apk = crate::export::Apk::new(crate::input::Input::open(apk)?)?;
     let raw: &'static [Vec<u8>] = Box::leak(
         apk.dex()?
             .into_iter()

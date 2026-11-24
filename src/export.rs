@@ -157,7 +157,10 @@ fn write(path: &Path, data: &[u8]) -> Result<(), String> {
 }
 
 /// Manifest, res/ (values + files with their real names), assets/ and native libs into `main_dir`.
-pub fn resources(apk: &mut Apk, main_dir: &Path) -> Result<(ResStats, Option<Manifest>), String> {
+pub fn resources<R: std::io::Read + std::io::Seek>(
+    apk: &mut Apk<R>,
+    main_dir: &Path,
+) -> Result<(ResStats, Option<Manifest>), String> {
     let mut st = ResStats::default();
     let mut manifest = None;
     for (path, data) in apkscope_core::resources::decode(apk)? {

@@ -26,6 +26,7 @@ mod gui;
 mod il2cpp;
 mod imports;
 mod index;
+mod input;
 mod install;
 mod ir;
 mod java;
@@ -47,7 +48,7 @@ use std::process::ExitCode;
 // Crate-root re-exports that other modules reach via `crate::…` (cfg, deobf, index, ir,
 // java, quick, re, session, mcp all depend on these being at the root).
 use apkscope_core::dex::render;
-use apkscope_core::{bytecode, res, sign};
+use apkscope_core::{bytecode, res};
 // `gui.rs` and the gui-gated half of `session.rs` (both compiled only in the
 // viewer build) reach these through the crate root, as in the pre-clap layout.
 #[cfg(feature = "gui")]

@@ -89,7 +89,7 @@ pub fn export_cmd(a: &ExportArgs, deobf: bool) -> Result<(), String> {
 
 fn export_run(path: &str, out: &str, deobf: bool) -> Result<(), String> {
     let start = std::time::Instant::now();
-    let mut apk = export::open(&session::prepare(path)?)?;
+    let mut apk = crate::export::Apk::new(crate::input::Input::open(path)?)?;
     let root = std::path::Path::new(out);
     let main_dir = root.join("app/src/main");
     let (n, failed) = export::sources(&apk.dex()?, &main_dir.join("java"), deobf);

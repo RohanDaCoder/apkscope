@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 use crate::cli::{self, SizeArgs};
-use crate::session;
 
 struct Entry {
     name: String,
@@ -41,9 +40,9 @@ fn group(name: &str) -> String {
 }
 
 pub fn size(a: &SizeArgs) -> Result<(), String> {
-    let real = session::prepare(&a.apk)?;
-    let f = std::fs::File::open(&real).map_err(|e| format!("{}: {e}", a.apk))?;
-    let total = f.metadata().map(|m| m.len()).unwrap_or(0);
+    // in place: a bundle's stored base split is measured inside the bundle, no copy
+    let f = crate::input::Input::open(&a.apk)?;
+    let total = f.len();
     let mut z = zip::ZipArchive::new(f).map_err(|e| format!("{}: {e}", a.apk))?;
     let mut all = Vec::with_capacity(z.len());
     for i in 0..z.len() {
