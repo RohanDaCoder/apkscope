@@ -19,6 +19,8 @@ cargo clippy --release --no-default-features -- -D warnings  # CI lints these th
 cargo clippy --release -- -D warnings                          # with the viewer
 cargo clippy --release --no-default-features --tests -- -D warnings
 cargo test --release --no-default-features
+cargo bench --no-default-features -- --compare main --compare HEAD --apk <apk>
+# ^ the bench harness (#64): --hash also fails (exit 3) when outputs differ across refs
 ```
 
 ## Layout
@@ -41,7 +43,10 @@ cargo test --release --no-default-features
 - `src/upgrade/`: self-update
 - `core/`: the `apkscope-core` library (DEX, smali, resources, signing, rebuild)
 - `tests/`: unit tests, wired in with `#[cfg(test)] #[path = "..."] mod tests;` (see `tests/README.md`)
-- `bench/`: benchmark and regression scripts
+- `bench/`: the legacy PowerShell/Python benchmark scripts (Windows-first), to retire as the
+  `BENCHMARKS.md` numbers move to the harness above
+- `benches/`: the `cargo bench` target that replaces them: builds refs into worktrees, measures
+  the subprocess cases, prints the PR table; `--hash` diffs output across refs
 
 ## Rules
 

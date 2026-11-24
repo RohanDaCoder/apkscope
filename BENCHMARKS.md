@@ -1,9 +1,11 @@
 # apkscope benchmarks
 
 Every number on this page was measured on one machine (i7-10850H, 6 cores / 12 threads, 32 GB,
-Windows 11). The scripts are in [`bench/`](bench), so you can re-run them. [Back to the README](README.md)
+Windows 11). The scripts are in [`bench/`](bench), so you can re-run them, and
+[`cargo bench`](#re-running-these-numbers-cargo-bench) re-measures the same cases across refs.
+[Back to the README](README.md)
 
-**Jump to:** [Features](#features-apkscope-vs-rust_asc-vs-jadx) · [TikTok, all three tools](#tiktok-all-three-tools) · [Agent sessions](#agent-sessions-mcp) · [Cold queries, 10 popular apps](#cold-queries-10-popular-apps) · [Earlier 14-app set](#cold-queries-14-apps-earlier-set-2026-10-30) · [How it's measured](#how-its-measured)
+**Jump to:** [Features](#features-apkscope-vs-rust_asc-vs-jadx) · [TikTok, all three tools](#tiktok-all-three-tools) · [Agent sessions](#agent-sessions-mcp) · [Cold queries, 10 popular apps](#cold-queries-10-popular-apps) · [Earlier 14-app set](#cold-queries-14-apps-earlier-set-2026-10-30) · [How it's measured](#how-its-measured) · [Re-running with cargo bench](#re-running-these-numbers-cargo-bench)
 
 ## Features: apkscope vs rust_ASC vs JADX
 
@@ -372,5 +374,32 @@ while rust_ASC matches substrings; use `--regex` for substrings.
 - rust_ASC was built from source with its own release profile (`lto = "fat"`, `codegen-units = 1`).
   apkscope was built with `cargo build --release --no-default-features`.
 - Small-app numbers move by about ±10 ms between runs, so a 0.9x or 1.1x row there is mostly noise.
+
+## Re-running these numbers: cargo bench
+
+The `bench/` scripts above need Python 3, PowerShell (Windows) and — for the compile check — a JDK,
+which is why this page carries a Windows-only caveat. The `cargo bench` target ([#64](https://github.com/suffixing/apkscope/issues/64))
+needs only the Rust toolchain that built apkscope, and runs the same way on Linux, macOS and Windows:
+
+```
+cargo bench --no-default-features -- --compare main --compare HEAD --apk path/to/app.apk
+```
+
+- `--compare <ref>` (repeatable) builds apkscope at each git ref — `HEAD` is the working tree,
+  uncommitted changes included — and makes one table column per ref. `--compare main` checks the
+  ref out into a worktree under `target/bench/wt/`, so nothing touches your checkout.
+- The rows are the cases above: `info`, `classes`, `strings`, `decompile` (one class), `smali`
+  (one class), `build`, and the whole-APK row. Cells are `wall time, peak RSS`, the median of
+  `--runs` cold runs (`--no-cache`); `--case` and `--runs` trim the run.
+- `--tool jadx --tool rust_ASC` adds external-tool columns (`<tool> <apk>`, the whole-APK row).
+- `--hash` digests every run's output (SHA-256; the `build` case hashes the rebuilt APK's entry
+  list and CRCs) and, across the compared refs, reports — and exits 3 on — any case whose output
+  differs between builds. A perf PR that also changes output says so next to its numbers.
+- `--format json` dumps the measurements; `--format svg` writes bar charts to
+  `docs/bench-<apk>-{time,ram}.svg`.
+
+Worktrees, builds and binaries land under `target/bench/` (`cargo clean` removes them; a
+`git worktree prune` clears the stale metadata a clean leaves behind). Exit codes: 0 = clean,
+1 = a run failed, 3 = `--hash` found differing outputs.
 
 [Back to the README](README.md)

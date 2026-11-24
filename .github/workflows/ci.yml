@@ -108,6 +108,8 @@ jobs:
       # the viewer build and the tests are linted too, so neither collects warnings again
       - run: cargo clippy --release -- -D warnings
       - run: cargo clippy --release --no-default-features --tests -- -D warnings
+      # the cargo bench target (#64) as well: CI never runs it, only compiles it
+      - run: cargo clippy --release --no-default-features --benches -- -D warnings
 
   build:
     strategy:
