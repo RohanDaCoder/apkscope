@@ -1,19 +1,26 @@
-//! The `cargo bench` target (#64): build apkscope at one or more git refs, run its
-//! subcommands on a set of APKs as fresh processes, and print the Markdown comparison
-//! table that PR bodies paste by hand — replacing what `bench/*.ps1` and `bench/*.py`
-//! measured, without Python, PowerShell or a JDK on the benching machine.
+//! The `cargo bench` target (#64): build apkscope at one or more git refs — or take
+//! ready-made binaries — run its subcommands on a set of APKs as fresh processes, and
+//! print the Markdown comparison table that PR bodies paste by hand — replacing what
+//! the retired `bench/*.ps1` and `bench/*.py` scripts measured, without Python,
+//! PowerShell or a JDK on the benching machine.
 //!
 //! ```text
 //! cargo bench -- --compare main --compare HEAD --apk bench/apps/TikTok.apk
+//! cargo bench -- --pr 79 --apk Telegram.apk
+//! cargo bench -- --bin ~/bin/apkscope --bin ~/.local/bin/apkscope-pr-79 --apk Telegram.apk
 //! ```
 //!
 //! The `--` matters: `--compare` is this harness's flag, not cargo's, so it goes after
 //! cargo's own separator. Plain `cargo bench` also works and measures the working tree
 //! alone. Columns are the refs (built under `target/bench/`, worktrees under
-//! `target/bench/wt/`) and any `--tool` binaries found on PATH. Rows are the case set
-//! `BENCHMARKS.md` reports: `info`, `classes`, `strings`, `decompile` (one class),
+//! `target/bench/wt/`), the pull requests `--pr` fetches (GitHub's merge ref, kept
+//! under `refs/bench/`), the ready-made binaries `--bin` points at (measured as given,
+//! no build — two apkscope builds to race, e.g. an `apkscope-pr-<N>` preview from
+//! `scripts/preview-pr.sh`), and any `--tool` binaries found on PATH. Rows are the case
+//! set `BENCHMARKS.md` reports: `info`, `classes`, `strings`, `decompile` (one class),
 //! `smali` (one class), `build`, and the whole-APK row. Every cell is `time, peak RSS`,
-//! the median of `--runs` cold runs (`-q --no-cache`).
+//! the median of `--runs` cold runs (`-q --no-cache`); times below a second print in
+//! milliseconds, above it in seconds.
 //!
 //! `--hash` adds an output-equivalence check: each run's stdout — for `build`, the
 //! rebuilt APK's entry list and CRCs — is digested with SHA-256, and when several refs
@@ -44,15 +51,32 @@ use sha2::{Digest as _, Sha256};
 #[command(
     name = "apkscope-bench",
     bin_name = "cargo bench --",
-    about = "build apkscope at git refs, measure its subcommands on APKs, print the PR table",
+    about = "build apkscope at git refs or take given binaries, measure its subcommands on APKs, print the PR table",
     after_help = "run as: cargo bench -- [OPTIONS]  (the -- passes OPTIONS to this harness)"
 )]
 struct Opts {
     /// git ref to build and measure; repeatable — one column each, the first is the
     /// baseline. `HEAD` (or `.`) builds the working tree, uncommitted changes included.
-    /// Default: the working tree alone.
+    /// Default: the working tree alone — unless `--bin` or `--pr` name other columns.
     #[arg(long, value_name = "REF")]
     compare: Vec<String>,
+
+    /// ready-made apkscope binary to measure as-is, no build; repeatable — two local
+    /// builds to race, or a real install next to an `apkscope-pr-<N>` preview from
+    /// `scripts/preview-pr.sh`
+    #[arg(long, value_name = "PATH")]
+    bin: Vec<PathBuf>,
+
+    /// pull request to compare against its base: fetch GitHub's merge ref for PR N —
+    /// the same merge CI builds — into `refs/bench/pr-N` and bench it as a `pr-N`
+    /// column; repeatable. Without `--compare`, the base ref (`--base`) comes first
+    #[arg(long = "pr", value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pr: Vec<u64>,
+
+    /// the ref the `--pr` columns are judged against — the first column when `--pr`
+    /// runs without `--compare`; default `origin/main`, the tip GitHub merges them into
+    #[arg(long, value_name = "REF", default_value = "origin/main")]
+    base: String,
 
     /// APK to measure; repeatable. Default: every app in bench/apps/ (APKs are not
     /// committed, so usually this is passed explicitly).
@@ -195,6 +219,9 @@ fn apkscope_args(id: &str, apk: &Path, class: Option<&str>, out: Option<&Path>) 
 enum ColKind {
     /// an apkscope binary built at a git ref
     Apkscope { sha: String },
+    /// an apkscope binary measured exactly as given (`--bin`), its `--version` probed
+    /// up front
+    Bin { version: String },
     /// an external tool raced in the whole-APK row
     Tool,
 }
@@ -207,7 +234,7 @@ struct Column {
 
 impl Column {
     fn is_apkscope(&self) -> bool {
-        matches!(self.kind, ColKind::Apkscope { .. })
+        matches!(self.kind, ColKind::Apkscope { .. } | ColKind::Bin { .. })
     }
 }
 
@@ -220,24 +247,43 @@ fn exe_name() -> &'static str {
 }
 
 fn build_columns(repo: &Path, opts: &Opts) -> Result<Vec<Column>, String> {
-    let mut refs: Vec<String> = opts.compare.clone();
-    if refs.is_empty() {
-        refs.push("HEAD".to_string());
+    // (column name, git ref, is the working tree?) — the name is what the table shows,
+    // the ref what gets resolved and built, so `--pr` can display `pr-79` while building
+    // the fetched `refs/bench/pr-79`
+    let mut specs: Vec<(String, String, bool)> = Vec::new();
+    for name in &opts.compare {
+        let working_tree = name.eq_ignore_ascii_case("HEAD") || name == "." || name == "@";
+        specs.push((name.clone(), name.clone(), working_tree));
+    }
+    if !opts.pr.is_empty() {
+        fetch_prs(repo, &opts.pr)?;
+        // with no --compare column to judge against, the base comes first — origin's
+        // tip, the same tip GitHub merges the PRs into
+        if specs.is_empty() {
+            specs.push((opts.base.clone(), opts.base.clone(), false));
+        }
+        for n in &opts.pr {
+            specs.push((format!("pr-{n}"), format!("refs/bench/pr-{n}"), false));
+        }
+    }
+    // plain `cargo bench`: the working tree alone — but with `--bin` columns given, only
+    // those are measured (no surprise build of the checkout next to them)
+    if specs.is_empty() && opts.bin.is_empty() {
+        specs.push(("HEAD".to_string(), "HEAD".to_string(), true));
     }
     let mut columns = Vec::new();
     // sha → already-built binary, so two refs at the same commit build once
     let mut built: Vec<(String, PathBuf)> = Vec::new();
-    for name in &refs {
-        let working_tree = name.eq_ignore_ascii_case("HEAD") || name == "." || name == "@";
+    for (name, refname, working_tree) in specs {
         let sha = if working_tree {
             git(repo, &["rev-parse", "HEAD"])?
         } else {
-            git(repo, &["rev-parse", &format!("{name}^{{commit}}")])?
+            git(repo, &["rev-parse", &format!("{refname}^{{commit}}")])?
         };
         let exe = match built.iter().find(|(s, _)| s == &sha) {
             Some((_, exe)) if !working_tree => exe.clone(),
             _ => {
-                let exe = build_ref(repo, name, &sha, working_tree)?;
+                let exe = build_ref(repo, &name, &sha, working_tree)?;
                 if !working_tree {
                     built.push((sha.clone(), exe.clone()));
                 }
@@ -245,9 +291,36 @@ fn build_columns(repo: &Path, opts: &Opts) -> Result<Vec<Column>, String> {
             }
         };
         columns.push(Column {
-            name: name.clone(),
+            name,
             kind: ColKind::Apkscope { sha },
             exe,
+        });
+    }
+    for bin in &opts.bin {
+        if !bin.is_file() {
+            return Err(format!("--bin {}: no such file", bin.display()));
+        }
+        let version = bin_version(bin)?;
+        let stem = bin
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut name = if stem.is_empty() {
+            "bin".to_string()
+        } else {
+            stem.clone()
+        };
+        // same stem twice (./old/apkscope, ./new/apkscope) still needs distinct columns
+        // and distinct scratch dirs
+        let mut n = 2;
+        while columns.iter().any(|c| c.name == name) {
+            name = format!("{stem}-{n}");
+            n += 1;
+        }
+        columns.push(Column {
+            name,
+            kind: ColKind::Bin { version },
+            exe: bin.clone(),
         });
     }
     for tool in &opts.tool {
@@ -333,6 +406,53 @@ fn build_ref(repo: &Path, name: &str, sha: &str, working_tree: bool) -> Result<P
         .map_err(|e| format!("{}: {e}", exe.display()))?;
     eprintln!("{name}: built in {:.1} s", t0.elapsed().as_secs_f64());
     Ok(exe)
+}
+
+/// Fetch the `--pr` pull requests from `origin` into `refs/bench/pr-<N>`. The remote's
+/// branches refresh first: GitHub builds each merge ref against the base branch's
+/// current tip, so that tip — not a possibly stale local `main` — is the fair baseline.
+/// The merge ref is the PR exactly as CI sees it; a PR with conflicts (or a closed one)
+/// has none, and falls back to the plain, unmerged head.
+fn fetch_prs(repo: &Path, prs: &[u64]) -> Result<(), String> {
+    git(repo, &["fetch", "--quiet", "origin"])
+        .map_err(|e| format!("fetching origin (needed by --pr): {e}"))?;
+    for n in prs {
+        let dst = format!("refs/bench/pr-{n}");
+        let merge = format!("+pull/{n}/merge:{dst}");
+        if git(repo, &["fetch", "--quiet", "origin", &merge]).is_ok() {
+            continue;
+        }
+        let head = format!("+pull/{n}/head:{dst}");
+        git(repo, &["fetch", "--quiet", "origin", &head])
+            .map_err(|e| format!("fetching pr-{n} from origin: {e} — is PR #{n} open there?"))?;
+        eprintln!(
+            "pr-{n}: origin holds no merge ref (conflicts? closed?); benching the unmerged head"
+        );
+    }
+    Ok(())
+}
+
+/// `--version` of a `--bin` column: proves the file is an apkscope binary before
+/// minutes are spent on it, and lands in the table's footer as its build id.
+fn bin_version(exe: &Path) -> Result<String, String> {
+    let out = Command::new(exe)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("--bin {}: {e}", exe.display()))?;
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !out.status.success() || !line.starts_with("apkscope") {
+        return Err(format!(
+            "--bin {}: not an apkscope binary (`--version` said: {})",
+            exe.display(),
+            if line.is_empty() { "nothing" } else { &line }
+        ));
+    }
+    Ok(line.strip_prefix("apkscope ").unwrap_or(&line).to_string())
 }
 
 /// Resolve a tool name against PATH the way the shell would (absolute paths pass through).
@@ -897,11 +1017,11 @@ fn emit_markdown(results: &[ApkBench], columns: &[Column], opts: &Opts, diffs: &
         let n_refs = columns.iter().filter(|c| c.is_apkscope()).count();
         if n_refs == 0 {
             println!(
-                "`--hash`: no --compare refs given; digests are shown but there is nothing to compare."
+                "`--hash`: no apkscope columns given; digests are shown but there is nothing to compare."
             );
         } else if n_refs == 1 {
             println!(
-                "`--hash`: only one --compare ref ({}); add a second to detect output changes between builds.",
+                "`--hash`: only one apkscope column ({}); add a second --compare, --pr or --bin to detect output changes between builds.",
                 columns
                     .iter()
                     .find(|c| c.is_apkscope())
@@ -981,11 +1101,19 @@ fn column_desc(c: &Column) -> String {
             &sha[..sha.len().min(7)],
             c.exe.display()
         ),
+        ColKind::Bin { version } => format!(
+            "{} = {} (apkscope {}, given with --bin)",
+            c.name,
+            c.exe.display(),
+            version
+        ),
         ColKind::Tool => format!("{} = {} (external tool)", c.name, c.exe.display()),
     }
 }
 
 fn fmt_time(s: f64) -> String {
+    // the unit follows the value: milliseconds under a second — where cold-query
+    // differences live — seconds above it, minutes past a minute
     if s >= 60.0 {
         format!(
             "{} min {} s",
@@ -994,8 +1122,12 @@ fn fmt_time(s: f64) -> String {
         )
     } else if s >= 10.0 {
         format!("{s:.1} s")
-    } else {
+    } else if s >= 1.0 {
         format!("{s:.2} s")
+    } else if s >= 0.1 {
+        format!("{:.0} ms", s * 1000.0)
+    } else {
+        format!("{:.1} ms", s * 1000.0)
     }
 }
 
@@ -1029,7 +1161,12 @@ fn emit_json(results: &[ApkBench], columns: &[Column], opts: &Opts) -> Result<()
                 "exe": c.exe.display().to_string(),
                 "sha": match &c.kind {
                     ColKind::Apkscope { sha } => serde_json::json!(sha),
-                    ColKind::Tool => serde_json::json!(null),
+                    ColKind::Bin { .. } | ColKind::Tool => serde_json::json!(null),
+                },
+                "version": match &c.kind {
+                    // the `--version` line of a --bin column; null for built refs and tools
+                    ColKind::Bin { version } => serde_json::json!(version),
+                    ColKind::Apkscope { .. } | ColKind::Tool => serde_json::json!(null),
                 },
             }))
             .collect::<Vec<_>>(),
