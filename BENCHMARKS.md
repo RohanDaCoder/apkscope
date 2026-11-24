@@ -188,6 +188,12 @@ ref of [#79](https://github.com/suffixing/apkscope/pull/79) at bench time). Medi
 The two columns sit within noise of each other — this PR adds a bench target and docs,
 no apkscope code — which is exactly what the table should show.
 
+After the harness was split into one file per stage under `benches/bench/` (same PR),
+the run was repeated at the new HEAD — same machine, same APK,
+`--compare origin/main --compare HEAD --hash`: every cell within noise of the table
+above, and every `--hash` digest identical across the two columns (exit 0). The split
+changes no measured code; the numbers say so.
+
 ## History
 
 Until this page was rewritten, it carried the cross-tool races (JADX, rust_ASC) and the
