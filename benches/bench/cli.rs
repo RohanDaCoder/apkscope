@@ -64,7 +64,7 @@ pub(crate) struct Opts {
     pub(crate) runs: usize,
 
     /// only these cases (repeatable): info, classes, strings, decompile, smali, build,
-    /// whole
+    /// whole, fingerprint (the last only on refs that have the command, e.g. #51's)
     #[arg(long = "case", value_name = "NAME")]
     pub(crate) only_cases: Vec<String>,
 

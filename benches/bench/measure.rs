@@ -46,7 +46,10 @@ pub(crate) fn measure(
     apks: &[PathBuf],
 ) -> Result<Vec<ApkBench>, String> {
     let cases: Vec<&'static CaseDef> = if opts.only_cases.is_empty() {
-        case::all_cases().iter().collect()
+        // the default set skips opt-in rows: their command is not on every ref
+        // (the fingerprint command lands with #51), so a default run against
+        // `origin/main` — the `--pr` base — would fail them
+        case::all_cases().iter().filter(|c| !c.opt_in).collect()
     } else {
         let mut v = Vec::new();
         for name in &opts.only_cases {

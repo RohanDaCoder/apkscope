@@ -21,6 +21,9 @@ pub(crate) struct CaseInput<'a> {
 }
 
 /// One row of the bench: what runs, what the row is called, who can run it.
+/// An `opt_in` case runs only when named with `--case` — rows whose command does
+/// not exist on every ref (the default `origin/main` base included) would fail
+/// otherwise.
 pub(crate) struct CaseDef {
     /// the `--case` name
     pub(crate) id: &'static str,
@@ -30,6 +33,8 @@ pub(crate) struct CaseDef {
     pub(crate) needs_class: bool,
     /// only apkscope does it; `--tool` columns show —
     pub(crate) apkscope_only: bool,
+    /// runs only when explicitly named with `--case`
+    pub(crate) opt_in: bool,
     /// the case-specific argv, spliced after the cold-run flags every run gets
     pub(crate) args: fn(&CaseInput) -> Vec<String>,
 }
@@ -50,6 +55,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope info`",
         needs_class: false,
         apkscope_only: true,
+        opt_in: false,
         args: info_args,
     },
     CaseDef {
@@ -57,6 +63,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope classes`",
         needs_class: false,
         apkscope_only: true,
+        opt_in: false,
         args: classes_args,
     },
     CaseDef {
@@ -64,6 +71,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope strings`",
         needs_class: false,
         apkscope_only: true,
+        opt_in: false,
         args: strings_args,
     },
     CaseDef {
@@ -71,6 +79,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope decompile` (one class)",
         needs_class: true,
         apkscope_only: true,
+        opt_in: false,
         args: decompile_args,
     },
     CaseDef {
@@ -78,6 +87,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope smali` (one class)",
         needs_class: true,
         apkscope_only: true,
+        opt_in: false,
         args: smali_args,
     },
     CaseDef {
@@ -85,6 +95,7 @@ const CASES: &[CaseDef] = &[
         label: "`apkscope build`",
         needs_class: false,
         apkscope_only: true,
+        opt_in: false,
         args: build_args,
     },
     // the whole-APK row: `apkscope decompile <apk>` for apkscope, `<tool> <apk>` for tools
@@ -93,7 +104,19 @@ const CASES: &[CaseDef] = &[
         label: "the whole APK",
         needs_class: false,
         apkscope_only: false,
+        opt_in: false,
         args: whole_args,
+    },
+    // the SDK/tracker fingerprint, heavy mode: both catalogs plus the DEX string-pool
+    // scan. Opt-in: the command lands with #51, so a default run against `origin/main`
+    // (the `--pr` base) has no such command and the row would fail
+    CaseDef {
+        id: "fingerprint",
+        label: "`apkscope fingerprint --all --strings`",
+        needs_class: false,
+        apkscope_only: true,
+        opt_in: true,
+        args: fingerprint_args,
     },
 ];
 
@@ -145,4 +168,15 @@ fn build_args(i: &CaseInput) -> Vec<String> {
 
 fn whole_args(i: &CaseInput) -> Vec<String> {
     vec!["decompile".into(), i.apk.display().to_string()]
+}
+
+/// Both catalogs plus the DEX string-pool scan: the mode whose matching work
+/// an Aho-Corasick-shaped PR moves the most.
+fn fingerprint_args(i: &CaseInput) -> Vec<String> {
+    vec![
+        "fingerprint".into(),
+        "--all".into(),
+        "--strings".into(),
+        i.apk.display().to_string(),
+    ]
 }

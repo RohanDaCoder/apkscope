@@ -34,6 +34,17 @@ the run.
 | `apkscope smali` (one class) | the same class as Smali |
 | `apkscope build` | rebuild and re-sign the whole APK |
 | the whole APK | `apkscope decompile <apk>` — every class, one process |
+| `apkscope fingerprint --all --strings` | known SDKs and trackers, both catalogs plus the DEX string-pool scan — opt-in: `--case fingerprint` |
+
+The fingerprint row is opt-in because its command lands with
+[#51](https://github.com/suffixing/apkscope/pull/51): a default run against the `--pr`
+base (`origin/main`) has no such command and the row would fail. Name it with
+`--case fingerprint` on refs that have it — e.g. racing that PR's before and after:
+
+```
+cargo bench --no-default-features -- \
+  --compare <pr-51-before> --compare <pr-51-after> --case fingerprint --hash --apk Telegram.apk
+```
 
 Every run is a fresh process with `-q --no-cache`: no warm cache, no daemon, nothing
 carried between runs. `--tool` columns only fill the whole-APK row.
