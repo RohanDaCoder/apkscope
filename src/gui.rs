@@ -1778,7 +1778,7 @@ impl App {
             return;
         };
         if self.side == Side::Files {
-            let files = self.files().get_or_insert_with(|| st.files_list());
+            let files = self.files.get_or_insert_with(|| st.files_list());
             let cur = self.docs.get(self.active).map(|d| d.open.clone());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{} files", files.len())).color(p.dim));

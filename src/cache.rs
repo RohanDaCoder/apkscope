@@ -96,12 +96,10 @@ pub fn prune(keep: &Path) {
                     let fp = f.path();
                     let part = fp.extension().is_some_and(|x| x == "part");
                     let day = std::time::Duration::from_secs(24 * 3600);
-                    let stale = fs::metadata(&fp)
-                        .and_then(|m| m.modified())
-                        .is_ok_and(|t| {
-                            now.duration_since(t)
-                                .is_ok_and(|d| d > if part { day } else { UNUSED })
-                        });
+                    let stale = fs::metadata(&fp).and_then(|m| m.modified()).is_ok_and(|t| {
+                        now.duration_since(t)
+                            .is_ok_and(|d| d > if part { day } else { UNUSED })
+                    });
                     if stale {
                         let _ = fs::remove_file(&fp);
                     }

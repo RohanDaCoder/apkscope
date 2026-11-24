@@ -19,7 +19,10 @@ fn round_trip_and_incomplete_cache_ignored() {
 #[test]
 fn reads_the_version_a_cache_folder_was_made_by() {
     assert_eq!(version_of("Telegram-4321-65a1b2-d-0.12.0"), Some("0.12.0"));
-    assert_eq!(version_of("Telegram-4321-65a1b2-n-0.11.0-u1a2b3c"), Some("0.11.0"));
+    assert_eq!(
+        version_of("Telegram-4321-65a1b2-n-0.11.0-u1a2b3c"),
+        Some("0.11.0")
+    );
     // a file name with -d- in it: the last marker is the real one
     assert_eq!(version_of("my-d-app-10-20-d-0.12.0"), Some("0.12.0"));
     assert_eq!(version_of("inputs"), None);
