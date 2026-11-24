@@ -77,6 +77,22 @@ impl App {
                         let _ = tx.send(Msg::Saved(r));
                     });
                 }
+                if ui
+                    .button("Decode smali…")
+                    .on_hover_text(
+                        "Write every class as an editable .smali file (smali/, smali_classes2/...), like `apkscope smali --out-dir`; apply the edited folder with Smali folder…",
+                    )
+                    .clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                {
+                    let (tx, file) = (self.tx.clone(), st.file());
+                    spawn(&self.tx, "save", move || {
+                        let out = dir.display().to_string();
+                        let r = crate::commands::edit::write_smali(&file, &[], &out)
+                            .map(|(n, _)| format!("Wrote {n} smali classes to {out}"));
+                        let _ = tx.send(Msg::Saved(r));
+                    });
+                }
             });
             let mut verify = false;
             ui.horizontal(|ui| {
@@ -113,7 +129,23 @@ impl App {
                             std::time::Instant::now(),
                         ));
                     }
-                let n = self.edits.len() + self.smali_edits.len() + self.res_dir.is_some() as usize;
+                if ui
+                    .button("Smali folder…")
+                    .on_hover_text(
+                        "Apply a folder from Decode smali on build, like `build --smali DIR`: only the classes you changed are assembled",
+                    )
+                    .clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        self.smali_dir = Some(dir.display().to_string());
+                        self.toast = Some((
+                            "Smali folder staged — use Build & sign to apply it".into(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                let n = self.edits.len()
+                    + self.smali_edits.len()
+                    + self.res_dir.is_some() as usize
+                    + self.smali_dir.is_some() as usize;
                 let build = ui.add_enabled(
                     n > 0,
                     egui::Button::new(RichText::new(format!("Build & sign ({n})")).strong())
@@ -121,7 +153,7 @@ impl App {
                 );
                 if build
                     .on_hover_text(
-                        "Write a new APK with your changes, zipaligned and signed (v2 + v3)",
+                        "Write a new APK with your changes, zipaligned and signed (v1 when minSdk < 24, v2, v3)",
                     )
                     .clicked()
                 {
@@ -133,7 +165,7 @@ impl App {
                 }
                 verify = ui
                     .button("Verify signature")
-                    .on_hover_text("Check this APK's v2/v3 signatures")
+                    .on_hover_text("Check this APK's v1 (JAR), v2 and v3 signatures")
                     .clicked();
             });
             if verify {
@@ -156,6 +188,18 @@ impl App {
             }
             if clear_res {
                 self.res_dir = None;
+            }
+            let mut clear_smali = false;
+            if let Some(dir) = self.smali_dir.clone() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("clear").clicked() {
+                        clear_smali = true;
+                    }
+                    ui.label(RichText::new(format!("smali: {dir}")).color(p.accent));
+                });
+            }
+            if clear_smali {
+                self.smali_dir = None;
             }
             if !self.edits.is_empty() {
                 let mut undo = None;

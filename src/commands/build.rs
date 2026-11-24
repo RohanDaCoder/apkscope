@@ -43,11 +43,6 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
         let (name, config) = k.split_once('@').unwrap_or((k, ""));
         strings.insert((config.to_string(), name.to_string()), text.to_string());
     }
-    let smali_srcs: Vec<String> = a
-        .smali
-        .iter()
-        .map(|f| std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}")))
-        .collect::<Result<_, _>>()?;
     let res_dir = a.res.clone();
     let manifest = a.manifest.clone();
     let key = a.key.clone();
@@ -128,6 +123,10 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
             Some(arsc::set_strings(&table, &strings)?),
         );
     }
+    let smali_srcs = match a.smali.is_empty() {
+        true => Vec::new(),
+        false => super::edit::smali_sources(&src, &a.smali)?,
+    };
     if !smali_srcs.is_empty() {
         let changed = smali::inject(&src, &smali_srcs, &mut edits)?;
         crate::note!(

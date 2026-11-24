@@ -34,7 +34,11 @@ fn sign_then_verify_and_detect_tampering() {
     std::fs::write(&out, &signed).unwrap();
     assert_eq!(
         verify(out.to_str().unwrap()).unwrap(),
-        vec!["v2: verified", "v3: verified"]
+        vec![
+            "v1: not present (Android 7+ does not need it)",
+            "v2: verified",
+            "v3: verified"
+        ]
     );
     // still a valid zip
     assert!(
@@ -47,12 +51,8 @@ fn sign_then_verify_and_detect_tampering() {
     let mut bad = signed.clone();
     bad[40] ^= 1;
     std::fs::write(&out, &bad).unwrap();
-    assert!(
-        verify(out.to_str().unwrap())
-            .unwrap()
-            .iter()
-            .all(|l| l.contains("FAILED"))
-    );
+    let lines = verify(out.to_str().unwrap()).unwrap();
+    assert!(lines[1..].iter().all(|l| l.contains("FAILED")), "{lines:?}");
     let _ = std::fs::remove_file(src);
     let _ = std::fs::remove_file(out);
 }
@@ -81,11 +81,36 @@ fn v1_signature_digests_every_entry_and_signs_the_sf() {
     sign_with(&mut signed, &key, true).unwrap();
     let out = std::env::temp_dir().join(format!("apkscope-v1-signed-{}.apk", std::process::id()));
     std::fs::write(&out, signed.into_inner()).unwrap();
-    // v2/v3 still verify: they cover the new entries
+    // v1 verifies, and v2/v3 still do: they cover the new entries
     assert_eq!(
         verify(out.to_str().unwrap()).unwrap(),
-        vec!["v2: verified", "v3: verified"]
+        vec![
+            "v1: verified (2 entries, SHA-256)",
+            "v2: verified",
+            "v3: verified"
+        ]
     );
+    // v1 alone catches an entry changed after signing
+    let bytes = std::fs::read(&out).unwrap();
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i).unwrap();
+        let name = f.name().unwrap().into_owned();
+        let mut d = Vec::new();
+        f.read_to_end(&mut d).unwrap();
+        if name == "classes.dex" {
+            d[0] ^= 1;
+        }
+        w.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(&d).unwrap();
+    }
+    let tampered = w.finish().unwrap().into_inner();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(tampered)).unwrap();
+    let (line, claims_v2) = v1::verify(&mut z).unwrap().unwrap();
+    assert_eq!(line, "v1: FAILED: classes.dex changed after signing");
+    assert!(!claims_v2);
     let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
     let mut read = |n: &str| {
         let mut v = Vec::new();
@@ -124,4 +149,19 @@ fn base64_matches_the_standard_alphabet() {
     assert_eq!(v1::base64(b"fo"), "Zm8=");
     assert_eq!(v1::base64(b"foo"), "Zm9v");
     assert_eq!(v1::base64(b"foobar"), "Zm9vYmFy");
+}
+
+#[test]
+fn base64_decodes_what_it_encodes() {
+    for d in [
+        &b""[..],
+        b"f",
+        b"fo",
+        b"foo",
+        b"foobar",
+        &[0xff, 0, 0x80, 7],
+    ] {
+        assert_eq!(v1::unbase64(&v1::base64(d)).unwrap(), d);
+    }
+    assert!(v1::unbase64("not*base64").is_none());
 }

@@ -51,6 +51,41 @@ pub fn export_class_from<R: Read + Seek>(apk: &mut Apk<R>, class: &str) -> Resul
     Err(Error::ClassNotFound(class.to_owned()))
 }
 
+/// One DEX file's classes as round-trippable Smali, each printed when asked for. It is `Sync`:
+/// many threads can print classes of one file at once.
+pub struct Printer {
+    src: Source,
+    reader: read::Reader,
+}
+
+impl Printer {
+    pub fn new(dex: Vec<u8>) -> Result<Self> {
+        let src = Source::new(dex)?;
+        let reader = read::Reader::new(&src)?;
+        Ok(Self { src, reader })
+    }
+
+    /// How many classes the file defines.
+    pub fn len(&self) -> usize {
+        self.reader.class_count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Class `i`'s descriptor (`La/b/C;`).
+    pub fn descriptor(&self, i: usize) -> Result<String> {
+        let id = self.reader.class_name(&self.src, i)?;
+        Ok(String::from_utf8_lossy(self.src.descriptor(id)).into_owned())
+    }
+
+    /// Class `i` as Smali, the same text as [`export_class`].
+    pub fn smali(&self, i: usize) -> Result<String> {
+        Ok(text::print(&self.src, &self.reader.class(&self.src, i)?))
+    }
+}
+
 /// Assemble edited Smali `sources` into `edits`: each class replaces the one of the same name in
 /// the DEX that defines it (a brand-new class goes to classes.dex). Returns the changed entries.
 /// Parses everything first, so a syntax error aborts before any DEX is rewritten.

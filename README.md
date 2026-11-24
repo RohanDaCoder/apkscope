@@ -322,6 +322,9 @@ apkscope build     app.apk out.apk --ks release.jks --ks-pass env:KS_PASS   # si
 # patch the code
 apkscope smali     app.apk com.example.Api > Api.smali          # one class as editable Smali
 apkscope build     app.apk out.apk --smali Api.smali            # assemble it back in, rebuild, sign
+apkscope smali     app.apk --out-dir app/                       # every class: app/smali/, app/smali_classes2/...
+apkscope build     app.apk out.apk --smali app/                 # only the classes you changed go back in
+apkscope verify    out.apk                                      # v1 (JAR), v2 and v3 signatures
 
 # edit the resources
 apkscope res       app.apk app/                                 # manifest and res/ as editable files
@@ -533,6 +536,14 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
 - Assets: text files and a Hermes bundle's string table are searched; Hermes bytecode itself is not
   disassembled, and archives inside assets (Firefox's `omni.ja`) are not opened. The Hermes reader
   is checked on bundles built for its tests, not yet on a real React Native app.
+- `smali --out-dir` wrote WhatsApp's 28,585 classes in 67 s and Zestle's 11,549 in 14 s on Windows,
+  where nearly all the time is the file system creating files (reading them all back for
+  `build --smali DIR` took under 4 s). Smali written by baksmali / apktool is not checked as input.
+- `verify` checks v1 as Android 5-6 do (each entry's digest, the manifest, the RSA signature of the
+  `.SF`); a DSA or EC v1 signature gets its digests checked, not the signature itself, and v2/v3
+  only RSA with SHA-256. Run on 12 real APKs: 10 v1 signatures verified, WhatsApp's DSA one had
+  its digests checked, YouTube has none; changed, added and removed entries are caught. Not yet
+  compared line by line with apksigner.
 - `--res` with an apktool or APKEditor folder was checked on folders laid out like theirs, not on
   their own output; Retrofit's parameter names in obfuscated apps are mapped for standard Retrofit
   (forks like TikTok's show endpoints with unnamed parameters).
