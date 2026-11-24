@@ -26,6 +26,8 @@ CLI, MCP server and viewer over one engine. These rules keep it fast and trustwo
    ```
    cargo fmt --all -- --check
    cargo clippy --release --no-default-features -- -D warnings
+   cargo clippy --release -- -D warnings
+   cargo clippy --release --no-default-features --tests -- -D warnings
    cargo test --release --no-default-features
    ```
 

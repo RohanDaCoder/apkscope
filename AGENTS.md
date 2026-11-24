@@ -15,7 +15,9 @@ It is not a JADX or apktool wrapper; do not suggest adding them.
 ```
 cargo build --release                                      # with the viewer (default feature `gui`)
 cargo fmt --all -- --check
-cargo clippy --release --no-default-features -- -D warnings  # what CI lints
+cargo clippy --release --no-default-features -- -D warnings  # CI lints these three
+cargo clippy --release -- -D warnings                          # with the viewer
+cargo clippy --release --no-default-features --tests -- -D warnings
 cargo test --release --no-default-features
 ```
 
@@ -51,6 +53,7 @@ cargo test --release --no-default-features
 ## Gotchas
 
 - `--version` is apkscope's own flag, not clap's: `upgrade` checks new binaries with `--version --json`.
-- CI runs clippy without the `gui` feature; viewer code still has old lints there, so don't add new ones.
+- CI lints the CLI, the viewer and the tests with `-D warnings`: all three are clean, keep them so.
+- Every command needs examples (`src/examples.rs`) and every option a `///` description: a test checks.
 - Progress and summary lines on stderr go through `note!` (silenced by `-q`); only errors use `eprintln!`.
 - Keep source files free of literal NUL or other control bytes (write `\0`); grep treats such files as binary.

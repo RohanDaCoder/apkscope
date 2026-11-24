@@ -287,13 +287,14 @@ Any MCP client works: `{ "mcpServers": { "apkscope": { "command": "/path/to/apks
 
 ```bash
 # recon
-apkscope scan      app.apk                                  # flags, exported components, weak crypto, TLS, keys, URLs
+apkscope scan      app.apk                                  # flags, exported components, weak crypto, TLS, keys, URLs (--filter TEXT)
 apkscope info      app.apk                                  # permissions, components, deep links, signature
 apkscope search    app.apk urls                             # every endpoint (app code only; --all includes libraries)
 apkscope search    app.apk secrets                           # keys & tokens; plus a labelled entropy tier of app constants
 apkscope search    app.apk api                              # the app's HTTP API from Retrofit, obfuscated or not
 apkscope size      app.apk                                  # where the bytes go: dex, libs per ABI, biggest files, duplicates
-apkscope diff      old.apk new.apk --strings                # what changed in this update
+apkscope diff      old.apk new.apk --strings                # what changed in this update (--app-only: no SDK churn)
+apkscope search    app.apk config                           # what the server can change: defaults, remote config, prefs
 
 # follow the code
 apkscope refs      app.apk string X-Goog-Api-Key --java     # who uses it, with the Java line
@@ -309,6 +310,9 @@ apkscope search    app.apk code token --in com.example.net.*   # search one pack
 apkscope dump      app.apk out/ --attach                    # packed app: save the DEX it unpacked in memory
 apkscope il2cpp    game.xapk --uses "https://"              # Unity games: which C# method uses a string
 apkscope frida     app.apk com.example.Api login            # ready-to-run hook (args, return, throws)
+apkscope frida     --preset http > http.js                  # every OkHttp / HttpURLConnection request and response
+apkscope frida-server                                       # which frida-server the device needs; --push FILE starts it
+apkscope install   app.xapk                                 # the splits and ABI the device needs (arm64 on x86_64 too)
 apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
 apkscope map       app.apk import mapping.txt                # ProGuard/R8 names, or .jobf/.mapping; export back
 apkscope export    app.apk out/                             # Gradle project for Android Studio
@@ -390,11 +394,12 @@ other 2. Uncertain methods get a
 |---|---|
 | `find_refs` | who uses a string, type, method or field, or implements an interface; with Java lines |
 | `decompile` | Java or Smali of several classes, or one method |
-| `search` | code, strings, usages, classes, resources, URLs, HTTP calls, secrets |
+| `search` | code, strings, usages, classes, resources, URLs, HTTP calls, secrets, Retrofit API, config; assets and Hermes (React Native) bundles too |
 | `apk_info` / `get_manifest` / `diff_apks` | permissions, components, deep links, risky flags, what changed |
 | `list_classes` / `list_methods` / `list_strings` | with prefix, filter and app-only |
 | `get_resource` / `export_project` / `verify_signature` | resources, Gradle export, signatures |
-| `frida_start` / `frida_hook` / `frida_events` / `frida_script` | live Frida: hook by name, read calls, args, returns |
+| `frida_start` / `frida_hook` / `frida_events` / `frida_script` | live Frida: hook by name or the `http` preset, read calls, args, returns, traffic |
+| `frida_setup` / `install_apk` | which frida-server the device needs (and push one you downloaded); install a bundle with the right splits and ABI |
 | `callers` / `call_graph` / `field_access` | who calls a method, the callee tree, where a field is read / written |
 | `decrypt_strings` / `scan` | recovered string-decryptor plaintext; one-shot URL + secret + HTTP scan |
 | `rename` / `comment` / `mapping` | name classes and members, comment them, import / export JADX, Enigma, ProGuard names |

@@ -105,11 +105,11 @@ fn diff_reports_rotated_constants_and_near_pairs() {
     // the pairing: a rotated value pairs with its successor, unrelated strings do not
     let old_val = "qbznP4Xj9kLm2Rst8Vwx3Yz5Abc8Def1Ghi4";
     let new_val = "qbznP4Xj9kLm2Rst8Vwx3Yz5Abc8Def1Ghi5";
-    let removed = vec![
+    let removed = [
         old_val.to_string(),
         "https://old.example.com/api/v1".to_string(),
     ];
-    let added = vec![new_val.to_string(), "unrelated-new-string".to_string()];
+    let added = [new_val.to_string(), "unrelated-new-string".to_string()];
     let pairs = near_pairs(
         &removed.iter().collect::<Vec<_>>(),
         &added.iter().collect::<Vec<_>>(),

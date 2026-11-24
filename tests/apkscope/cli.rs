@@ -16,9 +16,8 @@ fn parses_as(args: &[&str], check: impl Fn(&Cmd)) {
 fn rejected(args: &[&str]) {
     let mut full = vec!["apkscope"];
     full.extend_from_slice(args);
-    match Cli::try_parse_from(full) {
-        Ok(_) => panic!("expected parse failure, got success"),
-        Err(_) => {}
+    if Cli::try_parse_from(full).is_ok() {
+        panic!("expected parse failure, got success")
     }
 }
 
@@ -442,4 +441,31 @@ fn search_all_flag_parses() {
         };
         assert!(a.app_only && !a.all);
     });
+}
+
+/// Every command shows examples under its `--help`, and every option says what it does: an
+/// agent reading `--help` should never have to guess.
+#[test]
+fn every_command_has_examples_and_every_option_a_description() {
+    use clap::CommandFactory;
+    let cli = Cli::command();
+    let mut missing = Vec::new();
+    for sub in cli.get_subcommands().filter(|c| !c.is_hide_set()) {
+        let name = sub.get_name();
+        if !sub
+            .get_after_help()
+            .is_some_and(|h| h.to_string().contains("Examples:"))
+        {
+            missing.push(format!("{name}: no examples"));
+        }
+        for arg in sub.get_arguments() {
+            if arg.is_global_set() || arg.get_id() == "help" || arg.is_hide_set() {
+                continue;
+            }
+            if arg.get_help().is_none() && arg.get_long_help().is_none() {
+                missing.push(format!("{name}: {} has no description", arg.get_id()));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{}", missing.join("\n"));
 }

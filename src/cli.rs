@@ -361,7 +361,7 @@ pub enum Cmd {
     #[command(name = "decompile", alias = "getclass", after_help = crate::examples::DECOMPILE)]
     Decompile(DecompileArgs),
     /// print the AndroidManifest.xml
-    #[command(name = "manifest", alias = "getmanifest")]
+    #[command(name = "manifest", after_help = crate::examples::MANIFEST, alias = "getmanifest")]
     Manifest(ManifestArgs),
     /// added / removed classes, methods, permissions
     #[command(name = "diff", after_help = crate::examples::DIFF)]
@@ -394,19 +394,19 @@ pub enum Cmd {
     #[command(name = "install", after_help = crate::examples::INSTALL)]
     Install(InstallArgs),
     /// run under Frida, save unpacked DEX and decrypted scripts
-    #[command(name = "dump")]
+    #[command(name = "dump", after_help = crate::examples::DUMP)]
     Dump(DumpArgs),
     /// Unity games: C# methods + addresses
-    #[command(name = "il2cpp")]
+    #[command(name = "il2cpp", after_help = crate::examples::IL2CPP)]
     Il2cpp(Il2cppArgs),
     /// Flutter apps: Dart snapshot, native libs, recovered tree
-    #[command(name = "flutter")]
+    #[command(name = "flutter", after_help = crate::examples::FLUTTER)]
     Flutter(FlutterArgs),
     /// security quick-scan
-    #[command(name = "scan")]
+    #[command(name = "scan", after_help = crate::examples::SCAN)]
     Scan(ScanArgs),
     /// run string decryptors on their constant arguments
-    #[command(name = "decrypt")]
+    #[command(name = "decrypt", after_help = crate::examples::DECRYPT)]
     Decrypt(DecryptArgs),
     /// rename a class or member (saved in <apk>.apkscope.json)
     #[command(name = "rename", after_help = crate::examples::NOTE)]
@@ -415,7 +415,7 @@ pub enum Cmd {
     #[command(name = "comment", after_help = crate::examples::NOTE)]
     Comment(NoteArgs),
     /// JADX / Enigma / ProGuard name mapping
-    #[command(name = "map")]
+    #[command(name = "map", after_help = crate::examples::MAP)]
     Map(MapArgs),
     /// package, SDKs, permissions, exported components
     #[command(name = "info", after_help = crate::examples::INFO)]
@@ -424,10 +424,10 @@ pub enum Cmd {
     #[command(name = "resource", after_help = crate::examples::RESOURCE)]
     Resource(ResourceArgs),
     /// MCP server over stdio
-    #[command(name = "mcp")]
+    #[command(name = "mcp", after_help = crate::examples::MCP)]
     Mcp,
     /// internal: MCP worker for one input
-    #[command(name = "worker")]
+    #[command(name = "worker", hide = true)]
     Worker(WorkerArgs),
     /// disassemble bytecode
     #[command(name = "disasm", after_help = crate::examples::DISASM)]
@@ -451,10 +451,10 @@ pub enum Cmd {
     #[command(name = "verify", after_help = crate::examples::VERIFY)]
     Verify(VerifyArgs),
     /// native viewer
-    #[command(name = "gui")]
+    #[command(name = "gui", after_help = crate::examples::GUI)]
     Gui(GuiArgs),
     /// replace this binary with the latest stable or canary build
-    #[command(name = "upgrade")]
+    #[command(name = "upgrade", after_help = crate::examples::UPGRADE)]
     Upgrade(UpgradeArgs),
     /// a file associated with apkscope (double-click), or an unrecognized subcommand
     #[command(external_subcommand)]
@@ -463,61 +463,80 @@ pub enum Cmd {
 
 #[derive(Args)]
 pub struct ClassesArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// only classes whose name starts with this (a.b.c)
     #[arg(long, value_name = "P")]
     pub prefix: Option<String>,
+    /// leave out classes of known libraries
     #[arg(long = "app-only")]
     pub app_only: bool,
+    /// print DEX descriptors (La/b/C;) instead of Java names
     #[arg(long)]
     pub desc: bool,
 }
 
 #[derive(Args)]
 pub struct MethodsArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// only methods of this class
     #[arg(long, value_name = "C")]
     pub class: Option<String>,
+    /// only methods whose name contains this
     #[arg(long = "filter", short = 'f', value_name = "F")]
     pub filter: Option<String>,
 }
 
 #[derive(Args)]
 pub struct StringsArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// only strings containing this
     #[arg(long = "filter", short = 'f', value_name = "F")]
     pub filter: Option<String>,
 }
 
 #[derive(Args)]
 pub struct RefsArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// string, type, method, field, extends, impl
     pub kind: String,
     /// query (words joined)
     #[arg(num_args = 0..)]
     pub query: Vec<String>,
+    /// only members of this class (method / field kinds)
     #[arg(long, value_name = "C")]
     pub class: Option<String>,
+    /// --class matches any class whose name contains it
     #[arg(long = "fuzzy-class")]
     pub fuzzy_class: bool,
+    /// the query is a regex (strings and member names)
     #[arg(long)]
     pub regex: bool,
+    /// match without case
     #[arg(long = "ignore-case")]
     pub ignore_case: bool,
+    /// print the decompiled Java line of each hit too
     #[arg(long)]
     pub java: bool,
 }
 
 #[derive(Args)]
 pub struct DecompileArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// class names (omitted = every class)
     #[arg(num_args = 0..)]
     pub names: Vec<String>,
+    /// only this method (all overloads)
     #[arg(long, value_name = "name")]
     pub method: Option<String>,
+    /// print smali instead of Java
     #[arg(long)]
     pub smali: bool,
+    /// load the whole APK first (names resolved across classes, as the viewer shows them); slower
     #[arg(long)]
     pub full: bool,
     /// write each class to its own file in this folder (a.b.C.java / .smali) instead of stdout
@@ -530,6 +549,7 @@ pub struct DecompileArgs {
 
 #[derive(Args)]
 pub struct ConstsArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// classes or packages: a.b.C, a.b.* or a.b. (several allowed, or comma-separated);
     /// omitted = every class
@@ -545,6 +565,7 @@ pub struct ConstsArgs {
 
 #[derive(Args)]
 pub struct ReturnsArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// method name, e.g. uri (omitted = every method that returns a constant)
     pub method: Option<String>,
@@ -561,6 +582,7 @@ pub struct ReturnsArgs {
 
 #[derive(Args)]
 pub struct SizeArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// how many of the biggest entries to list
     #[arg(long, value_name = "N", default_value_t = 25)]
@@ -569,14 +591,18 @@ pub struct SizeArgs {
 
 #[derive(Args)]
 pub struct ManifestArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
 }
 
 #[derive(Args)]
 pub struct DiffArgs {
+    /// the older APK
     pub old: String,
+    /// the newer APK
     #[arg(value_name = "new.apk")]
     pub new: String,
+    /// also diff string values (new URLs, keys), with likely rotated or renamed pairs
     #[arg(long = "strings")]
     pub strings: bool,
     /// leave out classes of known libraries (SDK churn), with their methods and constants
@@ -586,7 +612,9 @@ pub struct DiffArgs {
 
 #[derive(Args)]
 pub struct ReconArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// class (a.b.C or a descriptor)
     pub class: String,
     /// method (callers/callgraph) or field (access)
     pub member: Option<String>,
@@ -594,20 +622,28 @@ pub struct ReconArgs {
 
 #[derive(Args)]
 pub struct CallgraphArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// class (a.b.C or a descriptor)
     pub class: String,
+    /// method (omitted: every method of the class)
     pub member: Option<String>,
+    /// how many levels of callees to follow
     #[arg(long, value_name = "N", default_value_t = 3)]
     pub depth: usize,
 }
 
 #[derive(Args)]
 pub struct FridaArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     #[arg(required_unless_present = "preset")]
     pub apk: Option<String>,
+    /// class to hook (a.b.C)
     #[arg(required_unless_present = "preset")]
     pub class: Option<String>,
+    /// method to hook (omitted: every method of the class)
     pub member: Option<String>,
+    /// print only the hook body a live session (frida_hook) loads
     #[arg(long = "live")]
     pub live: bool,
     /// a built-in hook set instead of one method: http (OkHttp + HttpURLConnection traffic)
@@ -639,15 +675,21 @@ pub struct InstallArgs {
 
 #[derive(Args)]
 pub struct DumpArgs {
+    /// an APK (its package is run) or a package name on the device
     pub app: String,
+    /// where the unpacked DEX files and scripts go
     #[arg(value_name = "out-dir")]
     pub out: String,
+    /// attach to the running app instead of starting it
     #[arg(long = "attach")]
     pub attach: bool,
+    /// frida device id (default: USB)
     #[arg(long = "device", short = 'D', value_name = "ID")]
     pub device: Option<String>,
+    /// seconds to let the app unpack before reading memory
     #[arg(long = "wait", value_name = "S", default_value_t = 15)]
     pub wait: u64,
+    /// seconds more to capture scripts the engine evaluates
     #[arg(long = "scripts-for", value_name = "S", default_value_t = 15)]
     pub scripts_for: u64,
 }
@@ -657,25 +699,32 @@ pub struct Il2cppArgs {
     /// input APK / XAPK (one or more)
     #[arg(num_args = 0..)]
     pub inputs: Vec<String>,
+    /// methods that use a string containing this
     #[arg(long, value_name = "TEXT")]
     pub uses: Option<String>,
+    /// strings and calls inside methods whose name contains this
     #[arg(long, value_name = "NAME")]
     pub method: Option<String>,
 }
 
 #[derive(Args)]
 pub struct FlutterArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// ABI whose libapp.so to read (default: arm64-v8a, else the first)
     #[arg(long, value_name = "NAME")]
     pub abi: Option<String>,
+    /// hosts, routes and model fields recovered from the Dart snapshot
     #[arg(long = "api")]
     pub api: bool,
+    /// every string of libapp.so
     #[arg(long = "strings")]
     pub strings: bool,
 }
 
 #[derive(Args)]
 pub struct ScanArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// keep only findings containing this text (case-insensitive), under their section titles
     #[arg(long, value_name = "TEXT")]
@@ -684,11 +733,13 @@ pub struct ScanArgs {
 
 #[derive(Args)]
 pub struct DecryptArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
 }
 
 #[derive(Args)]
 pub struct NoteArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// Class or member (a.b.C, a.b.C#field, a.b.C#method())
     pub target: String,
@@ -699,20 +750,25 @@ pub struct NoteArgs {
 
 #[derive(Args)]
 pub struct MapArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// export | import
     pub dir: String,
+    /// .jobf (JADX), .mapping (Enigma) or mapping.txt (ProGuard/R8): the format follows the name
     pub file: String,
 }
 
 #[derive(Args)]
 pub struct InfoArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
 }
 
 #[derive(Args)]
 pub struct ResourceArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// res/values/strings.xml, res/layout/main.xml, AndroidManifest.xml, or lib/<abi>/x.so for a native library report
     #[arg(value_name = "res/path.xml")]
     pub res: String,
 }
@@ -724,42 +780,54 @@ pub struct WorkerArgs {
 
 #[derive(Args)]
 pub struct DisasmArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// class to disassemble (omitted: every class)
     pub class: Option<String>,
 }
 
 #[derive(Args)]
 pub struct SmaliArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// class (a.b.C); its nested classes come with it
     pub class: String,
 }
 
 #[derive(Args)]
 pub struct ExportArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// folder for the Gradle project
     #[arg(value_name = "out-dir")]
     pub out: String,
 }
 
 #[derive(Args)]
 pub struct ResArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
+    /// folder for AndroidManifest.xml and res/ (edit, then build --res)
     #[arg(value_name = "out-dir")]
     pub out: String,
 }
 
 #[derive(Args)]
 pub struct SearchArgs {
+    /// .apk, .xapk / .apks / .apkm bundle, .jar or .dex
     pub apk: String,
     /// code string usages class res urls http secrets api config
     pub scope: String,
     /// query (words joined)
     #[arg(num_args = 0..)]
     pub query: Vec<String>,
+    /// the query is a regex
     #[arg(long)]
     pub regex: bool,
+    /// match case (default: ignore it)
     #[arg(long = "case")]
     pub case: bool,
+    /// leave out classes of known libraries (any scope)
     #[arg(long = "app-only")]
     pub app_only: bool,
     /// include library code in urls / http / secrets, which default to app code only
@@ -771,10 +839,13 @@ pub struct SearchArgs {
     /// only classes that extend / implement this class or interface (directly or not)
     #[arg(long = "impl", value_name = "TYPE")]
     pub r#impl: Option<String>,
+    /// lines of code around each hit
     #[arg(long = "context", value_name = "N", default_value_t = 0)]
     pub context: usize,
+    /// print the whole method around each hit
     #[arg(long = "method")]
     pub method: bool,
+    /// output format
     #[arg(long = "format", value_name = "txt|csv|json", default_value = "txt")]
     pub format: String,
     /// search writes to this file (separate from the global -o)
@@ -784,25 +855,36 @@ pub struct SearchArgs {
 
 #[derive(Args)]
 pub struct BuildArgs {
+    /// the APK to modify (or a bundle: its base split)
     pub input: String,
+    /// where to write the result (may be the input)
     #[arg(value_name = "out.apk")]
     pub output: String,
+    /// add or replace an entry with a file (repeatable)
     #[arg(long = "put", value_name = "name=file")]
     pub put: Vec<String>,
+    /// remove an entry (repeatable)
     #[arg(long = "delete", value_name = "name")]
     pub delete: Vec<String>,
+    /// write the APK unsigned
     #[arg(long = "no-sign")]
     pub no_sign: bool,
+    /// a folder from `apkscope res` (or apktool / APKEditor) with edited resources
     #[arg(long = "res", value_name = "dir")]
     pub res: Option<String>,
+    /// set one string resource (repeatable)
     #[arg(long = "string", value_name = "name[@config]=value")]
     pub string: Vec<String>,
+    /// an edited class from `apkscope smali` (repeatable)
     #[arg(long = "smali", value_name = "file")]
     pub smali: Vec<String>,
+    /// an edited AndroidManifest.xml (text)
     #[arg(long = "manifest", value_name = "xml")]
     pub manifest: Option<String>,
+    /// sign with this private key (.pk8 / PEM), with --cert
     #[arg(long = "key", value_name = "file")]
     pub key: Option<String>,
+    /// the certificate for --key (.crt / .pem / DER)
     #[arg(long = "cert", value_name = "file")]
     pub cert: Option<String>,
     /// sign with a key from this JKS or PKCS#12 keystore (.jks, .keystore, .p12, .pfx)
@@ -821,6 +903,7 @@ pub struct BuildArgs {
 
 #[derive(Args)]
 pub struct VerifyArgs {
+    /// the APK whose v2 / v3 signatures to check
     pub apk: String,
 }
 
@@ -833,6 +916,7 @@ pub struct UpgradeArgs {
 
 #[derive(Args)]
 pub struct GuiArgs {
+    /// open this file at start
     pub apk: Option<String>,
 }
 
