@@ -444,7 +444,7 @@ pub enum Cmd {
     /// indexed + cached search
     #[command(name = "search", after_help = crate::examples::SEARCH)]
     Search(SearchArgs),
-    /// apply edits, zipalign, sign v2 + v3
+    /// apply edits, zipalign, sign (v1 when minSdk < 24, v2, v3)
     #[command(name = "build", after_help = crate::examples::BUILD)]
     Build(BuildArgs),
     /// verify a signature

@@ -312,7 +312,7 @@ apkscope frida     app.apk com.example.Api login            # ready-to-run hook 
 apkscope rename    app.apk "com.a.b#c()" login              # names and comments, kept across runs
 apkscope map       app.apk import mapping.txt                # ProGuard/R8 names, or .jobf/.mapping; export back
 apkscope export    app.apk out/                             # Gradle project for Android Studio
-apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v2 + v3)
+apkscope build     app.apk out.apk --string "app_name=My App"   # edit, rebuild, sign (v1 when needed, v2, v3)
 apkscope build     app.apk out.apk --ks release.jks --ks-pass env:KS_PASS   # sign with your JKS / PKCS#12 keystore
 
 # patch the code
@@ -521,8 +521,10 @@ Nothing is signed unless you call `sign`. Fallible functions return `apkscope_co
   device whose ARM translation is broken (an arm64-only app on an x86_64 image without
   `libndk_translation` cannot run, and `install` says so). Not yet run against a device in tests.
 - Callers, call graphs and Frida hooks see direct calls only, not reflection, JNI or dynamic code.
-- `build` signs with v2 + v3, not v1 (JAR): Android 5-6 devices refuse the result, and `build` warns
-  when the app's `minSdkVersion` is below 24. Keystores: RSA keys in JKS or PKCS#12 (not JCEKS, not EC).
+- `build` signs v2 + v3, plus v1 (JAR, SHA-256) when the app's `minSdkVersion` is below 24. The v1
+  files go at the end of the zip, so Java's streaming `JarInputStream` reports them missing;
+  `jarsigner -verify` and Android's verifier (which read the central directory) accept them. Not
+  yet installed on an Android 5-6 device. Keystores: RSA keys in JKS or PKCS#12 (not JCEKS, not EC).
 - Assets: text files and a Hermes bundle's string table are searched; Hermes bytecode itself is not
   disassembled, and archives inside assets (Firefox's `omni.ja`) are not opened. The Hermes reader
   is checked on bundles built for its tests, not yet on a real React Native app.

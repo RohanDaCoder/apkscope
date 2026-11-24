@@ -119,7 +119,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "class": {"type": "string"}}))}},
         {"name": "decode_resources", "description": "Write the manifest and res/ as editable files to a folder. Edit them, then pass the folder to build_apk's res_dir.",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_dir"], "properties": {"apk_path": apk, "out_dir": {"type": "string"}}}},
-        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v2+v3; apkscope's debug key unless a keystore or key/cert is given).",
+        {"name": "build_apk", "description": "Write a modified copy of the APK: replace / add / delete files, apply edited smali, an edited manifest, a decoded resources folder or single string values, then zipalign and sign (v2+v3, plus v1 when minSdkVersion < 24; apkscope's debug key unless a keystore or key/cert is given).",
          "inputSchema": {"type": "object", "required": ["apk_path", "out_path"], "properties": {"apk_path": apk, "out_path": {"type": "string"},
             "put": {"type": "array", "items": {"type": "string"}, "description": "name=file: store this local file under that entry name"},
             "delete": {"type": "array", "items": {"type": "string"}, "description": "entry names to leave out"},

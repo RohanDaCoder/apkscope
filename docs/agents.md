@@ -62,11 +62,9 @@ apkscope diff app.apk out.apk --strings         # check the change is there
 adb install -r out.apk
 ```
 
-- `build` signs with v2 + v3. Without a key it uses apkscope's own debug key; `--ks` takes a
+- `build` signs with v2 + v3, and v1 (JAR) too when `minSdkVersion` is below 24. Without a key it uses apkscope's own debug key; `--ks` takes a
   JKS or PKCS#12 keystore (`--ks-alias`, `--ks-key-pass`), `--key k.pk8 --cert c.crt` a raw key.
   Passwords: `pass:TEXT`, `env:VAR` or `file:PATH`.
-- apkscope does not write a v1 (JAR) signature. For apps whose `minSdkVersion` is below 24,
-  `build` warns: Android 5–6 devices refuse the APK.
 - `--res` also takes a folder decoded by apktool (`apktool.yml` + `res/`) or APKEditor
   (`resources/package_1/res/`). From those, changed and new files are applied and nothing is
   removed.
