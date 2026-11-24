@@ -24,6 +24,8 @@ const CHUNK: usize = 1 << 20;
 
 // ---------- DER writing ----------
 
+mod v1;
+
 fn tlv(tag: u8, c: &[u8]) -> Vec<u8> {
     let mut o = vec![tag];
     match c.len() {
@@ -327,6 +329,13 @@ fn eocd_at(apk: &[u8]) -> Result<usize> {
 /// block is written after them, with the central directory moved behind it. How many bytes
 /// the APK is then.
 pub fn sign<F: Read + Write + Seek>(apk: &mut F, key: &Key) -> Result<u64> {
+    sign_with(apk, key, false)
+}
+
+/// [`sign`], and with `v1` a JAR signature first (`META-INF/MANIFEST.MF`, `CERT.SF`,
+/// `CERT.RSA`), which the v2/v3 block then covers: what Android 5-6 (API < 24) check. It
+/// digests every entry's contents, so it is only worth its time for apps that run there.
+pub fn sign_with<F: Read + Write + Seek>(apk: &mut F, key: &Key, v1: bool) -> Result<u64> {
     let read = |e| Error::from(zip::result::ZipError::Io(e));
     // the end record, the last thing in the file but for its comment, says where the central
     // directory is
@@ -337,10 +346,44 @@ pub fn sign<F: Read + Write + Seek>(apk: &mut F, key: &Key) -> Result<u64> {
     apk.read_exact(&mut tail).map_err(read)?;
     let mut end = tail.split_off(eocd_at(&tail)?);
     let size = u32::from_le_bytes(end[12..16].try_into().unwrap()) as usize;
-    let at = u32::from_le_bytes(end[16..20].try_into().unwrap());
+    let mut at = u32::from_le_bytes(end[16..20].try_into().unwrap());
     let mut cd = vec![0; size];
     apk.seek(SeekFrom::Start(at.into())).map_err(read)?;
     apk.read_exact(&mut cd).map_err(read)?;
+    if v1 {
+        let files = {
+            let mut zip = zip::ZipArchive::new(&mut *apk)?;
+            // signature files there already would be duplicated: leave v1 out then
+            let has_v1 = zip
+                .file_names()
+                .any(|n| n.is_ok_and(|n| crate::rebuild::is_v1_signature(&n)));
+            if has_v1 {
+                Vec::new()
+            } else {
+                v1::files(&mut zip, key)?
+            }
+        };
+        if !files.is_empty() {
+            // the new entries go where the central directory was; it moves behind them
+            apk.seek(SeekFrom::Start(at.into())).map_err(Error::Write)?;
+            let mut off = at;
+            for (name, data) in &files {
+                let (local, record) = v1::stored_entry(name, data, off);
+                apk.write_all(&local).map_err(Error::Write)?;
+                off = u32::try_from(u64::from(off) + local.len() as u64)
+                    .map_err(|_| Error::TooLarge("the APK".into()))?;
+                cd.extend_from_slice(&record);
+            }
+            at = off;
+            let n = files.len() as u16;
+            for k in [8, 10] {
+                let c = u16::from_le_bytes(end[k..k + 2].try_into().unwrap()) + n;
+                end[k..k + 2].copy_from_slice(&c.to_le_bytes());
+            }
+            end[12..16].copy_from_slice(&(cd.len() as u32).to_le_bytes());
+            end[16..20].copy_from_slice(&at.to_le_bytes());
+        }
+    }
     // the signature covers the entries, the central directory, and the end record as it is
     // now, pointing at where the block goes
     let mut chunks = Chunks::default();

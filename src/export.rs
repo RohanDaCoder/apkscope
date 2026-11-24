@@ -293,6 +293,24 @@ android {{
 mod tests;
 
 /// Rebuild `src` with `edits` into the file `output`, then sign it with `key` if there is one.
+/// `android:minSdkVersion` of the APK being built: from a manifest the edits put in, else the
+/// source's.
+pub fn min_sdk(src: &str, edits: &apkscope_core::rebuild::Edits) -> Option<u32> {
+    let data = match edits.get("AndroidManifest.xml") {
+        Some(Some(d)) => d.clone(),
+        _ => crate::quick::read_entry(src, "AndroidManifest.xml").ok()??,
+    };
+    let text = apkscope_core::res::decode_xml(&data, None).ok()?;
+    let at = text.find("minSdkVersion=\"")? + "minSdkVersion=\"".len();
+    text[at..].split('"').next()?.parse().ok()
+}
+
+/// A v1 signature is needed when the app can run on Android 5-6 (API < 24); an app that names
+/// no minSdkVersion runs everywhere.
+pub fn needs_v1(src: &str, edits: &apkscope_core::rebuild::Edits) -> bool {
+    min_sdk(src, edits).is_none_or(|m| m < 24)
+}
+
 /// The APK is written beside `output` and moved over it when it is whole, so `output` may be
 /// `src` and a build that fails leaves nothing behind. How many bytes it is.
 pub fn write_apk(
@@ -315,7 +333,8 @@ pub fn write_apk(
     let built = (|| {
         let size = apkscope_core::rebuild::rebuild(src, edits, std::io::BufWriter::new(&mut file))?;
         match key {
-            Some(key) => apkscope_core::apksign::sign(&mut file, key),
+            // Android 5-6 check only a v1 (JAR) signature: add one when the app runs there
+            Some(key) => apkscope_core::apksign::sign_with(&mut file, key, needs_v1(src, edits)),
             None => Ok(size),
         }
     })();

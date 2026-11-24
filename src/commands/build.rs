@@ -149,13 +149,12 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
         if let Some(c) = apkscope_core::sign::parse_cert(&k.cert) {
             crate::note!("signer: {}  (SHA-256 {})", c.subject, c.sha256);
         }
-        // v2/v3 only: Android before 7.0 (API 24) needs a v1 JAR signature too
-        if let Some(min) = min_sdk(output)
-            && min < 24
-        {
-            crate::note!(
-                "warning: minSdkVersion {min}: Android 5-6 devices need a v1 (JAR) signature, which apkscope does not write; they will refuse this APK"
-            );
+        match export::min_sdk(&src, &edits) {
+            Some(m) if m >= 24 => crate::note!("signed v2 + v3 (minSdkVersion {m}: no v1 needed)"),
+            m => crate::note!(
+                "signed v1 + v2 + v3 (minSdkVersion {}: Android 5-6 check the v1 JAR signature)",
+                m.map_or("unset".into(), |m| m.to_string())
+            ),
         }
     }
     Ok(())
@@ -188,12 +187,4 @@ fn foreign_tree(files: Tree) -> (Tree, bool, Option<&'static str>) {
         return (out, false, Some("APKEditor"));
     }
     (files, true, None)
-}
-
-/// `android:minSdkVersion` of an APK's manifest.
-fn min_sdk(apk: &str) -> Option<u32> {
-    let data = crate::quick::read_entry(apk, "AndroidManifest.xml").ok()??;
-    let text = res::decode_xml(&data, None).ok()?;
-    let at = text.find("minSdkVersion=\"")? + "minSdkVersion=\"".len();
-    text[at..].split('"').next()?.parse().ok()
 }
