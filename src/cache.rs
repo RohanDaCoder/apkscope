@@ -52,6 +52,68 @@ pub fn dir_for(apk: &str, deobf: bool, tag: u64) -> PathBuf {
     ))
 }
 
+/// How long an unused cache or bundle copy is kept.
+const UNUSED: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// The apkscope version a cache folder was made by, from its name
+/// (`<name>-<size>-<mtime>-<d|n>-<version>[-u<tag>]`).
+pub fn version_of(dir_name: &str) -> Option<&str> {
+    let at = dir_name.rfind("-d-").or_else(|| dir_name.rfind("-n-"))?;
+    let rest = &dir_name[at + 3..];
+    Some(rest.split("-u").next().unwrap_or(rest))
+}
+
+/// Drop what no run will read again: cache folders made by another apkscope version (the
+/// version is in the folder name, so they can never match), and cache folders, bundle copies
+/// and leftover `.part` files nobody has used for 30 days. `keep` is the folder this run uses;
+/// it is marked used. Runs once per load, in the background; a deletion that fails stays for
+/// the next run.
+pub fn prune(keep: &Path) {
+    let keep = keep.to_path_buf();
+    // mark this run's cache used: its index file's mtime is what the age rule reads
+    if let Ok(f) = File::options().write(true).open(keep.join("code.idx")) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+    std::thread::spawn(move || {
+        let now = std::time::SystemTime::now();
+        let old = |p: &Path, marker: &Path| {
+            fs::metadata(marker)
+                .or_else(|_| fs::metadata(p))
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| now.duration_since(t).is_ok_and(|d| d > UNUSED))
+        };
+        let me = crate::upgrade::identity().version;
+        let Ok(rd) = fs::read_dir(root()) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p == keep || !p.is_dir() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name == "inputs" {
+                // bundle and .dex copies: by age; a cut-off `.part` after a day
+                for f in fs::read_dir(&p).into_iter().flatten().flatten() {
+                    let fp = f.path();
+                    let part = fp.extension().is_some_and(|x| x == "part");
+                    let day = std::time::Duration::from_secs(24 * 3600);
+                    let stale = fs::metadata(&fp).and_then(|m| m.modified()).is_ok_and(|t| {
+                        now.duration_since(t)
+                            .is_ok_and(|d| d > if part { day } else { UNUSED })
+                    });
+                    if stale {
+                        let _ = fs::remove_file(&fp);
+                    }
+                }
+                continue;
+            }
+            let other_version = version_of(&name).is_some_and(|v| v != me);
+            if other_version || old(&p, &p.join("code.idx")) {
+                let _ = fs::remove_dir_all(&p);
+            }
+        }
+    });
+}
+
 /// Total size of every cache, in bytes.
 #[cfg(feature = "gui")]
 pub fn total_size() -> u64 {

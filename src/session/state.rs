@@ -73,11 +73,11 @@ impl State {
     }
 
     pub fn resource(&self, path: &str) -> Option<String> {
-        if let Some(t) = self.texts.get(path) {
+        if let Some(t) = self.texts().get(path) {
             return Some(t.clone());
         }
         // only paths from the table can be read, so nothing can reach other zip entries
-        let src = self.files.get(path)?;
+        let src = self.files().get(path)?;
         let data = self.apk.lock().ok()?.read(src)?;
         match res::decode_xml(&data, self.names.as_ref()) {
             Ok(t) => Some(t),
@@ -86,7 +86,7 @@ impl State {
     }
 
     pub fn is_res(&self, t: &str) -> bool {
-        self.texts.contains_key(t) || self.files.contains_key(t)
+        self.texts().contains_key(t) || self.files().contains_key(t)
     }
 
     pub fn is_native(&self, t: &str) -> bool {

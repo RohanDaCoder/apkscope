@@ -118,7 +118,7 @@ pub(crate) fn declared(st: &crate::session::State, core: &str) -> Vec<usize> {
 /// Only a static method with code can be run, so only those are kept.
 pub(crate) fn decryptors(st: &crate::session::State) -> HashSet<(String, String, String)> {
     let mut out = HashSet::new();
-    for dx in &st.dexes {
+    for dx in st.dexes.iter() {
         for c in 0..dx.class_count {
             let Ok(data) = dx.class_data(c) else { continue };
             for m in &data.methods {

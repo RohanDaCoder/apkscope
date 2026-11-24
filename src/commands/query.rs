@@ -315,24 +315,20 @@ fn decompile_all(path: &str, class: Option<&str>, deobf: bool) -> Result<(), Str
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     );
-    let dexes: Vec<crate::dex::Dex<'static>> = raw
-        .iter()
-        .filter_map(|b| crate::dex::Dex::parse(b).ok())
-        .collect();
+    let dexes: std::sync::Arc<Vec<crate::dex::Dex<'static>>> = std::sync::Arc::new(
+        raw.iter()
+            .filter_map(|b| crate::dex::Dex::parse(b).ok())
+            .collect(),
+    );
     if deobf {
         crate::deobf::init(&dexes);
     }
     crate::deobf::set_notes(crate::re::load_notes(path)?);
-    crate::re::set_dexes(Box::leak(
-        raw.iter()
-            .filter_map(|b| crate::dex::Dex::parse(b).ok())
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    ));
+    crate::re::set_dexes(dexes.clone());
     crate::imports::init(&dexes);
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut found = false;
-    'all: for dex in &dexes {
+    'all: for dex in dexes.iter() {
         let nest = dex.nesting();
         for (c, parent) in nest.parent.iter().enumerate() {
             let desc = dex.class_descriptor(c).unwrap_or_default();

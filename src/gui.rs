@@ -244,7 +244,7 @@ fn tree<'a>(classes: impl Iterator<Item = &'a String>) -> Tree {
 /// Resource paths grouped by folder: `res/layout/main.xml` -> "res/layout" -> "main.xml".
 fn res_groups(st: &State) -> BTreeMap<String, Vec<String>> {
     let mut g: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for p in st.texts.keys().chain(st.files.keys()) {
+    for p in st.texts().keys().chain(st.files().keys()) {
         let dir = p.rsplit_once('/').map_or("", |d| d.0);
         g.entry(dir.to_string()).or_default().push(p.clone());
     }
@@ -3458,9 +3458,9 @@ impl eframe::App for App {
                                 "{}  ·  {} classes  ·  {} methods  ·  {} dex  ·  {} resources",
                                 st.package,
                                 st.classes.len(),
-                                st.methods,
+                                st.methods(),
                                 st.dexes.len(),
-                                st.texts.len() + st.files.len()
+                                st.texts().len() + st.files().len()
                             ))
                             .color(p.dim),
                         );

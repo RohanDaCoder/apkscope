@@ -38,7 +38,7 @@ pub fn sdk_share(st: &State) -> Vec<(String, usize, usize)> {
 /// Security-relevant summary of the manifest and APK layout, as readable text.
 pub fn overview(st: &State) -> String {
     let m = st
-        .texts
+        .texts()
         .get("AndroidManifest.xml")
         .map(String::as_str)
         .unwrap_or("");
@@ -76,7 +76,7 @@ pub fn overview(st: &State) -> String {
         o,
         "classes           {} top-level, {} methods, {} dex",
         st.classes.len(),
-        st.methods,
+        st.methods(),
         st.dexes.len()
     );
     let _ = writeln!(o, "\n// code by origin (classes / methods), top first");

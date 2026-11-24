@@ -52,19 +52,22 @@ pub struct State {
     pub path: String,
     /// the APK actually read (differs from `path` for bundles and .dex)
     pub file: String,
-    pub dexes: Vec<Dex<'static>>,
+    /// shared with inline string decryption (`re::set_dexes`): one parse, one set of tables
+    pub dexes: Arc<Vec<Dex<'static>>>,
     /// top-level classes: (java name, dex, class index); the position is the class id
     pub classes: Vec<(String, usize, usize)>,
-    /// res path -> text (manifest, values XML) decoded at startup
-    pub texts: BTreeMap<String, String>,
-    /// res path -> path inside the APK, decoded on demand
-    pub files: BTreeMap<String, String>,
+    /// the decoded manifest; the rest of the resources wait in `res` until something asks
+    manifest: Option<String>,
+    /// (res path -> text of the values XML and the manifest, res path -> path inside the APK),
+    /// decoded from the resource table the first time a command reads resources
+    res: OnceLock<Resources>,
     names: Option<res::Names>,
     pub(crate) apk: Mutex<Apk>,
     /// every zip entry name, for the overview
     pub entries: Vec<String>,
     pub package: String,
-    pub methods: usize,
+    /// methods with a body or not, over every class; counted when first asked for
+    methods: OnceLock<usize>,
     /// origin of each top-level class (same order as `classes`)
     pub origin: Vec<Origin>,
     natives: OnceLock<Vec<(String, String)>>,
@@ -72,6 +75,63 @@ pub struct State {
     pub indexed: AtomicUsize,
     pub(crate) cache: RwLock<Option<Arc<cache::Reader>>>,
     pub(crate) cache_dir: std::path::PathBuf,
+}
+
+/// Decoded resources: res path -> text, and res path -> path inside the APK.
+type Resources = (BTreeMap<String, String>, BTreeMap<String, String>);
+
+impl State {
+    /// Every decoded text resource by res path: the manifest and the values XML of every
+    /// configuration. Decoded from the table on first use, so commands that never read resources
+    /// (smali, classes, decompile, …) never pay for 80 languages of strings.
+    /// How many methods the APK defines (every class's class_data; only `info` asks).
+    pub fn methods(&self) -> usize {
+        *self.methods.get_or_init(|| {
+            self.dexes
+                .iter()
+                .map(|d| {
+                    (0..d.class_count)
+                        .map(|c| d.class_data(c).map_or(0, |x| x.methods.len()))
+                        .sum::<usize>()
+                })
+                .sum()
+        })
+    }
+
+    pub fn texts(&self) -> &BTreeMap<String, String> {
+        &self.resources().0
+    }
+
+    /// Res path -> path inside the APK of every file resource (layouts, drawables, …).
+    pub fn files(&self) -> &BTreeMap<String, String> {
+        &self.resources().1
+    }
+
+    fn resources(&self) -> &Resources {
+        self.res.get_or_init(|| {
+            let mut texts = BTreeMap::new();
+            let mut files = BTreeMap::new();
+            if let Some(m) = &self.manifest {
+                texts.insert("AndroidManifest.xml".to_string(), m.clone());
+            }
+            let table = self
+                .apk
+                .lock()
+                .ok()
+                .and_then(|mut a| a.read("resources.arsc"))
+                .and_then(|d| apkscope_core::table::read(&d).ok());
+            if let (Some(t), Some(n)) = (&table, &self.names) {
+                let dec = res::decode_table(t, n);
+                for (p, text) in dec.values {
+                    texts.insert(format!("res/{p}"), text);
+                }
+                for (p, src) in dec.files {
+                    files.insert(format!("res/{p}"), src);
+                }
+            }
+            (texts, files)
+        })
+    }
 }
 
 pub fn load(path: &str, deobf: bool) -> Result<State, String> {
@@ -90,13 +150,9 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
     let notes = crate::re::load_notes(path)?;
     let tag = crate::re::notes_tag(&notes);
     crate::deobf::set_notes(notes);
-    // inline string decryption needs every DEX, from any thread
-    crate::re::set_dexes(Box::leak(
-        raw.iter()
-            .filter_map(|b| Dex::parse(b).ok())
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    ));
+    // inline string decryption needs every DEX, from any thread: the same parsed files
+    let dexes = Arc::new(dexes);
+    crate::re::set_dexes(dexes.clone());
     crate::imports::init(&dexes);
     let mut classes = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -121,47 +177,31 @@ pub fn load(path: &str, deobf: bool) -> Result<State, String> {
         .read("resources.arsc")
         .and_then(|d| apkscope_core::table::read(&d).ok());
     let names = table.as_ref().map(res::Names::new);
-    let mut texts = BTreeMap::new();
-    let mut files = BTreeMap::new();
-    let mut package = String::new();
-    if let Some(m) = apk.read("AndroidManifest.xml")
-        && let Ok(t) = res::decode_xml(&m, names.as_ref())
-    {
-        package = attr(&t, "package").unwrap_or_default();
-        texts.insert("AndroidManifest.xml".to_string(), t);
-    }
-    if let (Some(t), Some(n)) = (&table, &names) {
-        let dec = res::decode_table(t, n);
-        for (p, text) in dec.values {
-            texts.insert(format!("res/{p}"), text);
-        }
-        for (p, src) in dec.files {
-            files.insert(format!("res/{p}"), src);
-        }
-    }
-    let methods = dexes
-        .iter()
-        .map(|d| {
-            (0..d.class_count)
-                .map(|c| d.class_data(c).map_or(0, |x| x.methods.len()))
-                .sum::<usize>()
-        })
-        .sum();
+    drop(table);
+    // the manifest names the package; the values text is decoded later, when asked for
+    let manifest = apk
+        .read("AndroidManifest.xml")
+        .and_then(|m| res::decode_xml(&m, names.as_ref()).ok());
+    let package = manifest
+        .as_deref()
+        .and_then(|t| attr(t, "package"))
+        .unwrap_or_default();
     let origin = classes.iter().map(|c| origin(&c.0, &package)).collect();
     let cache_dir = cache::dir_for(&real, deobf, tag);
     let reader = cache::Reader::open(&cache_dir, classes.len()).map(Arc::new);
+    cache::prune(&cache_dir);
     Ok(State {
         path: path.to_string(),
         file: real.clone(),
         dexes,
         classes,
-        texts,
-        files,
+        manifest,
+        res: OnceLock::new(),
         names,
         apk: Mutex::new(apk),
         entries,
         package,
-        methods,
+        methods: OnceLock::new(),
         origin,
         natives: OnceLock::new(),
         index: OnceLock::new(),
