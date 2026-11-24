@@ -47,7 +47,11 @@ cargo bench --no-default-features -- --pr <N> --apk <apk>
 - `tests/`: unit tests, wired in with `#[cfg(test)] #[path = "..."] mod tests;` (see `tests/README.md`)
 - `benches/`: the `cargo bench` target that measures everything: builds `--compare` refs into
   worktrees, fetches `--pr` merge refs, takes `--bin` binaries as given, races `--tool` columns,
-  prints the PR table; `--hash` diffs output across columns (`BENCHMARKS.md` documents it)
+  prints the PR table; `--hash` diffs output across columns (`BENCHMARKS.md` documents it).
+  One file per stage under `benches/bench/`, `main.rs` the pipeline: `cli` (flags), `case`
+  (the case set — add a row there), `column` (refs/PRs/bins/tools → runnable binaries),
+  `exec` (one timed subprocess), `measure` (cases × columns × runs), `digest` (`--hash`),
+  `report/` (markdown, json, svg), `util`
 
 ## Rules
 

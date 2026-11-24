@@ -6,7 +6,7 @@ as cold processes on the APKs you point it at, and prints the comparison table �
 macOS and Windows, with nothing but the Rust toolchain that builds apkscope itself.
 [Back to the README](README.md)
 
-**Jump to:** [Run it](#run-it) · [The case set](#the-case-set) · [Compare git refs](#compare-git-refs) · [Compare binaries](#compare-binaries) · [Compare a pull request](#compare-a-pull-request) · [Race other tools](#race-other-tools) · [Output checking](#output-checking) · [Output formats](#output-formats) · [How the numbers are made](#how-the-numbers-are-made) · [Reference run: Telegram](#reference-run-telegram) · [History](#history)
+**Jump to:** [Run it](#run-it) · [The case set](#the-case-set) · [Compare git refs](#compare-git-refs) · [Compare binaries](#compare-binaries) · [Compare a pull request](#compare-a-pull-request) · [Race other tools](#race-other-tools) · [Output checking](#output-checking) · [Output formats](#output-formats) · [How the numbers are made](#how-the-numbers-are-made) · [The harness layout](#the-harness-layout) · [Reference run: Telegram](#reference-run-telegram) · [History](#history)
 
 ## Run it
 
@@ -132,6 +132,27 @@ leaves behind).
   CLI + MCP server the cases exercise. The viewer is not benched.
 - **Units follow the value.** Times below a second print in milliseconds, above it in
   seconds, past a minute in minutes — each cell in the unit its value calls for.
+
+## The harness layout
+
+The harness is modular: `benches/bench/main.rs` is the pipeline — parse the flags,
+resolve the APKs, build the columns, measure, report — and every stage owns a file
+next to it:
+
+| File | Owns | Extend it to |
+|---|---|---|
+| `benches/bench/main.rs` | the pipeline, the exit codes | change the flow |
+| `benches/bench/cli.rs` | the flags | add an option |
+| `benches/bench/case.rs` | the case set | add a row: one `CaseDef` — id, label, argv |
+| `benches/bench/column.rs` | the columns | add a source of binaries |
+| `benches/bench/exec.rs` | one timed subprocess | support another OS |
+| `benches/bench/measure.rs` | cases × columns × runs | change what a cell records |
+| `benches/bench/digest.rs` | `--hash` | change what "same output" means |
+| `benches/bench/report/` | markdown, json, svg | add an output format |
+| `benches/bench/util.rs` | git, slugs, tails | shared plumbing |
+
+Adding a case or an output format touches one file (plus an enum variant and a match
+arm); the run loop, the digests and the other formats pick it up on their own.
 
 ## Reference run: Telegram
 

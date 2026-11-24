@@ -35,7 +35,9 @@ bench = false
 
 [[bench]]
 name = "bench"
-# custom harness (#64): builds refs, measures subprocesses, prints the PR table
+path = "benches/bench/main.rs"
+# custom harness (#64): builds refs, measures subprocesses, prints the PR table;
+# the target is split one file per stage under benches/bench/ (see its module docs)
 harness = false
 
 [features]
