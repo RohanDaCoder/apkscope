@@ -71,6 +71,7 @@ fn dispatch(cmd: Cmd, deobf: bool) -> Result<(), String> {
         Res(a) => edit::res(&a),
         Search(a) => crate::cli::run_big_stack(|| search::search(&a, deobf)),
         Build(a) => build::build(&a),
+        Patch(a) => patch::patch(&a),
         Verify(a) => edit::verify(&a),
         Gui(a) => misc::gui_cmd(&a, deobf),
         Upgrade(a) => crate::upgrade::upgrade(a.args),
@@ -86,6 +87,7 @@ mod lookup;
 mod map;
 mod mcp;
 mod misc;
+mod patch;
 mod query;
 mod recon;
 mod search;

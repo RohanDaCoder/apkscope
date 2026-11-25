@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A demo patch bundle: one of every kind of edit, against the demo app of
+  tests/apkscope/commands_patch.rs (com.example.app, versionName 2.1, versionCode 21), so this
+  file is run by the tests and cannot drift from the format. The format: docs/patch-bundles.md.
+-->
+<bundle name="Demo unlock" author="apkscope" version="1" description="one of every edit">
+  <!-- checked against the APK's manifest before anything runs -->
+  <target package="com.example.app" versionName="2.1" minVersionCode="21" maxVersionCode="29"/>
+
+  <!-- Lucky-Patcher style: stub a method to return a constant. sig names one overload
+       exactly; without it, every method of that name. value is typed by the return type:
+       true / false for Z, a number or 0x hex for the numeric ones, null for references. -->
+  <patch name="Unlock" description="isPurchased() returns true">
+    <return class="com.example.app.License" method="isPurchased" sig="()Z" value="true"/>
+  </patch>
+
+  <!-- swap smali text inside a method, every occurrence; take the exact text from
+       `apkscope smali app.apk com.example.app.AdLoader`. A from nothing matches is an error. -->
+  <patch name="Remove ads" description="the ad unit id is emptied">
+    <replace class="com.example.app.AdLoader" method="load"
+             from="ca-app-pub-394"
+             to="0"/>
+  </patch>
+
+  <!-- one string resource, like build --string: the element's text is the new value -->
+  <patch name="Strings">
+    <string name="app_name">Patched app</string>
+  </patch>
+
+  <!-- files: an entry from a file next to this bundle (or delete one) -->
+  <patch name="Files">
+    <entry name="assets/config.json" src="config.json"/>
+    <entry name="META-INF/stale.SF" delete="yes"/>
+  </patch>
+</bundle>

@@ -34,6 +34,7 @@ mod live;
 mod lookup;
 mod mcp;
 mod opt;
+mod patch;
 mod proguard;
 mod quick;
 mod re;

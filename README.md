@@ -324,6 +324,7 @@ apkscope smali     app.apk com.example.Api > Api.smali          # one class as e
 apkscope build     app.apk out.apk --smali Api.smali            # assemble it back in, rebuild, sign
 apkscope smali     app.apk --out-dir app/                       # every class: app/smali/, app/smali_classes2/...
 apkscope build     app.apk out.apk --smali app/                 # only the classes you changed go back in
+apkscope patch     unlock.xml app.apk out.apk                   # a Lucky-Patcher style XML bundle: docs/patch-bundles.md
 apkscope verify    out.apk                                      # v1 (JAR), v2 and v3 signatures
 
 # edit the resources
@@ -407,6 +408,7 @@ other 2. Uncertain methods get a
 | `decrypt_strings` / `scan` | recovered string-decryptor plaintext; one-shot URL + secret + HTTP scan |
 | `rename` / `comment` / `mapping` | name classes and members, comment them, import / export JADX, Enigma, ProGuard names |
 | `get_smali` / `decode_resources` / `build_apk` | edit smali, the manifest and resources, then rebuild and sign |
+| `patch_apk` | apply an XML patch bundle (Lucky-Patcher style: `docs/patch-bundles.md`) to an APK |
 | `il2cpp` / `flutter` / `disassemble` | Unity C# methods with addresses, Flutter's Dart API, raw bytecode |
 | `frida_hook_script` / `dump_app` | a standalone hook script; DEX and scripts a packed app unpacks at runtime |
 | `consts` / `returns` / `size` | constants by class or value, constant-returning methods (message ids), where the size goes |

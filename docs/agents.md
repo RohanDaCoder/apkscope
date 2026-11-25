@@ -62,6 +62,7 @@ native code from the splits too, `size` reads the outer file.
 | Resources and manifest as files | `res app.apk decoded/` / `decode_resources` | apktool d |
 | Edited smali into the right `classesN.dex` | `build ... --smali C.smali` or `--smali decoded/` (only changed classes) / `build_apk smali` | smali.jar, apktool b |
 | Zipalign and sign (v1 when minSdk < 24, v2, v3) | `build` / `build_apk` (no edits = re-sign only) | zipalign, apksigner |
+| One XML file with every edit | `patch bundle.xml app.apk out.apk` / `patch_apk` (Lucky-Patcher style, docs/patch-bundles.md) | writing each edit by hand |
 | Check the signature | `verify out.apk` / `verify_signature` (v1, v2, v3) | apksigner verify |
 | Install (splits, ABI) | `install out.apk` / `install_apk` (calls adb for you) | adb install |
 | See it work | `frida_start` + `frida_hook` | |

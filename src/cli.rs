@@ -214,6 +214,9 @@ Editing (no apktool, smali.jar, zipalign, apksigner needed):
                   [--res dir] [--string name[@config]=value]... [--smali edited.smali]...
                   [--key k.pk8 --cert c.crt | --ks x.jks --ks-pass pass:P | --no-sign]
                   assembles smali, zipaligns, signs (no edits = re-sign); a .jar is never signed
+         apkscope patch <bundle.xml> <in.apk> <out.apk>  apply an XML patch bundle (Lucky-Patcher style):
+                  named patches of <return>/<replace> method edits, <string>, <manifest>, <entry>;
+                  --only name / --skip name pick the patches, --list shows them; build's signing flags
          apkscope verify <apk>             v1 / v2 / v3 signatures
          apkscope install <apk|xapk>       install on a device (drives adb)
 Agents:  apkscope mcp                      MCP server over stdio (see README)
@@ -451,6 +454,9 @@ pub enum Cmd {
     /// patch, rebuild and sign: assemble smali, apply resources, zipalign, sign v1/v2/v3 (or just re-sign)
     #[command(name = "build", after_help = crate::examples::BUILD)]
     Build(BuildArgs),
+    /// apply an XML patch bundle (Lucky-Patcher style) to an APK, then rebuild and sign
+    #[command(name = "patch", after_help = crate::examples::PATCH)]
+    Patch(PatchArgs),
     /// verify v1 / v2 / v3 signatures (to sign: build)
     #[command(name = "verify", after_help = crate::examples::VERIFY)]
     Verify(VerifyArgs),
@@ -875,9 +881,6 @@ pub struct BuildArgs {
     /// remove an entry (repeatable)
     #[arg(long = "delete", value_name = "name")]
     pub delete: Vec<String>,
-    /// write the APK unsigned
-    #[arg(long = "no-sign")]
-    pub no_sign: bool,
     /// a folder from `apkscope res` (or apktool / APKEditor) with edited resources
     #[arg(long = "res", value_name = "dir")]
     pub res: Option<String>,
@@ -891,6 +894,13 @@ pub struct BuildArgs {
     /// an edited AndroidManifest.xml (text)
     #[arg(long = "manifest", value_name = "xml")]
     pub manifest: Option<String>,
+    #[command(flatten)]
+    pub sign: SignArgs,
+}
+
+/// The signing options `build` and `patch` share.
+#[derive(Args)]
+pub struct SignArgs {
     /// sign with this private key (.pk8 / PEM), with --cert
     #[arg(long = "key", value_name = "file")]
     pub key: Option<String>,
@@ -909,12 +919,37 @@ pub struct BuildArgs {
     /// which key of the keystore (default: the only one)
     #[arg(long = "ks-alias", value_name = "alias")]
     pub ks_alias: Option<String>,
+    /// write the result unsigned
+    #[arg(long = "no-sign")]
+    pub no_sign: bool,
 }
 
 #[derive(Args)]
 pub struct VerifyArgs {
     /// the APK whose v1 / v2 / v3 signatures to check
     pub apk: String,
+}
+
+#[derive(Args)]
+pub struct PatchArgs {
+    /// the patch bundle (XML) to apply (the format: docs/patch-bundles.md)
+    pub bundle: String,
+    /// the APK to patch (or a bundle: its base split)
+    pub input: Option<String>,
+    /// where to write the result
+    #[arg(value_name = "out.apk")]
+    pub output: Option<String>,
+    /// list the bundle's target and patches, with the chosen ones marked, and exit
+    #[arg(long)]
+    pub list: bool,
+    /// apply only this patch, by name (repeatable)
+    #[arg(long = "only", value_name = "name")]
+    pub only: Vec<String>,
+    /// skip this patch, by name (repeatable)
+    #[arg(long = "skip", value_name = "name")]
+    pub skip: Vec<String>,
+    #[command(flatten)]
+    pub sign: SignArgs,
 }
 
 #[derive(Args)]

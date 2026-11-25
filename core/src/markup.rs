@@ -1,16 +1,17 @@
 //! A small XML reader that keeps text as written, for the text forms of resources: values
-//! files, where whitespace and markup mean something, and binary XML's text form.
+//! files, where whitespace and markup mean something, binary XML's text form, and patch
+//! bundles.
 
 use crate::{Error, Result};
 
 #[derive(Debug)]
-pub(crate) enum Node {
+pub enum Node {
     Element(Element),
     Text(String),
 }
 
 #[derive(Debug)]
-pub(crate) struct Element {
+pub struct Element {
     pub name: String,
     pub attrs: Vec<(String, String)>,
     pub children: Vec<Node>,
@@ -78,7 +79,7 @@ fn entities(s: &str, line: usize) -> Result<String> {
     Ok(out)
 }
 
-pub(crate) fn parse_xml(text: &str) -> Result<Element> {
+pub fn parse_xml(text: &str) -> Result<Element> {
     let mut stack: Vec<Element> = vec![Element {
         name: String::new(),
         attrs: vec![],

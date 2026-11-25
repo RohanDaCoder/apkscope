@@ -12,7 +12,7 @@ pub mod bytecode;
 pub mod dex;
 mod error;
 pub mod keystore;
-mod markup;
+pub mod markup;
 pub mod rebuild;
 pub mod res;
 pub mod resources;

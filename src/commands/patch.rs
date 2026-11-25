@@ -1,0 +1,313 @@
+//! `apkscope patch`: apply an XML patch bundle to an APK, then rebuild and sign.
+
+use apkscope_core::{apksign, arsc, axml, rebuild, res, smali, table};
+use std::collections::BTreeMap;
+
+use crate::cli::PatchArgs;
+use crate::export;
+use crate::patch::{self, Bundle, Op, Patch};
+use crate::session;
+
+/// Apply one bundle. Everything is collected before the APK is rewritten, so a bundle that
+/// fails anywhere — a class that is not there, a `from` that no method has — changes nothing.
+pub fn patch(a: &PatchArgs) -> Result<(), String> {
+    let text = std::fs::read_to_string(&a.bundle).map_err(|e| format!("{}: {e}", a.bundle))?;
+    let bundle = patch::parse(&text).map_err(|e| format!("{}: {e}", a.bundle))?;
+    let chosen = select(&bundle, &a.only, &a.skip)?;
+    if a.list {
+        return list(&bundle, &chosen);
+    }
+    let (Some(input), Some(output)) = (&a.input, &a.output) else {
+        return Err("give the APK to patch and where to write it (or --list)".into());
+    };
+    let t = std::time::Instant::now();
+    let src = session::prepare(input)?;
+    if let Some(target) = &bundle.target {
+        check_target(target, &src)?;
+    }
+    let jar = input.to_lowercase().ends_with(".jar");
+    let key = super::build::sign_key(jar, !a.sign.no_sign, &a.sign)?;
+    // file paths in the bundle are relative to the bundle itself; absolute paths stay as they are
+    let dir = std::path::Path::new(&a.bundle)
+        .parent()
+        .map_or_else(std::path::PathBuf::new, ToOwned::to_owned);
+    let mut edits = rebuild::Edits::new();
+    let mut strings = BTreeMap::new();
+    let mut manifest = None;
+    let mut classes: Option<smali::Classes> = None;
+    let mut smali_texts: BTreeMap<String, String> = BTreeMap::new();
+    let chosen_len = chosen.len();
+    for p in chosen {
+        for op in &p.ops {
+            // where a code edit lands, and what its notes and errors call it
+            let at = |class: &str, method: &str, sig: &Option<String>| patch::At {
+                class: class.to_string(),
+                method: method.to_string(),
+                sig: sig.clone(),
+                note: format!("{}: {}", p.name, where_(op)),
+            };
+            match op {
+                Op::Return {
+                    class,
+                    method,
+                    sig,
+                    value,
+                    ..
+                } => {
+                    let at = at(class, method, sig);
+                    let note = at.note.clone();
+                    let text = class_text(&mut classes, &mut smali_texts, class, &src)
+                        .map_err(|e| format!("{note}: {e}"))?;
+                    let n = patch::returns(text, &at, value.as_deref())?;
+                    crate::note!("{note}: {n} method(s) stubbed");
+                }
+                Op::Replace {
+                    class,
+                    method,
+                    sig,
+                    from,
+                    to,
+                    once,
+                    ..
+                } => {
+                    let at = at(class, method, sig);
+                    let note = at.note.clone();
+                    let text = class_text(&mut classes, &mut smali_texts, class, &src)
+                        .map_err(|e| format!("{note}: {e}"))?;
+                    let n = patch::replaces(text, &at, from, to, *once)?;
+                    crate::note!("{note}: {n} line(s) changed");
+                }
+                Op::Str {
+                    name,
+                    config,
+                    value,
+                } => {
+                    strings.insert(
+                        (config.clone().unwrap_or_default(), name.clone()),
+                        value.clone(),
+                    );
+                }
+                Op::Manifest { file } => manifest = Some(dir.join(file)),
+                Op::Entry {
+                    name,
+                    src: from,
+                    delete,
+                } => match (from, delete) {
+                    (Some(f), false) => {
+                        let f = dir.join(f);
+                        let data =
+                            std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+                        edits.insert(name.clone(), Some(data));
+                    }
+                    (None, true) => {
+                        edits.insert(name.clone(), None);
+                    }
+                    // the other two combinations are refused when the bundle is parsed
+                    _ => {
+                        return Err(format!(
+                            "{}: <entry {name}> needs src=... or delete=yes",
+                            p.name
+                        ));
+                    }
+                },
+            }
+        }
+    }
+    if let Some(classes) = &mut classes {
+        for (class, text) in &smali_texts {
+            classes
+                .set_text(text)
+                .map_err(|e| format!("{class}: {e}"))?;
+        }
+        let changed = classes.write(&mut edits)?;
+        crate::note!(
+            "assembled {} edited class(es) into {}",
+            smali_texts.len(),
+            changed.join(", ")
+        );
+    }
+    if !strings.is_empty() {
+        let table = export::open(&src)?
+            .read("resources.arsc")
+            .ok_or("no resources.arsc: <string> edits need one")?;
+        edits.insert(
+            "resources.arsc".into(),
+            Some(arsc::set_strings(&table, &strings)?),
+        );
+    }
+    if let Some(m) = &manifest {
+        // text manifest -> binary XML, typed like the original
+        let text = std::fs::read_to_string(m).map_err(|e| format!("{}: {e}", m.display()))?;
+        let mut apk = export::open(&src)?;
+        let t = apk
+            .read("resources.arsc")
+            .and_then(|d| table::read(&d).ok());
+        let names = t
+            .as_ref()
+            .map(res::Names::new)
+            .ok_or("no resources.arsc to resolve @references")?;
+        let bin = axml::encode(&text, apk.read("AndroidManifest.xml").as_deref(), &names)
+            .map_err(|e| format!("{}: {e}", m.display()))?;
+        edits.insert("AndroidManifest.xml".into(), Some(bin));
+    }
+    let size = export::write_apk(&src, &edits, std::path::Path::new(output), key.as_ref())?;
+    crate::note!(
+        "wrote {output} ({} bytes, {} edits, {} of {} patch(es)) in {:.1}s",
+        size,
+        edits.len(),
+        chosen_len,
+        bundle.patches.len(),
+        t.elapsed().as_secs_f64()
+    );
+    if let Some(k) = &key {
+        for l in apksign::verify(output)? {
+            crate::note!("{l}");
+        }
+        if let Some(c) = apkscope_core::sign::parse_cert(&k.cert) {
+            crate::note!("signer: {}  (SHA-256 {})", c.subject, c.sha256);
+        }
+    }
+    Ok(())
+}
+
+/// The `<target>` against the APK's own manifest: the one place a bundle says what it is for.
+fn check_target(target: &patch::Target, src: &str) -> Result<(), String> {
+    let data = crate::quick::read_entry(src, "AndroidManifest.xml")
+        .ok()
+        .flatten()
+        .ok_or("no AndroidManifest.xml: the bundle's <target> cannot be checked")?;
+    let text = res::decode_xml(&data, None)?;
+    let (package, name, code) = patch::manifest_id(&text);
+    target.matches(package.as_deref(), name.as_deref(), code)
+}
+
+/// The patches to apply: `--only` names them, `--skip` drops them; both name real patches, so
+/// a typo cannot quietly deselect half a bundle.
+fn select<'a>(
+    bundle: &'a Bundle,
+    only: &[String],
+    skip: &[String],
+) -> Result<Vec<&'a Patch>, String> {
+    let known = |names: &[String], what: &str| {
+        names.iter().try_for_each(|n| {
+            bundle
+                .patches
+                .iter()
+                .any(|p| &p.name == n)
+                .then_some(())
+                .ok_or_else(|| format!("no patch named {n:?} to {what}"))
+        })
+    };
+    known(only, "apply")?;
+    known(skip, "skip")?;
+    Ok(bundle
+        .patches
+        .iter()
+        .filter(|p| only.is_empty() || only.contains(&p.name))
+        .filter(|p| !skip.contains(&p.name))
+        .collect())
+}
+
+/// `--list`: the bundle, its target and its patches, with the chosen ones marked.
+fn list(bundle: &Bundle, chosen: &[&Patch]) -> Result<(), String> {
+    let mut out = String::new();
+    let meta = [
+        bundle.name.as_deref().map(|v| format!("name: {v}")),
+        bundle.author.as_deref().map(|v| format!("author: {v}")),
+        bundle.version.as_deref().map(|v| format!("version: {v}")),
+        bundle.description.as_deref().map(str::to_string),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    if !meta.is_empty() {
+        out.push_str(&meta);
+        out.push_str("\n\n");
+    }
+    if let Some(t) = &bundle.target {
+        let mut line = format!("target: package {}", t.package);
+        if let Some(v) = &t.version_name {
+            line.push_str(&format!(", versionName {v}"));
+        }
+        for (v, cmp) in [(t.min_version_code, ">="), (t.max_version_code, "<=")] {
+            if let Some(v) = v {
+                line.push_str(&format!(", versionCode {cmp} {v}"));
+            }
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    for p in &bundle.patches {
+        out.push_str(&format!(
+            "{}{} ({} op(s))",
+            match chosen.iter().any(|c| c.name == p.name) {
+                true => "[x] ",
+                false => "[ ] ",
+            },
+            p.name,
+            p.ops.len()
+        ));
+        if let Some(d) = &p.description {
+            out.push_str(&format!(" - {d}"));
+        }
+        out.push('\n');
+    }
+    crate::cli::emit(&out)
+}
+
+/// How an op is named in notes and errors.
+fn where_(op: &Op) -> String {
+    match op {
+        Op::Return {
+            class,
+            method,
+            line,
+            ..
+        } => {
+            format!("<return {class}#{method}> (line {line})")
+        }
+        Op::Replace {
+            class,
+            method,
+            line,
+            ..
+        } => {
+            format!("<replace {class}#{method}> (line {line})")
+        }
+        Op::Str { name, .. } => format!("<string {name}>"),
+        Op::Manifest { file } => format!("<manifest {file}>"),
+        Op::Entry { name, .. } => format!("<entry {name}>"),
+    }
+}
+
+/// The class's smali as edited so far: printed from the DEX once, then kept for the next op on
+/// the same class. The DEX files only open for editing when a bundle edits code.
+fn class_text<'a>(
+    classes: &mut Option<smali::Classes>,
+    smali: &'a mut BTreeMap<String, String>,
+    class: &str,
+    src: &str,
+) -> Result<&'a mut String, String> {
+    if !smali.contains_key(class) {
+        let print = |c: &mut smali::Classes| {
+            let (doc, model) = c.class(class)?;
+            Ok::<String, apkscope_core::Error>(smali::text::print(doc.source(), &model))
+        };
+        let text = match classes {
+            Some(c) => print(c)?,
+            None => {
+                let mut c = smali::Classes::new(export::open(src)?.dex()?);
+                let text = print(&mut c)?;
+                *classes = Some(c);
+                text
+            }
+        };
+        smali.insert(class.to_string(), text);
+    }
+    Ok(smali.get_mut(class).expect("just inserted"))
+}
+
+#[cfg(test)]
+#[path = "../../tests/apkscope/commands_patch.rs"]
+mod tests;

@@ -31,6 +31,7 @@ cargo test --release --no-default-features
   `highlight`, `tree`, `theme`, `live_ui` (Frida)
 - `src/session/`: the opened APK and its reference index; `src/search/`: the search scopes
 - `src/input.rs`: an APK read in place (a bundle's stored base split needs no copy)
+- `src/patch.rs`: the XML patch bundle format `apkscope patch` applies (docs/patch-bundles.md)
 - `src/quick.rs`: stateless queries (no index, no cache)
 - `src/java.rs`, `src/ir.rs`, `src/opt.rs`, `src/cfg.rs`: the decompiler
 - `src/re.rs`: xrefs, call graphs, Frida scripts, scan

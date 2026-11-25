@@ -136,6 +136,16 @@ fn tools() -> Value {
             "key_pass": {"type": "string", "description": "key password, same forms (default: keystore_pass)"},
             "key_alias": {"type": "string", "description": "which key (default: the only one)"},
             "no_sign": {"type": "boolean"}}}},
+        {"name": "patch_apk", "description": "Apply an XML patch bundle (Lucky-Patcher style, docs/patch-bundles.md) to an APK and write the patched, zipaligned, signed result. The bundle names the app it is for (checked against the manifest first) and named patches of edits: <return> stubs a method to return a constant (isPurchased()Z to true), <replace> swaps smali text inside a method, <string>, <manifest> and <entry> edit resources, the manifest and the zip. only / skip pick patches by name. A patch that did not land is an error.",
+         "inputSchema": {"type": "object", "required": ["apk_path", "bundle_path", "out_path"], "properties": {"apk_path": apk, "bundle_path": {"type": "string", "description": "the patch bundle XML"}, "out_path": {"type": "string"},
+            "only": {"type": "array", "items": {"type": "string"}, "description": "apply only these patch names"},
+            "skip": {"type": "array", "items": {"type": "string"}, "description": "skip these patch names"},
+            "key": {"type": "string", "description": "PKCS#8 .pk8 private key"}, "cert": {"type": "string", "description": "X.509 certificate"},
+            "keystore": {"type": "string", "description": "JKS or PKCS#12 keystore (.jks, .keystore, .p12, .pfx) to sign with"},
+            "keystore_pass": {"type": "string", "description": "pass:TEXT, env:VAR or file:PATH"},
+            "key_pass": {"type": "string", "description": "key password, same forms (default: keystore_pass)"},
+            "key_alias": {"type": "string", "description": "which key (default: the only one)"},
+            "no_sign": {"type": "boolean"}}}},
         {"name": "consts", "description": "Static final constants (int, long, String...) stored in the DEX, by class / package, value or name. Decodes numbers: value 405 or 0xB8D0AFDF lists every constant with that value.",
          "inputSchema": {"type": "object", "required": ["apk_path"], "properties": page(json!({"apk_path": apk, "classes": {"type": "array", "items": {"type": "string"}, "description": "a.b.C or a.b.* (omitted = all)"}, "value": {"type": "string"}, "name": {"type": "string", "description": "regex on the constant's name"}}))}},
         {"name": "returns", "description": "Methods whose whole body is `return <constant>;`: message ids, opcodes, type codes. E.g. method uri with impl com.example.IProtocol lists every message class and its id; value finds the class for an id.",
@@ -659,6 +669,31 @@ fn call(
             }
             push_opt(&mut args, "--manifest", s(a, "manifest"));
             push_opt(&mut args, "--res", s(a, "res_dir"));
+            push_opt(&mut args, "--key", s(a, "key"));
+            push_opt(&mut args, "--cert", s(a, "cert"));
+            push_opt(&mut args, "--ks", s(a, "keystore"));
+            push_opt(&mut args, "--ks-pass", s(a, "keystore_pass"));
+            push_opt(&mut args, "--ks-key-pass", s(a, "key_pass"));
+            push_opt(&mut args, "--ks-alias", s(a, "key_alias"));
+            if b(a, "no_sign") {
+                args.push("--no-sign".into())
+            }
+            run_cli(&args)
+        }
+        "patch_apk" => {
+            args.extend([
+                "patch".into(),
+                s(a, "bundle_path").ok_or("bundle_path is required")?,
+                apk,
+                s(a, "out_path").ok_or("out_path is required")?,
+            ]);
+            for (k, f) in [("only", "--only"), ("skip", "--skip")] {
+                if let Some(Value::Array(v)) = a.get(k) {
+                    for x in v.iter().filter_map(Value::as_str) {
+                        args.extend([f.to_string(), x.to_string()]);
+                    }
+                }
+            }
             push_opt(&mut args, "--key", s(a, "key"));
             push_opt(&mut args, "--cert", s(a, "cert"));
             push_opt(&mut args, "--ks", s(a, "keystore"));

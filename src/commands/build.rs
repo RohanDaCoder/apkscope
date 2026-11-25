@@ -21,6 +21,49 @@ fn password(spec: &str) -> Result<String, String> {
     }
 }
 
+/// The key `build` and `patch` sign with: one from a keystore, a .pk8 key with its
+/// certificate, or apkscope's own key when neither is given. `None` for `--no-sign`; a .jar
+/// is never signed, Android does not verify one.
+pub(super) fn sign_key(
+    jar: bool,
+    sign: bool,
+    a: &crate::cli::SignArgs,
+) -> Result<Option<apksign::Key>, String> {
+    let (key, cert, ks) = (a.key.as_deref(), a.cert.as_deref(), a.ks.as_deref());
+    if (jar || !sign) && (key.is_some() || cert.is_some() || ks.is_some()) {
+        return Err("--key/--cert/--ks sign an APK: not a .jar, and not with --no-sign".into());
+    }
+    if ks.is_some() && (key.is_some() || cert.is_some()) {
+        return Err("use either --ks or --key/--cert".into());
+    }
+    if ks.is_none() && (a.ks_pass.is_some() || a.ks_key_pass.is_some() || a.ks_alias.is_some()) {
+        return Err("--ks-pass, --ks-key-pass and --ks-alias go with --ks".into());
+    }
+    Ok(match (key, cert) {
+        _ if jar || !sign => None,
+        _ if ks.is_some() => Some(apksign::load_keystore(
+            std::path::Path::new(ks.unwrap_or_default()),
+            &password(a.ks_pass.as_deref().ok_or("--ks needs --ks-pass")?)?,
+            a.ks_key_pass
+                .as_deref()
+                .map(password)
+                .transpose()?
+                .as_deref(),
+            a.ks_alias.as_deref(),
+        )?),
+        (Some(k), Some(c)) => Some(apksign::load(
+            std::path::Path::new(k),
+            std::path::Path::new(c),
+        )?),
+        (None, None) => {
+            let (k, dir) = apksign::default_key()?;
+            crate::note!("signing with apkscope's key in {}", dir.display());
+            Some(k)
+        }
+        _ => return Err("--key and --cert go together".into()),
+    })
+}
+
 /// `--no-sign` leaves the APK unsigned; a JAR never is signed, Android does not verify one.
 pub fn build(a: &BuildArgs) -> Result<(), String> {
     let input = a.input.as_str();
@@ -36,7 +79,7 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     for name in &a.delete {
         edits.insert(name.clone(), None);
     }
-    let sign = !a.no_sign;
+    let sign = !a.sign.no_sign;
     let mut strings = std::collections::BTreeMap::new();
     for v in &a.string {
         let (k, text) = v.split_once('=').ok_or("--string needs name=value")?;
@@ -45,42 +88,8 @@ pub fn build(a: &BuildArgs) -> Result<(), String> {
     }
     let res_dir = a.res.clone();
     let manifest = a.manifest.clone();
-    let key = a.key.clone();
-    let cert = a.cert.clone();
     let jar = input.to_lowercase().ends_with(".jar");
-    if (jar || !sign) && (key.is_some() || cert.is_some() || a.ks.is_some()) {
-        return Err("--key/--cert/--ks sign an APK: not a .jar, and not with --no-sign".into());
-    }
-    if a.ks.is_some() && (key.is_some() || cert.is_some()) {
-        return Err("use either --ks or --key/--cert".into());
-    }
-    if a.ks.is_none() && (a.ks_pass.is_some() || a.ks_key_pass.is_some() || a.ks_alias.is_some()) {
-        return Err("--ks-pass, --ks-key-pass and --ks-alias go with --ks".into());
-    }
-    let key = match (key, cert) {
-        _ if jar || !sign => None,
-        _ if a.ks.is_some() => {
-            let ks = a.ks.as_deref().unwrap_or_default();
-            let store = password(a.ks_pass.as_deref().ok_or("--ks needs --ks-pass")?)?;
-            let key_pass = a.ks_key_pass.as_deref().map(password).transpose()?;
-            Some(apksign::load_keystore(
-                std::path::Path::new(ks),
-                &store,
-                key_pass.as_deref(),
-                a.ks_alias.as_deref(),
-            )?)
-        }
-        (Some(k), Some(c)) => Some(apksign::load(
-            std::path::Path::new(&k),
-            std::path::Path::new(&c),
-        )?),
-        (None, None) => {
-            let (k, dir) = apksign::default_key()?;
-            crate::note!("signing with apkscope's key in {}", dir.display());
-            Some(k)
-        }
-        _ => return Err("--key and --cert go together".into()),
-    };
+    let key = sign_key(jar, sign, &a.sign)?;
     let t = std::time::Instant::now();
     let src = session::prepare(input)?;
     if res_dir.is_some() && (manifest.is_some() || !strings.is_empty()) {
