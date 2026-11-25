@@ -121,10 +121,63 @@ pub fn init(dexes: &[crate::dex::Dex]) {
         memo.insert(desc, p.clone());
         p
     }
+    // One memo per DEX, built on all cores, then merged in DEX order so the first
+    // definition of a descriptor wins — the values the one shared memo filled in walk
+    // order held. The recursion for one DEX stays inside that DEX (nesting is per
+    // file), so a per-DEX memo changes nothing but the order of the inserts.
+    let threads = crate::search::threads().min(dexes.len()).max(1);
+    let per_dex: Vec<HashMap<String, String>> = if threads > 1 && dexes.len() > 1 {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut out: Vec<(usize, HashMap<String, String>)> = Vec::new();
+                        loop {
+                            let d = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(dex) = dexes.get(d) else {
+                                break;
+                            };
+                            let mut memo = HashMap::new();
+                            for c in 0..dex.class_count {
+                                path(dex, c, &mut memo);
+                            }
+                            out.push((d, memo));
+                        }
+                        out
+                    })
+                })
+                .collect();
+            // one slot per DEX, filled in DEX order whatever order the workers pulled
+            let mut slots: Vec<Option<HashMap<String, String>>> =
+                (0..dexes.len()).map(|_| None).collect();
+            for h in handles {
+                for (d, memo) in h.join().expect("import-path worker") {
+                    slots[d] = Some(memo);
+                }
+            }
+            slots
+                .into_iter()
+                .map(|m| m.expect("the queue walked every DEX"))
+                .collect()
+        })
+    } else {
+        dexes
+            .iter()
+            .map(|dex| {
+                let mut memo = HashMap::new();
+                for c in 0..dex.class_count {
+                    path(dex, c, &mut memo);
+                }
+                memo
+            })
+            .collect()
+    };
+    // first DEX wins, as the shared memo's fill order did
     let mut memo = HashMap::new();
-    for dex in dexes {
-        for c in 0..dex.class_count {
-            path(dex, c, &mut memo);
+    for m in per_dex {
+        for (desc, p) in m {
+            memo.entry(desc).or_insert(p);
         }
     }
     let mut declared: HashMap<String, BTreeSet<String>> = HashMap::new();

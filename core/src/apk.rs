@@ -64,8 +64,9 @@ impl<R: Read + Seek> Apk<R> {
     }
 
     /// The root-level classes*.dex by entry name, in load order: classes.dex, classes2.dex, ...
-    /// (the first definition of a class wins at runtime).
-    pub fn dex(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
+    /// (the first definition of a class wins at runtime). The names without the reads, so a
+    /// loader that streams the files through other handles reads them in the same order.
+    pub fn dex_names(&mut self) -> Vec<String> {
         let mut names: Vec<String> = self
             .zip
             .file_names()
@@ -80,6 +81,11 @@ impl<R: Read + Seek> Apk<R> {
                 .unwrap_or(1)
         });
         names
+    }
+
+    /// Every root-level classes*.dex, read in load order.
+    pub fn dex(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
+        self.dex_names()
             .into_iter()
             .map(|name| match self.read(&name) {
                 Some(data) => Ok((name, data)),
