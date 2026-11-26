@@ -60,8 +60,8 @@ mod child_usage {
 
 #[cfg(windows)]
 mod child_usage {
-    //! Peak RSS of a child via `OpenProcess` + `GetProcessMemoryInfo`; kernel32 is
-    //! already linked by std, so this adds no dependency.
+    //! Peak RSS of a child via `OpenProcess` + `GetProcessMemoryInfo`: kernel32 is
+    //! already linked by std, and psapi is an OS import library, not a dependency.
 
     use std::{ffi::c_void, process::Child};
 
@@ -84,12 +84,20 @@ mod child_usage {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    // `GetProcessMemoryInfo` belongs to psapi per Microsoft's docs — kernel32
+    // exports it only as `K32GetProcessMemoryInfo`, so a kernel32 link leaves
+    // windows-gnu builds with an undefined symbol. psapi is a stock import
+    // library on both the MSVC and the GNU toolchain.
+    #[link(name = "psapi")]
+    unsafe extern "system" {
         fn GetProcessMemoryInfo(
             process: *mut c_void,
             counters: *mut MemoryCounters,
             cb: u32,
         ) -> i32;
-        fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
     /// A process handle kept open so the peak RSS stays queryable after `Child::wait`.
