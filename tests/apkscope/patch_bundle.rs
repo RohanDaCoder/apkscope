@@ -202,3 +202,107 @@ fn refuses_an_entry_name_that_is_not_a_file_path() {
         assert!(err.contains("is not one"), "entry name {name:?}: {err}");
     }
 }
+
+#[test]
+fn parses_body_and_any() {
+    let b = parse(
+        r#"<bundle>
+  <patch name="A">
+    <body class="a.B" method="run" sig="(I)Z">
+      .locals 1
+      const/4 v0, 0x1
+      return v0
+    </body>
+    <any>
+      <replace class="a.B" method="run" from="0x0" to="0x1"/>
+      <return class="a.C" method="ok" value="true"/>
+      <body class="a.D" method="go">.registers 1&#10;return-void</body>
+    </any>
+  </patch>
+</bundle>"#,
+    )
+    .unwrap();
+    // the body is the element's text, as written: the XML's indentation and all, trimmed
+    // line by line when the op applies
+    match &b.patches[0].ops[0] {
+        Op::Body {
+            class,
+            method,
+            sig,
+            body,
+            ..
+        } => {
+            assert_eq!(class, "a.B");
+            assert_eq!(method, "run");
+            assert_eq!(sig.as_deref(), Some("(I)Z"));
+            assert_eq!(
+                body,
+                "\n      .locals 1\n      const/4 v0, 0x1\n      return v0\n    "
+            );
+        }
+        _ => panic!("not a body"),
+    }
+    match &b.patches[0].ops[1] {
+        Op::Any { ops, .. } => {
+            assert_eq!(ops.len(), 3);
+            assert!(matches!(ops[0], Op::Replace { .. }));
+            assert!(matches!(ops[1], Op::Return { .. }));
+            assert!(matches!(ops[2], Op::Body { .. }));
+        }
+        _ => panic!("not an any"),
+    }
+}
+
+#[test]
+fn a_body_can_be_cdata() {
+    // smali strings can hold < and &, and a CDATA section says them without entities
+    let b = parse(
+        r#"<bundle><patch name="A"><body class="a.B" method="m"><![CDATA[.locals 1
+const-string v0, "a<b & c"
+return-void]]></body></patch></bundle>"#,
+    )
+    .unwrap();
+    match &b.patches[0].ops[0] {
+        Op::Body { body, .. } => {
+            assert_eq!(body, ".locals 1\nconst-string v0, \"a<b & c\"\nreturn-void")
+        }
+        _ => panic!("not a body"),
+    }
+}
+
+#[test]
+fn refuses_body_and_any_written_wrong() {
+    // a body holds smali text, not markup
+    assert_eq!(
+        parse("<bundle><patch name=\"x\"><body class=\"a\" method=\"m\"><wat/></body></patch></bundle>")
+            .unwrap_err(),
+        "line 1: <body> has nothing inside, found <wat>"
+    );
+    assert_eq!(
+        parse("<bundle><patch name=\"x\"><body class=\"a\">.locals 0</body></patch></bundle>")
+            .unwrap_err(),
+        "line 1: <body> needs method=..."
+    );
+    // <any> of nothing, nested, with an attribute, or of ops that cannot be alternatives
+    assert_eq!(
+        parse("<bundle><patch name=\"x\"><any/></patch></bundle>").unwrap_err(),
+        "line 1: <any> has no alternative inside: give it a <return>, <replace> or <body>"
+    );
+    assert_eq!(
+        parse("<bundle><patch name=\"x\"><any><any><return class=\"a\" method=\"m\"/></any></any></patch></bundle>")
+            .unwrap_err(),
+        "line 1: <any> cannot sit inside another <any>; the alternatives inside it already are the either/or"
+    );
+    assert_eq!(
+        parse("<bundle><patch name=\"x\"><any name=\"a\"><return class=\"a\" method=\"m\"/></any></patch></bundle>")
+            .unwrap_err(),
+        "line 1: <any> has no attribute name"
+    );
+    assert_eq!(
+        parse(
+            "<bundle><patch name=\"x\"><any><string name=\"s\">v</string></any></patch></bundle>"
+        )
+        .unwrap_err(),
+        "line 1: <string> cannot be an alternative in <any>: <return>, <replace> and <body> can"
+    );
+}

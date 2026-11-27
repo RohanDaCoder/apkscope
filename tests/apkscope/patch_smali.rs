@@ -231,3 +231,242 @@ fn a_constructor_cannot_be_stubbed_but_clinit_can() {
     assert_eq!(returns(&mut text, &at("<clinit>", "()V"), None).unwrap(), 1);
     assert!(text.contains(".locals 0\n    return-void"));
 }
+
+#[test]
+fn bodies_rewrite_whole_bodies() {
+    let mut text = CLASS.to_string();
+    let n = bodies(
+        &mut text,
+        &at(Some("()I")),
+        ".locals 1
+          const v0, 0x2a
+          return v0",
+    )
+    .unwrap();
+    assert_eq!(n, 1);
+    // the XML's indentation is not the body's: lines are trimmed and re-indented to the
+    // printer's four spaces
+    assert!(
+        text.contains(".locals 1\n    const v0, 0x2a\n    return v0"),
+        "{text}"
+    );
+    assert!(!text.contains("0xb3b83"), "{text}");
+    // without a sig, every overload of the name
+    let mut text = CLASS.to_string();
+    let n = bodies(&mut text, &at(None), ".locals 0\nreturn-void").unwrap();
+    assert_eq!(n, 2);
+    // no const of the old bodies is left in either of them
+    assert!(!text.contains("const v0"), "{text}");
+}
+
+#[test]
+fn a_body_must_say_how_many_registers_it_uses() {
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        bodies(&mut text, &at(None), "return v0").unwrap_err(),
+        "at: the body of Ltest/Over;#uri must start with `.locals N` (or `.registers N`), \
+         which says how many registers it uses"
+    );
+    // an empty body is a stub, and <return> without a value is that
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        bodies(&mut text, &at(None), "   \n").unwrap_err(),
+        "at: the body of Ltest/Over;#uri is empty: <return> stubs a method to a constant, \
+         and a method with no code at all is <return> without a value"
+    );
+    // a method that is not there is the same error as any other edit's
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        bodies(
+            &mut text,
+            &At {
+                method: "nope".into(),
+                ..at(None)
+            },
+            ".locals 0\nreturn-void"
+        )
+        .unwrap_err(),
+        "at: Ltest/Over; has no method nope"
+    );
+    // abstract and native methods have no body for a new one to replace
+    let mut text = BODYLESS.to_string();
+    assert_eq!(
+        bodies(&mut text, &at(None), ".locals 0\nreturn-void").unwrap_err(),
+        "at: Ltest/Over;#uri is abstract: it has no body to edit"
+    );
+}
+
+#[test]
+fn a_constructor_body_must_keep_the_super_call() {
+    let at = || At {
+        class: "Ltest/Init;".into(),
+        method: "<init>".into(),
+        sig: Some("(I)V".into()),
+        note: "at".into(),
+    };
+    // one that returns without it is a verify error Android refuses the class for
+    let mut text = INITED.to_string();
+    assert_eq!(
+        bodies(&mut text, &at(), ".locals 0\nreturn-void").unwrap_err(),
+        "at: the new body of Ltest/Init;#<init>(I)V never calls super() or this(...): a \
+         constructor needs `invoke-direct {p0}, ...-><init>()` before it returns, or Android \
+         refuses the class"
+    );
+    // an invoke-direct <init> on another register only builds an object; it is not the call
+    let mut text = INITED.to_string();
+    assert!(
+        bodies(
+            &mut text,
+            &at(),
+            ".locals 1\ninvoke-direct {v0}, Ljava/lang/Object;-><init>()V\nreturn-void"
+        )
+        .unwrap_err()
+        .contains("never calls super()")
+    );
+    // a super() call is what the guard asks for, and the body lands
+    let mut text = INITED.to_string();
+    let n = bodies(
+        &mut text,
+        &at(),
+        ".locals 1
+invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+const/4 v0, 0x1
+return-void",
+    )
+    .unwrap();
+    assert_eq!(n, 1);
+    assert!(
+        text.contains(
+            "invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n    const/4 v0, 0x1\n    return-void"
+        ),
+        "{text}"
+    );
+    // a this(...) delegation counts: it is an invoke-direct <init> on p0 too
+    let mut text = INITED.to_string();
+    assert_eq!(
+        bodies(
+            &mut text,
+            &at(),
+            ".locals 0\ninvoke-direct {p0}, Ltest/Init;-><init>(I)V\nreturn-void"
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn a_from_of_several_lines_replaces_the_block_whole() {
+    // the (String)I body is `const v0, 0x2a` then `return v0`: both lines, as a block
+    let mut text = CLASS.to_string();
+    let n = replaces(
+        &mut text,
+        &at(Some("(Ljava/lang/String;)I")),
+        "const v0, 0x2a
+           return v0",
+        "const/4 v0, 0x2
+return v0",
+        false,
+    )
+    .unwrap();
+    assert_eq!(n, 2);
+    assert!(
+        text.contains(".locals 2\n    const/4 v0, 0x2\n    return v0"),
+        "{text}"
+    );
+    assert!(!text.contains("0x2a"), "{text}");
+
+    // to can be shorter than the block, or nothing at all: the block is replaced whole
+    let mut text = CLASS.to_string();
+    let n = replaces(
+        &mut text,
+        &at(Some("(Ljava/lang/String;)I")),
+        "const v0, 0x2a\nreturn v0",
+        "return v0",
+        false,
+    )
+    .unwrap();
+    assert_eq!(n, 2);
+    assert!(
+        text.contains(".locals 2\n    return v0\n.end method"),
+        "{text}"
+    );
+    let mut text = CLASS.to_string();
+    let n = replaces(
+        &mut text,
+        &at(Some("(Ljava/lang/String;)I")),
+        "const v0, 0x2a\nreturn v0",
+        "",
+        false,
+    )
+    .unwrap();
+    assert_eq!(n, 2);
+    assert!(text.contains(".locals 2\n.end method"), "{text}");
+
+    // a block no method has is an error, like a from no method has
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        replaces(
+            &mut text,
+            &at(Some("()I")),
+            "const v0, 0x99\nreturn v0",
+            "return v0",
+            false
+        )
+        .unwrap_err(),
+        "at: \"const v0, 0x99\\nreturn v0\" is not in Ltest/Over;#uri()I"
+    );
+}
+
+#[test]
+fn a_block_replace_once_takes_only_the_first_block() {
+    let twice = CLASS.replace(
+        "    .locals 1\n    const v0, 0xb3b83\n    return v0\n",
+        "    .locals 1\n    const v0, 0x1\n    const v0, 0x2\n    const v0, 0x1\n    const v0, 0x2\n    return v0\n",
+    );
+    let mut text = twice.clone();
+    let n = replaces(
+        &mut text,
+        &at(Some("()I")),
+        "const v0, 0x1\nconst v0, 0x2",
+        "const/4 v0, 0x3",
+        true,
+    )
+    .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(text.matches("const/4 v0, 0x3").count(), 1, "{text}");
+    assert_eq!(text.matches("const v0, 0x1").count(), 1, "{text}");
+    let mut text = twice;
+    let n = replaces(
+        &mut text,
+        &at(Some("()I")),
+        "const v0, 0x1\nconst v0, 0x2",
+        "const/4 v0, 0x3",
+        false,
+    )
+    .unwrap();
+    assert_eq!(n, 4);
+    assert_eq!(text.matches("const v0, 0x1").count(), 0, "{text}");
+    assert_eq!(text.matches("const/4 v0, 0x3").count(), 2, "{text}");
+}
+
+#[test]
+fn line_shapes_mixed_wrong_are_refused() {
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        replaces(
+            &mut text,
+            &at(Some("()I")),
+            "const v0",
+            "const v0, 0x1\nnop",
+            false
+        )
+        .unwrap_err(),
+        "at: a from of one line needs a to of one line: 2 lines cannot replace a piece of \
+         one; a from of several lines is what a to of several replaces"
+    );
+    let mut text = CLASS.to_string();
+    assert_eq!(
+        replaces(&mut text, &at(Some("()I")), "", "x", false).unwrap_err(),
+        "at: <replace> from is empty"
+    );
+}

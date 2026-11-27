@@ -77,6 +77,12 @@ fn fixture(dir: &std::path::Path) {
 .class public Lcom/example/app/AdLoader;
 .super Ljava/lang/Object;
 
+.method public constructor <init>()V
+    .locals 1
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
 .method public load(Ljava/lang/String;)V
     .locals 2
     const-string v0, "ca-app-pub-394"
@@ -134,12 +140,24 @@ fn applies_a_bundle_end_to_end() {
     std::fs::write(&bundle, include_str!("../../assets/demo.xml")).unwrap();
     patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap();
 
-    // the ()Z overload now returns true, the (String)Z one stays false: the sig named it
+    // the ()Z overload now returns true, and the (String)Z one carries the body the bundle
+    // wrote for it: no stub line is left, and the new code is in the class for real
     let license = smali_of(&out, "com.example.app.License");
     assert_eq!(license.matches("const/4 v0, 0x1").count(), 1, "{license}");
-    assert_eq!(license.matches("const/4 v0, 0x0").count(), 1, "{license}");
+    assert_eq!(license.matches("const/4 v0, 0x0").count(), 0, "{license}");
+    assert!(
+        license.contains(r#"const-string v0, "patched""#)
+            && license.contains("->startsWith(Ljava/lang/String;)Z")
+            && license.contains("move-result v0"),
+        "the <body> must land as written:\n{license}"
+    );
     let ads = smali_of(&out, "com.example.app.AdLoader");
+    // the ad unit id is emptied — by the <any> alternative that found it, the other class
+    // is not in the app — and the block replace changed the line after it
     assert!(ads.contains(r#"const-string v0, "0""#), "{ads}");
+    assert!(ads.contains("const/4 v1, 0x0"), "{ads}");
+    // the constructor is untouched
+    assert!(ads.matches("invoke-direct {p0}").count() == 1, "{ads}");
 
     // the string resource and the file entry landed
     let before = crate::quick::read_entry(&apk, "resources.arsc")
@@ -309,5 +327,156 @@ fn only_and_skip_pick_patches_and_list_shows_them() {
     patch(&a).unwrap();
     assert!(!dir.join("out.apk").exists());
 
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `<body>` that does not assemble is an error that names the class and the line of the
+/// smali it choked on, and nothing is written: the assembler is the check on every body.
+#[test]
+fn a_body_the_assembler_rejects_writes_nothing() {
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-asm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    fixture(&dir);
+    let apk = dir.join("app.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    let bundle = dir.join("b.xml");
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><body class="com.example.app.License" method="isPurchased">
+  .locals 1
+  frobnicate v0
+  return v0
+</body></patch></bundle>"#,
+    )
+    .unwrap();
+    let err = patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap_err();
+    assert!(
+        err.contains("Lcom/example/app/License;") && err.contains("unknown instruction"),
+        "{err}"
+    );
+    assert!(!std::path::Path::new(&out).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A constructor body keeps its `super()` call or the run is refused: a `<init>` that
+/// returns without one is a verify error Android refuses the whole class for.
+#[test]
+fn a_constructor_body_without_the_super_call_is_refused() {
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-init-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    fixture(&dir);
+    let apk = dir.join("app.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    let bundle = dir.join("b.xml");
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><body class="com.example.app.AdLoader" method="&lt;init&gt;">
+  .locals 0
+  return-void
+</body></patch></bundle>"#,
+    )
+    .unwrap();
+    let err = patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap_err();
+    assert!(err.contains("never calls super() or this(...)"), "{err}");
+    assert!(!std::path::Path::new(&out).exists());
+
+    // with the call kept, the same body lands
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><body class="com.example.app.AdLoader" method="&lt;init&gt;">
+  .locals 1
+  invoke-direct {p0}, Ljava/lang/Object;->&lt;init&gt;()V
+  const/4 v0, 0x0
+  return-void
+</body></patch></bundle>"#,
+    )
+    .unwrap();
+    patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap();
+    let ads = smali_of(&out, "com.example.app.AdLoader");
+    assert!(
+        ads.contains("invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n    const/4 v0, 0x0"),
+        "{ads}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `<any>` with no alternative landing is an error that says why each one missed: a strict
+/// either/or, not a maybe-patch. One landing is applied and the rest never run.
+#[test]
+fn any_that_lands_on_nothing_says_why_and_writes_nothing() {
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-any-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    fixture(&dir);
+    let apk = dir.join("app.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    let bundle = dir.join("b.xml");
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="Drift">
+  <any>
+    <replace class="com.example.app.Gone" method="unit" from="a" to="b"/>
+    <replace class="com.example.app.AdLoader" method="load" from="0xdead" to="0x0"/>
+  </any>
+</patch></bundle>"#,
+    )
+    .unwrap();
+    let err = patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap_err();
+    assert!(
+        err.starts_with("Drift: <any> (line 2): no alternative landed"),
+        "{err}"
+    );
+    assert!(err.contains("alternative 1 of 2"), "{err}");
+    assert!(
+        err.contains("class com.example.app.Gone not found"),
+        "{err}"
+    );
+    assert!(err.contains("alternative 2 of 2"), "{err}");
+    assert!(err.contains("\"0xdead\" is not in"), "{err}");
+    assert!(!std::path::Path::new(&out).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `<replace>` of several lines swaps the block whole, the line count of `to` free — and
+/// a one-line `from` cannot take a several-line `to`: where the rest of the line would go
+/// is not a thing the text says.
+#[test]
+fn a_block_replace_edits_blocks_and_refuses_line_shape_mixes() {
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-block-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    fixture(&dir);
+    let apk = dir.join("app.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    let bundle = dir.join("b.xml");
+
+    // a to of more lines than the from is fine: the block is replaced whole
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><replace class="com.example.app.AdLoader" method="load"
+  from="const-string v0, &quot;ca-app-pub-394&quot;&#10;const/4 v1, 0x1"
+  to="const-string v0, &quot;0&quot;&#10;const/4 v1, 0x0&#10;nop"/></patch></bundle>"#,
+    )
+    .unwrap();
+    patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap();
+    let ads = smali_of(&out, "com.example.app.AdLoader");
+    assert!(
+        ads.contains("const-string v0, \"0\"\n    const/4 v1, 0x0\n    nop"),
+        "the block must land as the to lines, under the body's own indent:\n{ads}"
+    );
+
+    // but a piece of one line cannot become several
+    let refused = dir.join("refused.apk").to_str().unwrap().to_string();
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><replace class="com.example.app.AdLoader" method="load"
+  from="ca-app-pub-394"
+  to="0&#10;nop"/></patch></bundle>"#,
+    )
+    .unwrap();
+    let err = patch(&args(bundle.to_str().unwrap(), &apk, &refused)).unwrap_err();
+    assert!(
+        err.contains("a from of one line needs a to of one line"),
+        "{err}"
+    );
+    assert!(!std::path::Path::new(&refused).exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }

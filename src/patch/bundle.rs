@@ -43,7 +43,9 @@ pub enum Op {
         value: Option<String>,
         line: usize,
     },
-    /// `<replace>`: swap smali text inside the method's body.
+    /// `<replace>`: swap smali text inside the method's body. A `from` of one line matches
+    /// within a line; of several, the lines exactly, as a consecutive block that `to`
+    /// replaces whole (its lines, as many or few as the new code needs).
     Replace {
         class: String,
         method: String,
@@ -54,6 +56,21 @@ pub enum Op {
         once: bool,
         line: usize,
     },
+    /// `<body>`: replace the method's whole body with this smali text, `.locals` line
+    /// included. The class is re-assembled from the edited text, so the assembler checks
+    /// the new body: code that does not parse is an error, not a broken APK.
+    Body {
+        class: String,
+        method: String,
+        sig: Option<String>,
+        /// the new body: lines of smali, indented however the XML is
+        body: String,
+        line: usize,
+    },
+    /// `<any>`: the ops inside are alternatives, tried in order; the first that lands is
+    /// applied and the rest skipped. None landing is an error that says why each one
+    /// missed — the strict version of what keeps one patch working across versions.
+    Any { ops: Vec<Op>, line: usize },
     /// `<string>`: set one string resource.
     Str {
         name: String,
@@ -152,6 +169,53 @@ fn op(e: &Element) -> Result<Op, String> {
                 line: e.line,
             })
         }
+        "body" => {
+            only(e, &["class", "method", "sig"])?;
+            // the text is the body; child elements would be markup, not smali
+            no_children(e)?;
+            Ok(Op::Body {
+                class: req(e, "class")?,
+                method: req(e, "method")?,
+                sig: opt(e, "sig")?,
+                body: e.text(),
+                line: e.line,
+            })
+        }
+        "any" => {
+            // an alternative list needs nothing but the alternatives
+            only(e, &[])?;
+            let mut ops = Vec::new();
+            for c in e.elements() {
+                if c.name == "any" {
+                    return Err(format!(
+                        "line {}: <any> cannot sit inside another <any>; the alternatives \
+                         inside it already are the either/or",
+                        c.line
+                    ));
+                }
+                let op = op(c)?;
+                // only code edits land or miss; the resource and file ops have no miss to
+                // try an alternative for
+                match op {
+                    Op::Return { .. } | Op::Replace { .. } | Op::Body { .. } => ops.push(op),
+                    _ => {
+                        return Err(format!(
+                            "line {}: <{}> cannot be an alternative in <any>: <return>, \
+                             <replace> and <body> can",
+                            c.line, c.name
+                        ));
+                    }
+                }
+            }
+            if ops.is_empty() {
+                return Err(format!(
+                    "line {}: <any> has no alternative inside: give it a <return>, \
+                     <replace> or <body>",
+                    e.line
+                ));
+            }
+            Ok(Op::Any { ops, line: e.line })
+        }
         "string" => {
             only(e, &["name", "config"])?;
             Ok(Op::Str {
@@ -227,8 +291,8 @@ pub(super) fn only(e: &Element, known: &[&str]) -> Result<(), String> {
     }
 }
 
-/// `<return>`, `<replace>`, `<manifest>` and `<entry>` are a single line; `<string>` holds
-/// text, not markup.
+/// `<return>`, `<replace>`, `<manifest>` and `<entry>` are a single line; `<string>` and
+/// `<body>` hold text — the resource's new value, the method's new code — but no markup.
 pub(super) fn no_children(e: &Element) -> Result<(), String> {
     match e.elements().next() {
         Some(c) => Err(format!(

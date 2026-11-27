@@ -4,7 +4,7 @@
   tests/apkscope/commands_patch.rs (com.example.app, versionName 2.1, versionCode 21), so this
   file is run by the tests and cannot drift from the format. The format: docs/patch-bundles.md.
 -->
-<bundle name="Demo unlock" author="apkscope" version="1" description="one of every edit">
+<bundle name="Demo unlock" author="apkscope" version="2" description="one of every edit">
   <!-- checked against the APK's manifest before anything runs -->
   <target package="com.example.app" versionName="2.1" minVersionCode="21" maxVersionCode="29"/>
 
@@ -15,12 +15,40 @@
     <return class="com.example.app.License" method="isPurchased" sig="()Z" value="true"/>
   </patch>
 
-  <!-- swap smali text inside a method, every occurrence; take the exact text from
-       `apkscope smali app.apk com.example.app.AdLoader`. A from nothing matches is an error. -->
-  <patch name="Remove ads" description="the ad unit id is emptied">
+  <!-- alternatives: the first that lands is applied, the rest skipped. The ad id is where
+       the old version had it, AdView, or where this one has it, AdLoader — whichever the
+       app has, the patch finds it, and if it has neither the error says so. -->
+  <patch name="Remove ads" description="the ad unit id is emptied, wherever it lives">
+    <any>
+      <replace class="com.example.app.AdView" method="unit"
+               from="ca-app-pub-394" to="0"/>
+      <replace class="com.example.app.AdLoader" method="load"
+               from="ca-app-pub-394" to="0"/>
+    </any>
+  </patch>
+
+  <!-- a replace of several lines: the from lines name the block the smali prints, and the
+       to lines replace it whole. Indentation is the XML's own; each line is trimmed. -->
+  <patch name="Quiet load" description="load() sets no flag">
     <replace class="com.example.app.AdLoader" method="load"
-             from="ca-app-pub-394"
-             to="0"/>
+             from="const/4 v1, 0x1
+                   return-void"
+             to="const/4 v1, 0x0
+                 return-void"/>
+  </patch>
+
+  <!-- a whole new method body, in smali: .locals first, then the code. The class is
+       re-assembled from it, so the assembler checks the body. This one uses the parameter
+       p1 (the (Ljava/lang/String;)Z overload): the id is purchased when it starts with
+       "patched". -->
+  <patch name="Trial ids" description="isPurchased(String) starts its own check">
+    <body class="com.example.app.License" method="isPurchased" sig="(Ljava/lang/String;)Z">
+      .locals 1
+      const-string v0, "patched"
+      invoke-virtual {p1, v0}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+      move-result v0
+      return v0
+    </body>
   </patch>
 
   <!-- one string resource, like build --string: the element's text is the new value -->

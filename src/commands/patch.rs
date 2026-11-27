@@ -39,43 +39,37 @@ pub fn patch(a: &PatchArgs) -> Result<(), String> {
     let chosen_len = chosen.len();
     for p in chosen {
         for op in &p.ops {
-            // where a code edit lands, and what its notes and errors call it
-            let at = |class: &str, method: &str, sig: &Option<String>| patch::At {
-                class: class.to_string(),
-                method: method.to_string(),
-                sig: sig.clone(),
-                note: format!("{}: {}", p.name, where_(op)),
-            };
             match op {
-                Op::Return {
-                    class,
-                    method,
-                    sig,
-                    value,
-                    ..
-                } => {
-                    let at = at(class, method, sig);
-                    let note = at.note.clone();
-                    let text = class_text(&mut classes, &mut smali_texts, class, &src)
-                        .map_err(|e| format!("{note}: {e}"))?;
-                    let n = patch::returns(text, &at, value.as_deref())?;
-                    crate::note!("{note}: {n} method(s) stubbed");
+                Op::Return { .. } | Op::Replace { .. } | Op::Body { .. } => {
+                    let note = format!("{}: {}", p.name, where_(op));
+                    let msg = code_op(op, &note, &mut classes, &mut smali_texts, &src)?;
+                    crate::note!("{note}: {msg}");
                 }
-                Op::Replace {
-                    class,
-                    method,
-                    sig,
-                    from,
-                    to,
-                    once,
-                    ..
-                } => {
-                    let at = at(class, method, sig);
-                    let note = at.note.clone();
-                    let text = class_text(&mut classes, &mut smali_texts, class, &src)
-                        .map_err(|e| format!("{note}: {e}"))?;
-                    let n = patch::replaces(text, &at, from, to, *once)?;
-                    crate::note!("{note}: {n} line(s) changed");
+                Op::Any { ops, line } => {
+                    // one at a time until one lands: a miss has cost nothing, the class text
+                    // is only committed by an op that succeeds
+                    let note = format!("{}: <any> (line {line})", p.name);
+                    let mut missed = Vec::new();
+                    let mut landed = None;
+                    for (i, alt_op) in ops.iter().enumerate() {
+                        let alt = format!("{note}, alternative {} of {}", i + 1, ops.len());
+                        match code_op(alt_op, &alt, &mut classes, &mut smali_texts, &src) {
+                            Ok(msg) => {
+                                landed = Some((i + 1, msg));
+                                break;
+                            }
+                            Err(e) => missed.push(e),
+                        }
+                    }
+                    match landed {
+                        Some((i, msg)) => crate::note!("{note}: alternative {i} landed: {msg}"),
+                        None => {
+                            return Err(format!(
+                                "{note}: no alternative landed:\n  {}",
+                                missed.join("\n  ")
+                            ));
+                        }
+                    }
                 }
                 Op::Str {
                     name,
@@ -168,6 +162,55 @@ pub fn patch(a: &PatchArgs) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// One code op — `<return>`, `<replace>` or `<body>` — applied to the class's smali text.
+/// The text is only committed when the op lands, so what the caller gets back on an error
+/// is a class exactly as it was: an `<any>` alternative that misses leaves nothing behind.
+fn code_op(
+    op: &Op,
+    note: &str,
+    classes: &mut Option<smali::Classes>,
+    smali: &mut BTreeMap<String, String>,
+    src: &str,
+) -> Result<String, String> {
+    let (class, method, sig) = match op {
+        Op::Return {
+            class, method, sig, ..
+        }
+        | Op::Replace {
+            class, method, sig, ..
+        }
+        | Op::Body {
+            class, method, sig, ..
+        } => (class, method, sig),
+        _ => return Err(format!("{note}: not a code op")),
+    };
+    let at = patch::At {
+        class: class.clone(),
+        method: method.clone(),
+        sig: sig.clone(),
+        note: note.to_string(),
+    };
+    let text = class_text(classes, smali, class, src).map_err(|e| format!("{note}: {e}"))?;
+    let mut trial = text.clone();
+    let msg = match op {
+        Op::Return { value, .. } => {
+            let n = patch::returns(&mut trial, &at, value.as_deref())?;
+            format!("{n} method(s) stubbed")
+        }
+        Op::Replace { from, to, once, .. } => {
+            let n = patch::replaces(&mut trial, &at, from, to, *once)?;
+            format!("{n} line(s) changed")
+        }
+        Op::Body { body, .. } => {
+            let n = patch::bodies(&mut trial, &at, body)?;
+            format!("{n} body(ies) replaced")
+        }
+        _ => unreachable!("the match above took the only ops that reach here"),
+    };
+    *text = trial;
+    Ok(msg)
 }
 
 /// The `<target>` against the APK's own manifest: the one place a bundle says what it is for.
@@ -275,6 +318,15 @@ fn where_(op: &Op) -> String {
         } => {
             format!("<replace {class}#{method}> (line {line})")
         }
+        Op::Body {
+            class,
+            method,
+            line,
+            ..
+        } => {
+            format!("<body {class}#{method}> (line {line})")
+        }
+        Op::Any { line, .. } => format!("<any> (line {line})"),
         Op::Str { name, .. } => format!("<string {name}>"),
         Op::Manifest { file } => format!("<manifest {file}>"),
         Op::Entry { name, .. } => format!("<entry {name}>"),
