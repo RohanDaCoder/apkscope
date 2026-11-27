@@ -193,6 +193,17 @@ fn write_whole(
     })
 }
 
+/// One wording for "the file is not there", whichever platform says it: Windows spells
+/// it "The system cannot find the file specified" while the others say "No such file or
+/// directory", and the same missing input should read the same everywhere.
+fn missing(e: std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        "No such file or directory".into()
+    } else {
+        e.to_string()
+    }
+}
+
 pub fn prepare(path: &str) -> Result<String, String> {
     use std::io::Write;
     let ext = std::path::Path::new(path)
@@ -209,12 +220,12 @@ pub fn prepare(path: &str) -> Result<String, String> {
             // as such, not as a later "no AndroidManifest.xml" from whoever reads first
             std::fs::File::open(path)
                 .map(|_| path.to_string())
-                .map_err(|e| format!("{path}: {e}"))
+                .map_err(|e| format!("{path}: {}", missing(e)))
         }
         "apks" | "xapk" | "apkm" => {
             // all three are plain ZIPs of split APKs; `.apkm` was encrypted before 2021,
             // but APKMirror now serves it as a regular ZIP, same as `.apks`/`.xapk`.
-            let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+            let f = std::fs::File::open(path).map_err(|e| format!("{path}: {}", missing(e)))?;
             let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("{path}: {e}"))?;
             let names: Vec<String> = zip
                 .file_names()
@@ -236,7 +247,7 @@ pub fn prepare(path: &str) -> Result<String, String> {
             let size = zip.by_name(&base).map_err(|e| e.to_string())?.size();
             // the bundle's own size and date are in the name, so two bundles that share a file
             // name and a base size never share a copy
-            let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+            let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {}", missing(e)))?;
             let mtime = meta
                 .modified()
                 .ok()
@@ -254,7 +265,7 @@ pub fn prepare(path: &str) -> Result<String, String> {
             Ok(out.display().to_string())
         }
         "dex" => {
-            let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            let data = std::fs::read(path).map_err(|e| format!("{path}: {}", missing(e)))?;
             Dex::parse(&data).map_err(|e| format!("{path}: {e}"))?;
             let out = dir.join(format!("{stem}-{:x}.apk", data.len()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
