@@ -204,7 +204,13 @@ pub fn prepare(path: &str) -> Result<String, String> {
         .map_or("input".into(), |s| s.to_string_lossy().into_owned());
     let dir = cache::root().join("inputs");
     match ext.as_str() {
-        "apk" | "jar" => Ok(path.to_string()),
+        "apk" | "jar" => {
+            // opened here, not when the first reader touches it: a missing file is named
+            // as such, not as a later "no AndroidManifest.xml" from whoever reads first
+            std::fs::File::open(path)
+                .map(|_| path.to_string())
+                .map_err(|e| format!("{path}: {e}"))
+        }
         "apks" | "xapk" | "apkm" => {
             // all three are plain ZIPs of split APKs; `.apkm` was encrypted before 2021,
             // but APKMirror now serves it as a regular ZIP, same as `.apks`/`.xapk`.

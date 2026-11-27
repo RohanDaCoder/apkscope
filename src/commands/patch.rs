@@ -1,6 +1,6 @@
 //! `apkscope patch`: apply an XML patch bundle to an APK, then rebuild and sign.
 
-use apkscope_core::{apksign, arsc, axml, rebuild, res, smali, table};
+use apkscope_core::{apksign, arsc, axml, dex, rebuild, res, smali, table};
 use std::collections::BTreeMap;
 
 use crate::cli::PatchArgs;
@@ -289,23 +289,28 @@ fn class_text<'a>(
     class: &str,
     src: &str,
 ) -> Result<&'a mut String, String> {
-    if !smali.contains_key(class) {
-        let print = |c: &mut smali::Classes| {
-            let (doc, model) = c.class(class)?;
-            Ok::<String, apkscope_core::Error>(smali::text::print(doc.source(), &model))
-        };
-        let text = match classes {
-            Some(c) => print(c)?,
-            None => {
-                let mut c = smali::Classes::new(export::open(src)?.dex()?);
-                let text = print(&mut c)?;
-                *classes = Some(c);
-                text
-            }
-        };
-        smali.insert(class.to_string(), text);
+    // `a.b.C`, `a/b/C` and `La/b/C;` are the same class: the cache is keyed by the descriptor
+    // so two ops that spell the class differently edit one text, instead of printing two and
+    // letting the second set_text quietly drop the first's edits
+    match smali.entry(dex::descriptor(class)) {
+        std::collections::btree_map::Entry::Occupied(e) => Ok(e.into_mut()),
+        std::collections::btree_map::Entry::Vacant(e) => {
+            let print = |c: &mut smali::Classes| {
+                let (doc, model) = c.class(class)?;
+                Ok::<String, apkscope_core::Error>(smali::text::print(doc.source(), &model))
+            };
+            let text = match classes {
+                Some(c) => print(c)?,
+                None => {
+                    let mut c = smali::Classes::new(export::open(src)?.dex()?);
+                    let text = print(&mut c)?;
+                    *classes = Some(c);
+                    text
+                }
+            };
+            Ok(e.insert(text))
+        }
     }
-    Ok(smali.get_mut(class).expect("just inserted"))
 }
 
 #[cfg(test)]

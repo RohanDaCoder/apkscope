@@ -68,7 +68,9 @@ Everything about the format:
   method of that name is stubbed, overloads included. `value` is typed by the method's own
   return type: `true` / `false` for `Z`, a number or `0x` hex for `B` `S` `C` `I` `J` (a
   decimal or hex-bits float for `F` `D`), `null` for references; absent means the type's zero.
-  A value the type cannot hold is an error.
+  A value the type cannot hold is an error, and so is a constructor (`<init>`): its stub
+  drops the `super()` call and Android refuses the class — `<replace>` inside it instead.
+  `abstract` and `native` methods have no body to edit and are errors too.
 - **`<replace class method [sig] from to [once]/>`** — swap `from` for `to` in the bodies of
   the matching methods, every occurrence or only the first in each method (`once="yes"`).
   `from` and `to` are text as it appears in the class's smali, and must match within one line
@@ -80,6 +82,10 @@ Everything about the format:
   `build --manifest`. The path is relative to the bundle's own folder.
 - **`<entry name [src|delete]/>`** — add or replace a zip entry with a file (`src`, relative
   to the bundle's folder), or delete the entry (`delete="yes"`).
+
+Class and method names in a bundle are the names in that smali text — the real ones in the
+DEX. The query commands (`methods`, `returns`, `decompile`) and the viewer show deobfuscated
+names for methods R8 renamed, which differ: check the spelling with `apkscope smali` first.
 
 File paths are resolved against the folder the bundle is in; absolute paths stay as they are.
 XML entities (`&quot;`, `&amp;`, ...) work in attribute values and text. Unknown elements and

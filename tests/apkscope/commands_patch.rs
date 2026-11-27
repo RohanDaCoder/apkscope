@@ -202,6 +202,55 @@ fn a_patch_that_did_not_land_is_an_error_and_writes_nothing() {
 }
 
 #[test]
+fn a_missing_input_is_named_as_such() {
+    // the input is opened before anything else runs: a missing APK is "no such file",
+    // not a later "no AndroidManifest.xml" from the <target> check that reads it first
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-gone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = dir.join("gone.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    let bundle = dir.join("b.xml");
+    std::fs::write(
+        &bundle,
+        br#"<bundle><patch name="A"><return class="com.example.app.License" method="isPurchased" value="true"/></patch></bundle>"#,
+    )
+    .unwrap();
+    let err = patch(&args(bundle.to_str().unwrap(), &missing, &out)).unwrap_err();
+    assert!(err.contains("gone.apk: No such file"), "{err}");
+    assert!(!std::path::Path::new(&out).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn two_spellings_of_one_class_edit_the_same_text() {
+    let dir = std::env::temp_dir().join(format!("apkscope-patch-alias-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    fixture(&dir);
+    let apk = dir.join("app.apk").to_str().unwrap().to_string();
+    let out = dir.join("out.apk").to_str().unwrap().to_string();
+    // one class, two spellings: each op must land on the same printed smali, not on two
+    // copies of which the second write quietly drops the first's edits
+    let bundle = dir.join("alias.xml");
+    std::fs::write(
+        &bundle,
+        br#"<bundle>
+  <patch name="A"><return class="com.example.app.License" method="isPurchased" sig="()Z" value="true"/></patch>
+  <patch name="B"><return class="Lcom/example/app/License;" method="isPurchased" sig="(Ljava/lang/String;)Z" value="true"/></patch>
+</bundle>"#,
+    )
+    .unwrap();
+    patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap();
+    let license = smali_of(&out, "com.example.app.License");
+    assert_eq!(
+        license.matches("const/4 v0, 0x1").count(),
+        2,
+        "both spellings' edits must land:\n{license}"
+    );
+    assert_eq!(license.matches("const/4 v0, 0x0").count(), 0, "{license}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn only_and_skip_pick_patches_and_list_shows_them() {
     let dir = std::env::temp_dir().join(format!("apkscope-patch-pick-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

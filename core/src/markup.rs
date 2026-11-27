@@ -177,7 +177,14 @@ pub fn parse_xml(text: &str) -> Result<Element> {
                             + rest[q + 1..]
                                 .find(quote)
                                 .ok_or_else(|| unterminated("attribute", i))?;
-                        attrs.push((key, entities(&rest[q + 1..end], line)?));
+                        let value = entities(&rest[q + 1..end], line)?;
+                        // an attribute twice is a typo: refuse it, do not quietly take the first
+                        if attrs.iter().any(|(k, _)| *k == key) {
+                            return Err(Error::xml(format!(
+                                "line {line}: <{name}> has attribute {key} twice"
+                            )));
+                        }
+                        attrs.push((key, value));
                         j = end + 1;
                     }
                 }
@@ -204,3 +211,7 @@ pub fn parse_xml(text: &str) -> Result<Element> {
     });
     root.ok_or_else(|| Error::xml("no root element"))
 }
+
+#[cfg(test)]
+#[path = "../../tests/apkscope-core/markup.rs"]
+mod tests;
