@@ -8,7 +8,7 @@
   <!-- checked against the APK's manifest before anything runs -->
   <target package="com.example.app" versionName="2.1" minVersionCode="21" maxVersionCode="29"/>
 
-  <!-- Lucky-Patcher style: stub a method to return a constant. sig names one overload
+  <!-- stub a method to return a constant. sig names one overload
        exactly; without it, every method of that name. value is typed by the return type:
        true / false for Z, a number or 0x hex for the numeric ones, null for references. -->
   <patch name="Unlock" description="isPurchased() returns true">

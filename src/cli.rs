@@ -214,7 +214,7 @@ Editing (no apktool, smali.jar, zipalign, apksigner needed):
                   [--res dir] [--string name[@config]=value]... [--smali edited.smali]...
                   [--key k.pk8 --cert c.crt | --ks x.jks --ks-pass pass:P | --no-sign]
                   assembles smali, zipaligns, signs (no edits = re-sign); a .jar is never signed
-         apkscope patch <bundle.xml> <in.apk> <out.apk>  apply an XML patch bundle (Lucky-Patcher style):
+         apkscope patch <bundle.xml> <in.apk> <out.apk>  apply an XML patch bundle:
                   named patches of <return>/<replace> method edits, <string>, <manifest>, <entry>;
                   --only name / --skip name pick the patches, --list shows them; build's signing flags
          apkscope verify <apk>             v1 / v2 / v3 signatures
@@ -454,7 +454,7 @@ pub enum Cmd {
     /// patch, rebuild and sign: assemble smali, apply resources, zipalign, sign v1/v2/v3 (or just re-sign)
     #[command(name = "build", after_help = crate::examples::BUILD)]
     Build(BuildArgs),
-    /// apply an XML patch bundle (Lucky-Patcher style) to an APK, then rebuild and sign
+    /// apply an XML patch bundle to an APK, then rebuild and sign
     #[command(name = "patch", after_help = crate::examples::PATCH)]
     Patch(PatchArgs),
     /// verify v1 / v2 / v3 signatures (to sign: build)

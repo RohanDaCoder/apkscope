@@ -1,12 +1,12 @@
-//! XML patch bundles: one file that describes every edit an APK needs, Lucky-Patcher style.
+//! XML patch bundles: one file that describes every edit an APK needs.
 //!
 //! A bundle is what `apkscope patch` applies. It says which app it is for, and holds named
-//! patches — the checkbox list Lucky Patcher shows — each a list of edits: `return` stubs a
-//! method to return a constant, `replace` swaps smali text inside a method, and `string`,
-//! `manifest` and `entry` edit resources, the manifest and the zip itself. The XML is read by
-//! the same parser the text resource forms use ([`apkscope_core::markup`]); method edits are
-//! applied to the class's own smali and re-assembled from it, so a bundle never needs a raw
-//! DEX hex pattern the way Lucky Patcher's `{"original": "..", "replaced": ".."}` lines do.
+//! patches, picked from a list, each a list of edits: `return` stubs a method to return a
+//! constant, `replace` swaps smali text inside a method, and `string`, `manifest` and `entry`
+//! edit resources, the manifest and the zip itself. The XML is read by the same parser the
+//! text resource forms use ([`apkscope_core::markup`]); method edits are applied to the
+//! class's own smali and re-assembled from it, so a bundle edits readable smali text, never
+//! raw DEX hex patterns.
 
 use apkscope_core::markup::{Element, parse_xml};
 
@@ -33,7 +33,7 @@ pub struct Target {
     pub max_version_code: Option<u32>,
 }
 
-/// One named patch — the Lucky Patcher checkbox — whose ops are applied together.
+/// One named patch, picked or skipped by name, whose ops are applied together.
 #[derive(Debug)]
 pub struct Patch {
     pub name: String,
@@ -283,17 +283,22 @@ fn op(e: &Element) -> Result<Op, String> {
             no_children(e)?;
             let delete = yes_no(e, "delete")?;
             let src = opt(e, "src")?;
+            let name = req(e, "name")?;
             if src.is_some() == delete {
                 return Err(format!(
                     "line {}: <entry> needs one of src=... or delete=yes",
                     e.line
                 ));
             }
-            Ok(Op::Entry {
-                name: req(e, "name")?,
-                src,
-                delete,
-            })
+            // an empty name, or one ending in /, is not a file: it would add a broken entry
+            // to the APK that nothing on Android can read
+            if name.is_empty() || name.ends_with('/') {
+                return Err(format!(
+                    "line {}: <entry> name is a file path; {name:?} is not one",
+                    e.line
+                ));
+            }
+            Ok(Op::Entry { name, src, delete })
         }
         _ => Err(format!(
             "line {}: <patch> has no <{}> inside",
@@ -397,6 +402,28 @@ pub fn methods(lines: &[&str], method: &str, sig: Option<&str>) -> Vec<(usize, u
     out
 }
 
+/// `abstract` and `native` methods have no body: a DEX that gives them one is invalid, and
+/// Android refuses the whole APK. `<return>` and `<replace>` edit bodies, so a header that
+/// says `abstract` or `native` is an error that names the method, not an edit that silently
+/// bricks the app.
+fn bodyless(lines: &[&str], hits: &[(usize, usize)], at: &At) -> Result<(), String> {
+    for &(start, _) in hits {
+        let flag = lines[start]
+            .split_whitespace()
+            .take_while(|t| !t.contains('('))
+            .find(|t| *t == "abstract" || *t == "native");
+        if let Some(flag) = flag {
+            return Err(format!(
+                "{}: {}#{} is {flag}: it has no body to edit",
+                at.note,
+                at.class,
+                at.want()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `<return>`: rewrite the body of every matching method to `return <value>`. Returns how
 /// many methods were stubbed.
 pub fn returns(text: &mut String, at: &At, value: Option<&str>) -> Result<usize, String> {
@@ -406,6 +433,7 @@ pub fn returns(text: &mut String, at: &At, value: Option<&str>) -> Result<usize,
     if hits.is_empty() {
         return Err(format!("{}: {} has no method {want}", at.note, at.class));
     }
+    bodyless(&lines, &hits, at)?;
     let mut out = String::with_capacity(text.len());
     let mut at_line = 0;
     let n = hits.len();
@@ -449,6 +477,7 @@ pub fn replaces(
     if hits.is_empty() {
         return Err(format!("{}: {} has no method {want}", at.note, at.class));
     }
+    bodyless(&lines, &hits, at)?;
     let mut out = String::with_capacity(text.len());
     let mut at_line = 0;
     let mut changed = 0;
@@ -668,7 +697,7 @@ fn wide_const(v: i64) -> String {
 fn lit(v: i64) -> String {
     match v {
         0.. => format!("0x{v:x}"),
-        _ => format!("-0x{}", v.unsigned_abs()),
+        _ => format!("-0x{:x}", v.unsigned_abs()),
     }
 }
 

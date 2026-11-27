@@ -131,11 +131,7 @@ fn applies_a_bundle_end_to_end() {
     std::fs::write(dir.join("config.json"), br#"{"patched": true}"#).unwrap();
     // the shipped example, exactly as a user would run it
     let bundle = dir.join("bundle.xml");
-    std::fs::write(
-        &bundle,
-        include_str!("../../examples/patch-bundles/demo.xml"),
-    )
-    .unwrap();
+    std::fs::write(&bundle, include_str!("../../assets/demo.xml")).unwrap();
     patch(&args(bundle.to_str().unwrap(), &apk, &out)).unwrap();
 
     // the ()Z overload now returns true, the (String)Z one stays false: the sig named it

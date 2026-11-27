@@ -13,7 +13,7 @@ Recipes (Class = a.b.C, member = a.b.C#field or a.b.C#method()):
   decode a number             apkscope consts app.apk --value 405
   search one package          apkscope search app.apk code \"token\" --in com.example.net.*
   patch and rebuild           apkscope smali app.apk a.b.C > C.smali; (edit); apkscope build app.apk out.apk --smali C.smali
-  apply a patch bundle        apkscope patch bundle.xml app.apk out.apk      (Lucky-Patcher style: docs/patch-bundles.md)
+  apply a patch bundle        apkscope patch bundle.xml app.apk out.apk      (docs/patch-bundles.md)
   whole app as smali          apkscope smali app.apk --out-dir decoded/; (edit); apkscope build app.apk out.apk --smali decoded/
   edit resources / manifest   apkscope res app.apk decoded/; (edit); apkscope build app.apk out.apk --res decoded/
   re-sign / zipalign only     apkscope build app.apk out.apk --ks my.jks --ks-pass pass:secret
@@ -198,7 +198,7 @@ Examples:
   apkscope patch bundle.xml app.apk out.apk --only \"Unlock\"
   apkscope patch bundle.xml app.apk out.apk --skip \"Remove ads\" --ks my.jks --ks-pass pass:x
   apkscope patch bundle.xml --list                              the target and the patches
-A bundle is one XML file, Lucky-Patcher style: it names the app it is for, and the patches it
+A bundle is one XML file: it names the app it is for, and the patches it
 holds (docs/patch-bundles.md). <return> stubs a method to return a constant (isPurchased()Z to
 true), <replace> swaps smali text inside a method, <string>, <manifest> and <entry> edit the
 rest. Every patch that did not land is an error, not a silent skip.";

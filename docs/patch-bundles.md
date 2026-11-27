@@ -1,8 +1,8 @@
 # Patch bundles
 
-One XML file that patches an APK, the way Lucky Patcher's patch files do: it names the app it
-is for, and the patches it holds. `apkscope patch` checks the app, applies the chosen patches,
-rebuilds and signs — no apktool, smali.jar or apksigner needed.
+One XML file that patches an APK: it names the app it is for, and the patches it holds.
+`apkscope patch` checks the app, applies the chosen patches, rebuilds and signs — no apktool,
+smali.jar or apksigner needed.
 
 ```
 apkscope patch unlock.xml app.apk out.apk
@@ -12,25 +12,25 @@ apkscope patch unlock.xml --list
 
 The same bundle works over MCP (`patch_apk`) and from scripts.
 
-## Why XML, and what it borrows from Lucky Patcher
+## Why XML
 
-A Lucky Patcher custom patch is plain text: the app it targets, and patch lines of
-`{"original": "<hex>", "replaced": "<hex>"}` — raw DEX instruction bytes, with `**` wildcards
-masking the operands that move between builds. It works, but it is written against bytes, in
-a format only Lucky Patcher reads, and a pattern that does not match anymore fails silently
-or worse.
+A bundle names the app it targets and describes each edit as what it means — stub this
+method, swap this text, set this string — instead of patching raw bytes. Older patch formats
+work against DEX instruction bytes with wildcards masking the operands that move between
+builds: they are written against exact bytes, in a format only one tool reads, and a pattern
+that does not match anymore fails silently or worse.
 
 A bundle keeps the ideas that made those patches useful and moves them up a level:
 
-| Lucky Patcher | a bundle |
+| the idea | a bundle |
 | --- | --- |
 | the target app | `<target package versionName minVersionCode maxVersionCode>`, checked against the manifest before anything runs |
-| named patches with checkboxes | `<patch name=...>`, picked with `--only` / `--skip`, shown by `--list` |
-| `{"original", "replaced"}` hex patterns | `<replace class method from to>` on the class's own smali text |
+| named patches picked from a list | `<patch name=...>`, picked with `--only` / `--skip`, shown by `--list` |
+| swapping code for code | `<replace class method from to>` on the class's own smali text |
 | stubbing a method to return a constant | `<return class method sig value>`, typed by the method's return type |
 | resource / file edits bundled in | `<string>`, `<manifest>`, `<entry>` |
 
-The hex patterns become smali text edits because apkscope already round-trips a class through
+The smali text edits work because apkscope already round-trips a class through
 its own smali (what `apkscope smali` writes, `build --smali` assembles): a bundle edits that
 text and re-assembles the class, so every edit goes through the same assembler a person
 editing by hand uses. A pattern that does not match is an error, not a silently unpatched
@@ -91,7 +91,7 @@ The whole bundle is applied before anything is written: a class that is not ther
 
 ## What it does not do (yet)
 
-- No raw DEX hex patterns, the `{"original": "..", "replaced": ".."}` form: smali text is the
+- No raw DEX hex patterns, the `"original bytes"` / `"replaced bytes"` form: smali text is the
   edit surface, so a bundle is tied to a class's code shape but not to its exact bytes.
 - No new instructions of your own: `<return>` and `<replace>` change what is there. Writing
   new method bodies is what `apkscope smali` + `build --smali` are for.
@@ -100,4 +100,4 @@ The whole bundle is applied before anything is written: a class that is not ther
 - `<target>` `versionName` / `versionCode` are exact matches on what the manifest says; a
   bundle cannot follow an app across versions by itself.
 
-Examples: `examples/patch-bundles/demo.xml` exercises every op.
+Examples: `assets/demo.xml` exercises every op.

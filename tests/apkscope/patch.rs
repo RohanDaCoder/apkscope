@@ -219,9 +219,15 @@ fn stubs_are_assemblable_smali() {
         ("I", Some("7")),
         ("I", Some("-8")),
         ("I", Some("-9")),
+        ("I", Some("-10")),
+        ("I", Some("-100")),
+        ("I", Some("-9000")),
         ("I", Some("0x7fffffff")),
+        ("I", Some("-2147483648")),
         ("J", Some("42")),
+        ("J", Some("-300")),
         ("J", Some("0x123456789")),
+        ("J", Some("-9223372036854775808")),
         ("F", Some("1.5")),
         ("D", Some("2.5")),
         ("Ljava/lang/String;", Some("null")),
@@ -261,6 +267,23 @@ fn a_stub_matches_its_return_type() {
     assert_eq!(
         stub("Ljava/lang/String;", Some("null"), "t").unwrap(),
         "    .locals 1\n    const/4 v0, 0x0\n    return-object v0\n"
+    );
+    // a negative value is hex after the minus, not decimal: -100 is -0x64, never -0x100 (-256)
+    assert_eq!(
+        stub("I", Some("-100"), "t").unwrap(),
+        "    .locals 1\n    const/16 v0, -0x64\n    return v0\n"
+    );
+    assert_eq!(
+        stub("I", Some("-9000"), "t").unwrap(),
+        "    .locals 1\n    const/16 v0, -0x2328\n    return v0\n"
+    );
+    assert_eq!(
+        stub("I", Some("-2147483648"), "t").unwrap(),
+        "    .locals 1\n    const v0, -0x80000000\n    return v0\n"
+    );
+    assert_eq!(
+        stub("J", Some("-300"), "t").unwrap(),
+        "    .locals 2\n    const-wide/16 v0, -0x12c\n    return-wide v0\n"
     );
     // values the type cannot hold, and types smali does not have
     assert!(stub("V", Some("0"), "t").is_err());
@@ -359,6 +382,60 @@ fn replaces_swaps_text_in_a_method() {
         replaces(&mut text, &miss, "0xb3b83", "0x1", false).unwrap_err(),
         "at: \"0xb3b83\" is not in Ltest/Over;#other"
     );
+}
+
+/// A DEX with code for an `abstract` or `native` method is invalid: Android refuses the whole
+/// APK. Both edits have to say so, not write a body under the flag.
+const BODYLESS: &str = r#".class public interface abstract Ltest/NoBody;
+.super Ljava/lang/Object;
+
+.method public abstract uri()I
+.end method
+
+.method public static native uri(Ljava/lang/String;)I
+.end method
+"#;
+
+#[test]
+fn abstract_and_native_methods_have_no_body_to_edit() {
+    let native = At {
+        sig: Some("(Ljava/lang/String;)I".into()),
+        ..at(None)
+    };
+    for (sig, flag) in [(None, "abstract"), (native.sig.clone(), "native")] {
+        let mut text = BODYLESS.to_string();
+        let want = format!(
+            "at: Ltest/Over;#uri{} is {flag}: it has no body to edit",
+            sig.clone().unwrap_or_default()
+        );
+        assert_eq!(
+            returns(&mut text, &At { sig, ..at(None) }, None).unwrap_err(),
+            want
+        );
+        let mut text = BODYLESS.to_string();
+        assert_eq!(
+            replaces(
+                &mut text,
+                &At {
+                    sig: native.sig.clone(),
+                    ..at(None)
+                },
+                "x",
+                "y",
+                false
+            )
+            .unwrap_err(),
+            "at: Ltest/Over;#uri(Ljava/lang/String;)I is native: it has no body to edit"
+        );
+    }
+    // and the parse side: an entry that is not a file path is refused before anything runs
+    for name in ["", "assets/"] {
+        let err = parse(&format!(
+            r#"<bundle><patch name="A"><entry name="{name}" src="x"/></patch></bundle>"#
+        ))
+        .unwrap_err();
+        assert!(err.contains("is not one"), "entry name {name:?}: {err}");
+    }
 }
 
 #[test]
